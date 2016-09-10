@@ -1,0 +1,115 @@
+.\" Process this file with
+.\" groff -man -Tascii bam-rmdup.1
+.\"
+.TH HEFFALUMP 1 "JUNE 2016" Applications "User Manuals"
+.SH NAME
+heffalump \- compact storage of genotypes
+.SH SYNOPSIS
+
+.B heffalump eigenstrat 
+.IR "-o OUTPUT -r REF.FA -n NOUTGROUPS" [ HEF-FILE ]...
+
+.B heffalump hetfa
+.IR "-o OUTPUT.HEF -r REF.FA -s SAMPLE.HETFA
+
+.B heffalump maf
+.IR "-o OUTPUT.REF [ MAF-FILE ]...
+
+.B heffalump patch
+.IR "-o OUTPUT.HETFA -r REF.FA -s SAMPLE.HEF
+
+.B heffalump treemix
+.IR "-o OUTPUT.TMX -r REF.FA -i INDIVIDUALS.IND -n NOUTGROUPS"
+
+.B heffalump " [ vcfhc | vcflc ] "
+.IR "-o OUTPUT.HEF " [ VCF-FILE ]...
+
+
+.SH DESCRIPTION
+.B heffalump
+is both a file format and the program to work with it.  A heffalump file
+stores the genetic differences of an individual compactly, without
+losing the distinction between
+.IR uncalled " and " invariant " sites."
+
+The
+.B heffalump
+file format can serve as the primary storage format, multiple files can
+be merged into the input for population genetic analysis programs
+relatively quickly.
+
+The functions
+.BR hetfa ", " maf ", " vcfhc " and " vcflc
+serve to import individuals in the formats \fIhetfa\fR (e.g. Simons
+Foundation diversity panel), \fImaf\fR (e.g. whole genome alignments of
+apes), high coverage \fIVCF\fR (genotype-called individuals, treated as
+diploid), and low coverage \fIVCF\fR (sampled raw reads from
+individuals, treated as haploid), respectively.
+
+The functions 
+.BR eigenstrat " and " treemix
+merge multiple
+.I hef
+files into one dataset useful as input for 
+.BR Eigensoft " and " Treemix ", respectively."
+
+
+.SH OPTIONS
+.IP "-o, --output file"
+Specifies the output file for most operations.  For \fBheffalump
+eigenstrat\fR, it specifies the output prefix and \fBheffalump\fR will
+write both \fIfile.geno\fR and \fIfile.snp\fR.
+
+.IP "-r, --reference file"
+Specifies a fasta file, optionally compressed using gzip or bgzip, that
+contains the reference sequence.  The reference is needed by
+\fBheffalump hetfa\fR to compute a list of differences as an efficient
+representation, and by \fBheffalump eigenstrat\fR, \fBheffalump
+treemix\fR, and \fBheffalump patch\fR to reverse this process.
+
+.IP "-s, --sample file"
+Specifies the file containing a sample to be imported for \fBheffalump
+hetfa\fR or the sample to be exported for \fBheffalump patch\fR.
+
+.IP "-i, --individuals file"
+Applies only to \fBheffalump treemix\fR.  It specifies an individual
+file, as used for \fBEigenstrat\fR, which lists individual and the
+populations they belong to.  \fBheffalump\fI will search the current
+directory for \fIhef\fR files for the individuals, and it will produce
+one column in the output for each distinct pupolation.
+
+.IP "-n, --numoutgroups num"
+Specifies that the first \fInum\fR individuals are outgroups.  Outgroups
+never create variants, but if some other individual creates a variant
+the outgroup's state is added.  In typical usage, there will be exactly
+one outgroup, which is probably the Chimpanzee.
+
+
+.SH NOTES
+
+Currently, \fBheffalump\fR represents only SNPs, not Indels.  This is
+not a hard technical limitation, but rather a conscious design decision.
+Since the primary input is the SGDP dataset, which doesn't contain Indel
+information, and the primary output is Eigenstrat, which can't
+represent Indels, support for Indels would have been borrowing trouble.
+
+Individuals are either diploid or haploid.  It would make sense to
+support \fIopportunistic genotype calling\fR, where some sites have two
+called alleles and some have only one.  This is \fIalmost\fR supported,
+some work still needs to be done.
+
+Some functions, notably \fBtreemix\fR need the reference, even though
+they don't care for the actual reference allele.  This could be
+eliminated by changing the representation of \fIheffalumps\fR.  While
+aesthecially pleasing, this change has low priority.
+
+The list of chromosomes to use and their order is hardcoded right now.
+This might prove to be an annoyance, but right now it serves well to
+guard against badly formatted input files.
+
+Even when reading VCF, only one individual can be imported.  This is
+annoying, but also rather difficult to fix right now.
+
+.SH AUTHOR
+Udo Stenzel <udo_stenzel@eva.mpg.de>
+

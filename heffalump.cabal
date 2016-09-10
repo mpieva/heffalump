@@ -1,0 +1,52 @@
+name:                heffalump
+version:             0.1.0.0
+license:             GPL-3
+license-file:        LICENSE
+author:              Udo Stenzel
+maintainer:          udo.stenzel@eva.mpg.de
+build-type:          Custom
+cabal-version:       >=1.10
+
+Extra-Source-Files:  man/man1/heffalump.1
+
+executable heffalump
+  main-is:             heffalump.hs
+  other-modules:       Bamin,
+                       Eigenstrat,
+                       Merge,
+                       Pileup, 
+                       SillyStats,
+                       Stretch,
+                       Util,
+                       VcfScan
+
+  build-depends:       base >=4.7 && <4.9,
+                       bytestring,
+                       directory,
+                       filepath,
+                       iteratee,
+                       math-functions,
+                       primitive,
+                       random,
+                       unordered-containers,
+                       vector,
+                       zlib ==0.6.*
+
+  default-language:    Haskell2010
+  default-extensions:  BangPatterns,
+                       DeriveFunctor,
+                       FlexibleContexts,
+                       FlexibleInstances
+                       GeneralizedNewtypeDeriving,
+                       MultiParamTypeClasses,
+                       OverloadedStrings,
+                       RecordWildCards,
+                       TypeFamilies
+
+  ghc-options:         -Wall -auto-all
+  cc-options:          -O3 -std=c99 -fPIC -ggdb -Wall
+  c-sources:           vcf-scan.c mini-pileup.c
+  include-dirs:        .
+  extra-libraries:     z
+
+  pkgconfig-depends:   htslib

@@ -1,0 +1,25 @@
+ Implement Kayvergence
+=======================
+
+Has to scan one "reference", one "outgroup" and one "sample".  Reference
+can be _the_ reference, or a high-coverage genome.  Outgroup is a high
+coverage genome.  Sample is anything.
+
+Whereever reference and outgroup are different, we count if the sample
+matches one or the other.  If anything is heterozgous, we select the
+allele randomly.  (Stupid, but that's the way we do it.)
+
+The statistic has to be Jackknived.  We can do that cheaply in two
+passes:  get the summary on the first pass, collect all the covalues in
+a second pass by subtracting statistics for one block from the total.
+
+
+Memory consumption can be moderate, just a few integers per statistic
+being collected.  So we can do millions of statistics in parallel.
+Suppose we have 20 high coverage genomes as "reference" and "outgroup"
+and 100 low coverage samples, there are only 22800 in total.  We might
+as well compute all of them!
+
+
+In the same vein, we could implement F4 (aka Patterson's D) or
+Yadda-Yadda.  Maybe not for all combinations, but in principle.
