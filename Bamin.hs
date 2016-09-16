@@ -26,19 +26,28 @@ import Util
 
 data ConfBam = ConfBam {
     conf_bam_output :: FilePath,
-    conf_bam_reference :: FilePath }
-  deriving Show
+    conf_bam_reference :: FilePath,
+    conf_pick :: SomeBase -> IO NucCode }
+  -- deriving Show
 
 conf_bam0 :: ConfBam
-conf_bam0 = ConfBam (error "no output file specified") (error "no reference file specified")
+conf_bam0 = ConfBam (error "no output file specified") (error "no reference file specified") ostrich
 
 opts_bam :: [ OptDescr ( ConfBam -> IO ConfBam ) ]
 opts_bam =
-    [ Option "o" ["output"] (ReqArg set_output "FILE") "Write output to FILE (.hef)"
-    , Option "r" ["reference"] (ReqArg set_ref "FILE") "Read reference from FILE (.fa)" ]
+    [ Option "o" ["output"]      (ReqArg set_output "FILE") "Write output to FILE (.hef)"
+    , Option "r" ["reference"]      (ReqArg set_ref "FILE") "Read reference from FILE (.fa)"
+    , Option [ ] ["deaminate"]        (NoArg set_deaminate) "Artificially deaminate"
+    , Option [ ] ["ignore-t"]           (NoArg  set_ignore) "Ignore T on forward strand"
+    , Option [ ] ["deaminate-ignore-t"] (NoArg set_deamign) "Artificially deaminate, then ignore T"
+    , Option [ ] ["stranded"]          (NoArg set_stranded) "Call only G&A on forward strand" ]
   where
-    set_output a c = return $ c { conf_bam_output    = a }
-    set_ref    a c = return $ c { conf_bam_reference = a }
+    set_output  a c = return $ c { conf_bam_output    = a }
+    set_ref     a c = return $ c { conf_bam_reference = a }
+    set_deaminate c = return $ c { conf_pick = artificial_ostrich }
+    set_ignore    c = return $ c { conf_pick = ignore_t }
+    set_deamign   c = return $ c { conf_pick = ignore_artificial_t }
+    set_stranded  c = return $ c { conf_pick = stranded }
 
 main_bam :: [String] -> IO ()
 main_bam args = do
@@ -70,21 +79,79 @@ data SomeBase = SomeBase { b_call :: !Nucleotides
 -- function can try and turn a base into something else, or throw it
 -- away by turning it into an N (code 0).
 {-# INLINE pickWith #-}
-pickWith :: (SomeBase -> NucCode) -> (Var0 -> SomeBase -> IO Var0)
-pickWith f v0@(Var0 rs po n0 i) sb =
-    case f sb of
+pickWith :: (SomeBase -> IO NucCode) -> (Var0 -> SomeBase -> IO Var0)
+pickWith f v0@(Var0 rs po n0 i) sb = do
+    nc <- f sb
+    case nc of
         NucCode 0 -> return v0
-        nc        -> do p <- randomRIO (0,i)
+        _         -> do p <- randomRIO (0,i)
                         return $! Var0 rs po (if p == 0 then nc else n0) (succ i)
 
 -- | Ostrich selection method:  pick blindly, but only actual bases.
-{-# INLINE ostrich #-}
-ostrich :: SomeBase -> NucCode
-ostrich SomeBase{ b_call = b } | b == nucsA = NucCode 11
-                               | b == nucsC = NucCode 12
-                               | b == nucsG = NucCode 13
-                               | b == nucsT = NucCode 14
-                               | otherwise  = NucCode  0
+ostrich :: SomeBase -> IO NucCode
+ostrich SomeBase{ b_call = b } | b == nucsA = return $ NucCode 11
+                               | b == nucsC = return $ NucCode 12
+                               | b == nucsG = return $ NucCode 13
+                               | b == nucsT = return $ NucCode 14
+                               | otherwise  = return $ NucCode  0
+
+-- | Ostrich selection method:  pick blindly, but only actual bases.
+-- Also deaminates artificially:  2% of the time, a C becomes a T
+-- instead.  Likewise, 2% of the time, a G in a reversed-alignment
+-- becomes an A.
+artificial_ostrich :: SomeBase -> IO NucCode
+artificial_ostrich SomeBase{ b_call = b, b_revd = r }
+    | b == nucsA          = return $ NucCode 11
+    | b == nucsC &&     r = return $ NucCode 12
+    | b == nucsG && not r = return $ NucCode 13
+    | b == nucsT          = return $ NucCode 14
+    | b == nucsC && not r = do p <- randomRIO (0,50::Int)
+                               return . NucCode $ if p == 0 then 14 else 12
+    | b == nucsG &&     r = do p <- randomRIO (0,50::Int)
+                               return . NucCode $ if p == 0 then 11 else 13
+    | otherwise           = return $ NucCode  0
+
+-- | "Deal" with deamination by ignoring possibly broken bases:  T on
+-- forward, C on backward strand.
+ignore_t :: SomeBase -> IO NucCode
+ignore_t SomeBase{ b_call = b, b_revd = r }
+    | b == nucsA = return . NucCode $ if   r   then 0 else 11
+    | b == nucsC = return $ NucCode 12
+    | b == nucsG = return $ NucCode 13
+    | b == nucsT = return . NucCode $ if not r then 0 else 14
+    | otherwise  = return $ NucCode  0
+
+-- | Introduce artificial deamination, then "deal" with it by ignoring
+-- damaged bases.
+ignore_artificial_t :: SomeBase -> IO NucCode
+ignore_artificial_t SomeBase{ b_call = b, b_revd = False }
+    | b == nucsA = return $ NucCode 11
+    | b == nucsG = return $ NucCode 13
+    | b == nucsC = do p <- randomRIO (0,50::Int)
+                      return . NucCode $ if p == 0 then 0 else 12
+    | otherwise  = return $ NucCode 0
+
+ignore_artificial_t SomeBase{ b_call = b, b_revd = True }
+    | b == nucsC = return $ NucCode 12
+    | b == nucsT = return $ NucCode 14
+    | b == nucsG = do p <- randomRIO (0,50::Int)
+                      return . NucCode $ if p == 0 then 0 else 13
+    | otherwise  = return $ NucCode  0
+
+-- | Call only G and A on the forward strand, C and T on the reverse
+-- strand.  This doesn't need to be combined with simulation code:
+-- Whenever a C could turn into a T, we ignore it either way.
+stranded :: SomeBase -> IO NucCode
+stranded SomeBase{ b_call = b, b_revd = False }
+    | b == nucsA = return $ NucCode 11
+    | b == nucsG = return $ NucCode 13
+    | otherwise  = return $ NucCode 0
+
+stranded SomeBase{ b_call = b, b_revd = True }
+    | b == nucsC = return $ NucCode 12
+    | b == nucsT = return $ NucCode 14
+    | otherwise  = return $ NucCode 0
+
 
 -- Hrm.  Need reference sequence.
 importPile :: Reference -> [ Var0 ] -> Stretch
@@ -169,49 +236,6 @@ word8 Buf{..} x = do
     when (buf_size - used < 16) $ flush_buffer Buf{..}
 
 
--- Argh, stuff below inlined and specilized from "Stretch".
-{-
-encode_chrs :: Buf -> NucCode -> NucCode -> IO ()
-encode_chrs hdl (NucCode x) (NucCode y)
-    | 0 <= x && x < 15 && 0 <= y && y < 15 = do
-        let x' = if x >= 11 then x-10 else x
-            y' = if y >= 11 then y-10 else y
-        word8 hdl . fromIntegral $ x' + 11 * y'
-    | otherwise = error $ "shouldn't happen: Chrs " ++ show x ++ " " ++ show y
-
-encode_ns :: Buf -> Int -> IO ()
-encode_ns hdl x | x <= 0          = error $ "WTF?  Backwards stretch?! " ++ show x
-                | x < 0x20        = do word8 hdl (0x80 .|. fromIntegral x)
-                | x < 0x1000      = do word8 hdl (0xA0 .|. fromIntegral x .&. 0xf)
-                                       word8 hdl (fromIntegral (x `shiftR` 4))
-                | x < 0x80000     = do word8 hdl (0xB0 .|. fromIntegral x .&. 0x7)
-                                       word8 hdl (fromIntegral (x `shiftR` 3))
-                                       word8 hdl (fromIntegral (x `shiftR` 11))
-                | x < 0x4000000   = do word8 hdl (0xB8 .|. fromIntegral x .&. 0x3)
-                                       word8 hdl (fromIntegral (x `shiftR` 2))
-                                       word8 hdl (fromIntegral (x `shiftR` 10))
-                                       word8 hdl (fromIntegral (x `shiftR` 18))
-                | x < 0x200000000 = do word8 hdl (0xBC .|. fromIntegral x .&. 0x1)
-                                       word8 hdl (fromIntegral (x `shiftR` 1))
-                                       word8 hdl (fromIntegral (x `shiftR` 9))
-                                       word8 hdl (fromIntegral (x `shiftR` 17))
-                                       word8 hdl (fromIntegral (x `shiftR` 25))
-                | otherwise       = error $ "WTF?! (too many Ns: " ++ show (2*x) ++ ")"
-
-encode_eqs :: Buf -> Int -> IO ()
-encode_eqs hdl x | x <= 0       = error "WTF?  Backwards matches?!"
-                 | x < 0x20     = do word8 hdl (0xC0 .|. fromIntegral x)
-                 | x < 0x1000   = do word8 hdl (0xE0 .|. fromIntegral x .&. 0xf)
-                                     word8 hdl (fromIntegral (x `shiftR` 4))
-                 | x < 0x80000  = do word8 hdl (0xF0 .|. fromIntegral x .&. 0x7)
-                                     word8 hdl (fromIntegral (x `shiftR` 3))
-                                     word8 hdl (fromIntegral (x `shiftR` 11))
-                 | otherwise    = error "WTF?! (too many matches)"
-
-encode_break :: Buf -> IO ()
-encode_break hdl = word8 hdl 0x80
--}
-
 {-# INLINE htsPileup #-}
 htsPileup :: (a -> SomeBase -> IO a) -> (Refseq -> Int -> a) -> FilePath -> IO [ a ]
 htsPileup cons nil fp = do
@@ -237,13 +261,13 @@ htsPileup cons nil fp = do
 
     foldVec !p !n !i !acc
         | n == i = return acc
-        | otherwise = do code <- peekElemOff p i
+        | otherwise = do c <- peekElemOff p i
                          let somebase = SomeBase
-                                { b_qual = Q    . fromIntegral $ code `shiftR`  0 .&. 0x7F
-                                , b_revd =                       code .&. 0x80 /= 0
-                                , b_call = Nucs . fromIntegral $ code `shiftR`  8 .&. 0xF
-                                , b_posn =        fromIntegral $ code `shiftR` 12 .&. 0x3FF
-                                , b_rlen =        fromIntegral $ code `shiftR` 22 .&. 0x3FF }
+                                { b_qual = Q    . fromIntegral $ c `shiftR`  0 .&. 0x7F
+                                , b_revd =                       c .&. 0x80 /= 0
+                                , b_call = Nucs . fromIntegral $ c `shiftR`  8 .&. 0xF
+                                , b_posn =        fromIntegral $ c `shiftR` 12 .&. 0x3FF
+                                , b_rlen =        fromIntegral $ c `shiftR` 22 .&. 0x3FF }
                          cons acc somebase >>= foldVec p n (succ i)
 
 

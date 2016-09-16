@@ -24,4 +24,4 @@ main = do
 installManpages :: PackageDescription -> LocalBuildInfo -> Verbosity -> CopyDest -> IO ()
 installManpages pkg lbi verbosity copy = do
     installOrdinaryFiles verbosity (mandir (absoluteInstallDirs pkg lbi copy))
-        [ ("man", joinPath mp) | ("man":"man1":mp) <- map splitDirectories $ extraSrcFiles pkg ]
+        [ ("man", joinPath mp) | ("man":mp) <- map splitDirectories $ extraSrcFiles pkg ]
