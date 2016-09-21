@@ -4,11 +4,7 @@ module SillyStats (
     main_yaddayadda
                   ) where
 
-import Control.Monad
-import Data.Bits
-import Data.List                        ( tails, foldl' )
-import Data.Word                        ( Word8 )
-import Numeric                          ( showFFloat, showEFloat )
+import BasePrelude
 import Numeric.SpecFunctions            ( incompleteBeta )
 import System.Console.GetOpt
 

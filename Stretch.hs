@@ -16,11 +16,8 @@ module Stretch (
     iupac_chars
     ) where
 
-import Data.Bits
+import BasePrelude
 import Data.ByteString.Builder          ( word8, Builder, byteString )
-import Data.Int                         ( Int64 )
-import Data.Monoid
-import Data.Word                        ( Word8 )
 
 import qualified Data.ByteString.Char8          as B
 import qualified Data.ByteString.Internal       as B

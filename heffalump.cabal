@@ -21,6 +21,7 @@ executable heffalump
                        VcfScan
 
   build-depends:       base >=4.7 && <4.9,
+                       base-prelude ==1.*,
                        bytestring,
                        directory,
                        filepath,
@@ -39,6 +40,7 @@ executable heffalump
                        FlexibleInstances
                        GeneralizedNewtypeDeriving,
                        MultiParamTypeClasses,
+                       NoImplicitPrelude,
                        OverloadedStrings,
                        RecordWildCards,
                        TypeFamilies

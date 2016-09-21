@@ -1,9 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 module VcfScan where
 
+import BasePrelude
 import Foreign
 import Foreign.C
-import Control.Monad
 import System.IO
 
 import qualified Data.ByteString        as BB
@@ -28,12 +28,12 @@ hashChrom = BB.foldl' (\a b -> 49 * a + fromIntegral b) 0
 
 data CScanner
 
-data Scanner = Scanner { handle :: !Handle
+data Scanner = Scanner { fhandle :: !Handle
                        , filename :: FilePath
                        , c_scanner :: !(ForeignPtr CScanner) }
 
 withScanner :: (Ptr CScanner -> Handle -> IO a) -> Scanner -> IO a
-withScanner k sc = withForeignPtr (c_scanner sc) $ \p -> k p (handle sc)
+withScanner k sc = withForeignPtr (c_scanner sc) $ \p -> k p (fhandle sc)
 
 ibuffer_size, workbuffer_size :: Int
 ibuffer_size = 2000000

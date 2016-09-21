@@ -1,8 +1,6 @@
 module Merge where
 
-import Data.Bits
-import Data.Int                         ( Int64 )
-import Data.Word                        ( Word8 )
+import BasePrelude
 
 import qualified Data.ByteString.Char8          as B
 import qualified Data.ByteString.Lazy.Char8     as L

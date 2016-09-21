@@ -1,18 +1,9 @@
-import Control.Arrow                    ( (***) )
-import Control.Monad
-import Data.Bits
+import BasePrelude
 import Data.ByteString.Builder          ( hPutBuilder, Builder, intDec, char7 )
-import Data.Char                        ( toUpper, isSpace )
-import Data.Function
-import Data.Int                         ( Int64 )
-import Data.List                        ( intercalate, isPrefixOf )
-import Data.Monoid
 import System.Console.GetOpt
 import System.Directory
-import System.Environment               ( getArgs, getProgName )
 import System.FilePath
 import System.IO
-import System.IO.Unsafe                 ( unsafeInterleaveIO )
 
 import qualified Data.ByteString.Char8           as B
 import qualified Data.ByteString.Lazy            as LB

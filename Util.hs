@@ -1,12 +1,7 @@
 module Util where
 
-import Control.Exception                ( throw )
-import Control.Monad                    ( unless )
-import Data.Bits                        ( (.&.), (.|.), complement )
-import Data.Word                        ( Word8 )
+import BasePrelude
 import System.Console.GetOpt
-import System.Environment               ( getProgName )
-import System.Exit                      ( exitSuccess, exitFailure )
 import System.IO                        ( hPutStrLn, stderr )
 
 import qualified Data.ByteString.Lazy            as B

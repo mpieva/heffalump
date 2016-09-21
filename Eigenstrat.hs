@@ -1,8 +1,6 @@
 module Eigenstrat where
 
-import Data.Bits
-import Data.Char                        ( toUpper )
-import Data.Int                         ( Int32 )
+import BasePrelude
 
 import qualified Data.Foldable                  as F
 import qualified Data.ByteString.Lazy           as LB
