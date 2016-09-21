@@ -27,7 +27,7 @@ import Util
 data ConfBam = ConfBam {
     conf_bam_output :: FilePath,
     conf_bam_reference :: FilePath,
-    conf_pick :: SomeBase -> IO NucCode }
+    conf_pick :: FilePath -> IO [ Var0 ] }
   -- deriving Show
 
 conf_bam0 :: ConfBam
@@ -56,7 +56,7 @@ main_bam args = do
 
     withFile conf_bam_output WriteMode                          $ \hdl ->
         hPutBuilder hdl . encode_hap . importPile ref . concat
-                =<< mapM (htsPileup (pickWith ostrich) zeroVar) bams
+                =<< mapM conf_pick bams
 
 -- Our varcall: position, base, and counter for the rnd. sampling
 data Var0 = Var0 { v_refseq :: !Refseq
@@ -88,69 +88,79 @@ pickWith f v0@(Var0 rs po n0 i) sb = do
                         return $! Var0 rs po (if p == 0 then nc else n0) (succ i)
 
 -- | Ostrich selection method:  pick blindly, but only actual bases.
-ostrich :: SomeBase -> IO NucCode
-ostrich SomeBase{ b_call = b } | b == nucsA = return $ NucCode 11
-                               | b == nucsC = return $ NucCode 12
-                               | b == nucsG = return $ NucCode 13
-                               | b == nucsT = return $ NucCode 14
-                               | otherwise  = return $ NucCode  0
+ostrich :: FilePath -> IO [ Var0 ]
+ostrich = htsPileup (pickWith pick) zeroVar
+  where
+    pick SomeBase{ b_call = b } | b == nucsA = return $ NucCode 11
+                                | b == nucsC = return $ NucCode 12
+                                | b == nucsG = return $ NucCode 13
+                                | b == nucsT = return $ NucCode 14
+                                | otherwise  = return $ NucCode  0
 
 -- | Ostrich selection method:  pick blindly, but only actual bases.
 -- Also deaminates artificially:  2% of the time, a C becomes a T
 -- instead.  Likewise, 2% of the time, a G in a reversed-alignment
 -- becomes an A.
-artificial_ostrich :: SomeBase -> IO NucCode
-artificial_ostrich SomeBase{ b_call = b, b_revd = r }
-    | b == nucsA          = return $ NucCode 11
-    | b == nucsC &&     r = return $ NucCode 12
-    | b == nucsG && not r = return $ NucCode 13
-    | b == nucsT          = return $ NucCode 14
-    | b == nucsC && not r = do p <- randomRIO (0,50::Int)
-                               return . NucCode $ if p == 0 then 14 else 12
-    | b == nucsG &&     r = do p <- randomRIO (0,50::Int)
-                               return . NucCode $ if p == 0 then 11 else 13
-    | otherwise           = return $ NucCode  0
+artificial_ostrich :: FilePath -> IO [ Var0 ]
+artificial_ostrich = htsPileup (pickWith pick) zeroVar
+  where
+    pick SomeBase{ b_call = b, b_revd = r }
+        | b == nucsA          = return $ NucCode 11
+        | b == nucsC &&     r = return $ NucCode 12
+        | b == nucsG && not r = return $ NucCode 13
+        | b == nucsT          = return $ NucCode 14
+        | b == nucsC && not r = do p <- randomRIO (0,50::Int)
+                                   return . NucCode $ if p == 0 then 14 else 12
+        | b == nucsG &&     r = do p <- randomRIO (0,50::Int)
+                                   return . NucCode $ if p == 0 then 11 else 13
+        | otherwise           = return $ NucCode  0
 
 -- | "Deal" with deamination by ignoring possibly broken bases:  T on
 -- forward, C on backward strand.
-ignore_t :: SomeBase -> IO NucCode
-ignore_t SomeBase{ b_call = b, b_revd = r }
-    | b == nucsA = return . NucCode $ if   r   then 0 else 11
-    | b == nucsC = return $ NucCode 12
-    | b == nucsG = return $ NucCode 13
-    | b == nucsT = return . NucCode $ if not r then 0 else 14
-    | otherwise  = return $ NucCode  0
+ignore_t :: FilePath -> IO [ Var0 ]
+ignore_t = htsPileup (pickWith pick) zeroVar
+  where
+    pick SomeBase{ b_call = b, b_revd = r }
+        | b == nucsA = return . NucCode $ if   r   then 0 else 11
+        | b == nucsC = return $ NucCode 12
+        | b == nucsG = return $ NucCode 13
+        | b == nucsT = return . NucCode $ if not r then 0 else 14
+        | otherwise  = return $ NucCode  0
 
 -- | Introduce artificial deamination, then "deal" with it by ignoring
 -- damaged bases.
-ignore_artificial_t :: SomeBase -> IO NucCode
-ignore_artificial_t SomeBase{ b_call = b, b_revd = False }
-    | b == nucsA = return $ NucCode 11
-    | b == nucsG = return $ NucCode 13
-    | b == nucsC = do p <- randomRIO (0,50::Int)
-                      return . NucCode $ if p == 0 then 0 else 12
-    | otherwise  = return $ NucCode 0
+ignore_artificial_t :: FilePath -> IO [ Var0 ]
+ignore_artificial_t = htsPileup (pickWith pick) zeroVar
+  where
+    pick SomeBase{ b_call = b, b_revd = False }
+        | b == nucsA = return $ NucCode 11
+        | b == nucsG = return $ NucCode 13
+        | b == nucsC = do p <- randomRIO (0,50::Int)
+                          return . NucCode $ if p == 0 then 0 else 12
+        | otherwise  = return $ NucCode 0
 
-ignore_artificial_t SomeBase{ b_call = b, b_revd = True }
-    | b == nucsC = return $ NucCode 12
-    | b == nucsT = return $ NucCode 14
-    | b == nucsG = do p <- randomRIO (0,50::Int)
-                      return . NucCode $ if p == 0 then 0 else 13
-    | otherwise  = return $ NucCode  0
+    pick SomeBase{ b_call = b, b_revd = True }
+        | b == nucsC = return $ NucCode 12
+        | b == nucsT = return $ NucCode 14
+        | b == nucsG = do p <- randomRIO (0,50::Int)
+                          return . NucCode $ if p == 0 then 0 else 13
+        | otherwise  = return $ NucCode  0
 
 -- | Call only G and A on the forward strand, C and T on the reverse
 -- strand.  This doesn't need to be combined with simulation code:
 -- Whenever a C could turn into a T, we ignore it either way.
-stranded :: SomeBase -> IO NucCode
-stranded SomeBase{ b_call = b, b_revd = False }
-    | b == nucsA = return $ NucCode 11
-    | b == nucsG = return $ NucCode 13
-    | otherwise  = return $ NucCode 0
+stranded :: FilePath -> IO [ Var0 ]
+stranded = htsPileup (pickWith pick) zeroVar
+  where
+    pick SomeBase{ b_call = b, b_revd = False }
+        | b == nucsA = return $ NucCode 11
+        | b == nucsG = return $ NucCode 13
+        | otherwise  = return $ NucCode 0
 
-stranded SomeBase{ b_call = b, b_revd = True }
-    | b == nucsC = return $ NucCode 12
-    | b == nucsT = return $ NucCode 14
-    | otherwise  = return $ NucCode 0
+    pick  SomeBase{ b_call = b, b_revd = True }
+        | b == nucsC = return $ NucCode 12
+        | b == nucsT = return $ NucCode 14
+        | otherwise  = return $ NucCode 0
 
 
 -- Hrm.  Need reference sequence.
