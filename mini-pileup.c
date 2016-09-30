@@ -62,7 +62,7 @@ int pileup_step( struct plp_aux_t *data, int *tid, int *pos, int vsize, uint32_t
                         | ( bam_get_qual(plp[j].b)[ plp[j].qpos ] & 0x7f )
                         | ( bam_is_rev(plp[j].b) ? 0x80 : 0x00 ) ) ;
 
-            vec[j] = ( plp[j].b->core.l_qseq < 1024 ? plp[j].b->core.l_qseq : 1023 ) << 20
+            vec[j] = ( plp[j].b->core.l_qseq < 1024 ? plp[j].b->core.l_qseq : 1023 ) << 22
                    | ( plp[j].qpos < 1024 ? plp[j].qpos : 1023 ) << 12
                    | bqual ;
         }

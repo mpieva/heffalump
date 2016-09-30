@@ -11,9 +11,10 @@ import Foreign.Ptr                  ( Ptr, plusPtr )
 import Foreign.Marshal.Array        ( allocaArray )
 import Foreign.Marshal.Alloc        ( allocaBytes, alloca )
 import Foreign.Storable
+import System.Directory             ( renameFile )
 import System.Console.GetOpt
 import System.IO
-import System.Random                ( randomRIO )
+import System.Random                ( getStdRandom, next )
 
 import qualified Data.ByteString.Unsafe as B
 import qualified Data.ByteString.Lazy as L
@@ -22,7 +23,7 @@ import qualified Data.Vector.Unboxed as U
 import Stretch
 import Util
 
-data Pick = Ostrich | Artificial | Ignore | ArtificialIgnore | Stranded
+data Pick = Ostrich | Artificial | Ignore | ArtificialIgnore | Stranded | UDG
   deriving Show
 
 data ConfBam = ConfBam {
@@ -41,7 +42,8 @@ opts_bam =
     , Option [ ] ["deaminate"]        (NoArg set_deaminate) "Artificially deaminate"
     , Option [ ] ["ignore-t"]           (NoArg  set_ignore) "Ignore T on forward strand"
     , Option [ ] ["deaminate-ignore-t"] (NoArg set_deamign) "Artificially deaminate, then ignore T"
-    , Option [ ] ["stranded"]          (NoArg set_stranded) "Call only G&A on forward strand" ]
+    , Option [ ] ["stranded"]          (NoArg set_stranded) "Call only G&A on forward strand"
+    , Option [ ] ["udg"]                    (NoArg set_udg) "Simulate UDG treatment" ]
   where
     set_output  a c = return $ c { conf_bam_output    = a }
     set_ref     a c = return $ c { conf_bam_reference = a }
@@ -49,32 +51,35 @@ opts_bam =
     set_ignore    c = return $ c { conf_pick = Ignore }
     set_deamign   c = return $ c { conf_pick = ArtificialIgnore }
     set_stranded  c = return $ c { conf_pick = Stranded }
+    set_udg       c = return $ c { conf_pick = UDG }
 
 main_bam :: [String] -> IO ()
 main_bam args = do
     ( bams, ConfBam{..} ) <- parseOpts True conf_bam0 (mk_opts "bamin" "[bam-file...]" opts_bam) args
     ref <- readReference conf_bam_reference
 
-    withFile conf_bam_output WriteMode                          $ \hdl ->
-        hPutBuilder hdl . encode_hap . importPile ref . concat
+    withFile (conf_bam_output ++ "~") WriteMode        $ \hdl ->
+        hPutBuilder hdl . encode_hap . importPile ref
+                . progress conf_bam_output . concat
                 =<< mapM (htsPileup conf_pick) bams
+    renameFile (conf_bam_output ++ "~") conf_bam_output
+
+progress :: String -> [Var0] -> [Var0]
+progress fp = go 0 0
+  where
+    go  _  _ [    ] = []
+    go rs po (v:vs)
+        | rs /= unRefseq (v_refseq v) || po + 10000000 <= v_pos v
+            = unsafePerformIO $ do
+                hPutStrLn stderr $ fp ++ "@" ++ show (unRefseq (v_refseq v)) ++ ":" ++ show (v_pos v)
+                return $ v : go (unRefseq (v_refseq v)) (v_pos v) vs
+        | otherwise =  v : go rs po vs
 
 -- Our varcall: position, base, and counter for the rnd. sampling
 data Var0 = Var0 { v_refseq :: !Refseq
                  , v_pos    :: !Int
                  , v_call   :: !NucCode }
     deriving Show
-
-zeroVar :: Refseq -> Int -> Var0
-zeroVar rs po = Var0 rs po (NucCode 0)
-
-data SomeBase = SomeBase { b_call :: !Nucleotides
-                         , b_qual :: !Qual
-                         , b_posn :: !Int
-                         , b_rlen :: !Int
-                         , b_revd :: !Bool }
-    deriving Show
-
 
 -- Hrm.  Need reference sequence.
 importPile :: Reference -> [ Var0 ] -> Stretch
@@ -121,10 +126,8 @@ importPile (Reference cs0) = nextChrom cs0 (Refseq 0)
     -- anything else, we dump the stretch out and pass the buck
     matches cs c rs num pos vars = Eqs1 num $ generic cs c rs pos vars
 
-    {- # INLINE getTwo # -}
-    -- getTwo k = tryHead >>= \a -> tryHead >>= \b -> k a b
-
     isVar c v | L.null  c = False
+              | low (L.head c) == 110 = False
               | otherwise = low (tr1 (v_call v)) /= low (L.head c)
 
     tr1 (NucCode w) = B.unsafeIndex iupac_chars . fromIntegral $ w
@@ -165,7 +168,7 @@ htsPileup pick fp = do
     plp <- throwErrnoIfNull "c_pileup_init" $ withCString fp $ c_pileup_init
     repeatedly (step plp)
   where
-    vsize = 256
+    vsize = 2048
 
     repeatedly k = k >>= maybe (return []) (\a -> (:) a <$> unsafeInterleaveIO (repeatedly k))
 
@@ -180,18 +183,18 @@ htsPileup pick fp = do
                else do
                    rs <- Refseq . fromIntegral <$> peek ptid
                    po <-          fromIntegral <$> peek ppos
-                   nuc <- foldVec vec (fromIntegral n_plp) 0 (U.replicate 4 0)
+                   nuc <- foldVec po vec (fromIntegral n_plp) 0 (U.replicate 5 0)
                    return $ Just $ Var0 rs po nuc
 
-    foldVec !p !n !i !acc
+    foldVec po !p !n !i !acc
         | n == i = sample_from acc
         | otherwise = do c <- peekElemOff p i
-                         maybe_count pick acc c >>= foldVec p n (succ i)
+                         maybe_count pick acc c >>= foldVec po p n (succ i)
 
 
 maybe_count :: Pick -> U.Vector Int -> CUInt -> IO (U.Vector Int)
 maybe_count pick counts c = do
-    let -- b_qual = Q    . fromIntegral $ c `shiftR`  0 .&. 0x7F
+    let -- b_qual =                       c `shiftR`  0 .&. 0x7F
         -- b_posn =        fromIntegral $ c `shiftR` 12 .&. 0x3FF
         -- b_rlen =        fromIntegral $ c `shiftR` 22 .&. 0x3FF
         b_revd =                       c .&. 0x80 /= 0
@@ -202,69 +205,64 @@ maybe_count pick counts c = do
                                 | b == 8    -> 3
                                 | otherwise -> 4
 
-        prob p x y = do r <- randomRIO (0::Int,p-1) ; return $ if r == 0 then x else y
+    dam <- (==) 0 . (`mod` 50) <$> getStdRandom next
 
-    nc <- case pick of
-        -- Ostrich selection method:  pick blindly
-        Ostrich -> return b_call
+    let nc = case pick of
+            -- Ostrich selection method:  pick blindly
+            Ostrich -> b_call
 
-        --  Ostrich selection method, also deaminates artificially:  2%
-        --  of the time, a C becomes a T instead.  Likewise, 2% of the
-        --  time, a G in a reversed-alignment becomes an A.
-        Artificial | b_call == 0               -> return b_call             -- A
-                   | b_call == 1 &&     b_revd -> return b_call             -- C, rev
-                   | b_call == 2 && not b_revd -> return b_call             -- G, !rev
-                   | b_call == 3               -> return b_call             -- T
-                   | b_call == 1 && not b_revd -> prob 50 1 3               -- C, !rev
-                   | b_call == 2 &&     b_revd -> prob 50 2 0               -- G, rev
-                   | otherwise                 -> return 4
-        
-        -- "Deal" with deamination by ignoring possibly broken bases:  T
-        -- on forward, A on backward strand.
-        Ignore | b_call == 0 -> return $ if b_revd then 4 else 0             -- A
-               | b_call == 1 -> return 1                                     -- C
-               | b_call == 2 -> return 2                                     -- G
-               | b_call == 3 -> return $ if b_revd then 3 else 4             -- T
-               | otherwise   -> return 4
+            -- Ostrich selection method, also deaminates artificially:  2%
+            -- of the time, a C becomes a T instead.  Likewise, 2% of the
+            -- time, a G in a reversed-alignment becomes an A.
+            Artificial | b_call == 1 && not b_revd && dam -> 3      -- C, !rev
+                       | b_call == 2 &&     b_revd && dam -> 0      -- G, rev
+                       | otherwise                        -> b_call
 
-        -- Introduce artificial deamination, then "deal" with it by
-        -- ignoring damaged bases.
-        ArtificialIgnore | b_call == 0 -> return $ if b_revd then 4 else 0              -- A
-                         | b_call == 3 -> return $ if b_revd then 3 else 4              -- T
-                         | b_call == 1 -> if b_revd then return 1 else prob 50 4 1      -- C
-                         | b_call == 2 -> if b_revd then prob 50 4 2 else return 2      -- G
-                         | otherwise   -> return 4
+            -- "Deal" with deamination by ignoring possibly broken bases:  T
+            -- on forward, A on backward strand.
+            Ignore | b_call == 0 &&     b_revd -> 4         -- A, reverse
+                   | b_call == 3 && not b_revd -> 4         -- T, forward
+                   | otherwise                 -> b_call
 
-        -- Call only G and A on the forward strand, C and T on the
-        -- reverse strand.  This doesn't need to be combined with
-        -- simulation code: Whenever a C could turn into a T, we ignore
-        -- it either way.
-        Stranded | b_call == 0 -> return $ if b_revd then 4 else 0             -- A
-                 | b_call == 1 -> return $ if b_revd then 1 else 4             -- C
-                 | b_call == 2 -> return $ if b_revd then 4 else 2             -- G
-                 | b_call == 3 -> return $ if b_revd then 3 else 4             -- T
-                 | otherwise   -> return 4
+            -- Introduce artificial deamination, then "deal" with it by
+            -- ignoring damaged bases.
+            ArtificialIgnore | b_call == 0 -> if     b_revd        then 4 else 0   -- A
+                             | b_call == 1 -> if not b_revd && dam then 4 else 1   -- C
+                             | b_call == 2 -> if     b_revd && dam then 4 else 2   -- G
+                             | b_call == 3 -> if not b_revd        then 4 else 3   -- T
+                             | otherwise   ->                           4
 
-    if nc < 4 then return $ counts U.// [(nc, succ $ counts U.! nc)]
-              else return   counts
+            -- Call only G and A on the forward strand, C and T on the
+            -- reverse strand.  This doesn't need to be combined with
+            -- simulation code: Whenever a C could turn into a T, we ignore
+            -- it either way.
+            Stranded | b_call == 0 -> if b_revd then 4 else 0             -- A
+                     | b_call == 1 -> if b_revd then 1 else 4             -- C
+                     | b_call == 2 -> if b_revd then 4 else 2             -- G
+                     | b_call == 3 -> if b_revd then 3 else 4             -- T
+                     | otherwise   -> 4
 
+            -- Simulated UDG treatment: 2% of Cs on forward strand are
+            -- lost, and so are 2% of Gs on reverse strand.
+            UDG | b_call == 1 && not b_revd && dam -> 4      -- C, !rev
+                | b_call == 2 &&     b_revd && dam -> 4      -- G, rev
+                | otherwise                        -> b_call
+
+    return $ counts U.// [(nc, succ $ counts U.! nc)]
+
+-- | Takes a random sample from prepared counts.
 sample_from :: U.Vector Int -> IO NucCode
-sample_from vec = do i <- randomRIO (0, U.sum vec -1)
-                     return . NucCode . (+) 11 . fromIntegral 
-                            . U.length . U.takeWhile (<i) $ U.prescanl (+) 0 vec
-
--- Sample randomly with a transformation function.  The transformation
--- function can try and turn a base into something else, or throw it
--- away by turning it into an N (code 0).
-{-  pickWith :: (SomeBase -> IO NucCode) -> (Var0 -> SomeBase -> IO Var0)
-pickWith f v0@(Var0 rs po n0 i) sb = do
-    nc <- f sb
-    case nc of
-        NucCode 0 -> return v0
-        _         -> do p <- randomRIO (0,i)
-                        return $! Var0 rs po (if p == 0 then nc else n0) (succ i)  -}
-
-
+sample_from vec | U.length vec == 5 = do
+    let s = U.unsafeIndex vec 0 + U.unsafeIndex vec 1 + U.unsafeIndex vec 2 + U.unsafeIndex vec 3
+    if s == 0
+        then return (NucCode 0)
+        else do
+            i <- (`mod` s) <$> getStdRandom next
+            return . NucCode $ case () of
+                _ | i < U.unsafeIndex vec 0                                             -> 11
+                  | i < U.unsafeIndex vec 0 + U.unsafeIndex vec 1                       -> 12
+                  | i < U.unsafeIndex vec 0 + U.unsafeIndex vec 1 + U.unsafeIndex vec 2 -> 13
+                  | otherwise                                                           -> 14
 
 
 data PlpAux
@@ -288,15 +286,5 @@ foreign import ccall unsafe "mini-pileup.h pileup_step"
 foreign import ccall unsafe "mini-pileup.h pileup_done"
     c_pileup_done :: Ptr PlpAux -> IO ()
 
-
 newtype Refseq = Refseq { unRefseq :: Int } deriving (Show, Enum, Eq)
 
-newtype Qual = Q { unQ :: Word8 } deriving Show
-
-newtype Nucleotides = Nucs { unNucs :: Word8 } deriving (Show, Eq)
-
-nucsA, nucsC, nucsG, nucsT :: Nucleotides
-nucsA = Nucs 1
-nucsC = Nucs 2
-nucsG = Nucs 4
-nucsT = Nucs 8

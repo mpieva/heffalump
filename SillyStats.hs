@@ -21,11 +21,12 @@ data Config = Config {
     conf_noutgroups :: Int,
     conf_nrefpanel  :: Int,
     conf_filter     :: [Variant] -> [Variant],
+    conf_msg        :: String,
     conf_nafricans  :: Int,
     conf_reference  :: FilePath }
 
 defaultConfig :: Config
-defaultConfig = Config 5000000 1 1 id
+defaultConfig = Config 5000000 1 1 id ""
                        (error "size of reference panel not known")
                        (error "no reference file specified")
 
@@ -37,6 +38,11 @@ transversions = filter tv
          | (v_ref v == 'G' || v_ref v == 'g') && (v_alt v == 'A' || v_alt v == 'a') = False
          | (v_ref v == 'A' || v_ref v == 'a') && (v_alt v == 'G' || v_alt v == 'g') = False
          | otherwise                                                                = True
+
+custom :: String -> [Variant] -> [Variant]
+custom (a:b:_) = filter valid
+  where
+    valid v = toUpper (v_ref v) == a && toUpper (v_alt v) == b
 
 showPValue :: Double -> ShowS
 showPValue x | x >= 0.002 = showFFloat (Just 3) x
@@ -73,7 +79,8 @@ gen_stats blk_size cfn vs0 = final_vals
   where
     -- We generate the count (k), the total (n), the result (k/n),
     -- the variance estimate (\sigma^2, from Jackknifing)
-    final_vals = [ SillyStats k n (2*k/n -1) (4*v) (pval (k/n) v)
+    final_vals = [ SillyStats k n (2*k/n -1) (4*v)
+                              (if n == 0 then 0/0 else pval (k/n) v)
                  | i <- [0 .. U.length full_counts - 1]
                  , let (k,n) = full_counts U.! i
                  , let v     = blk_jackknife k n $ V.map (U.! i) blockstats ]
@@ -262,13 +269,15 @@ opts_dstat =
     , Option "n" ["numoutgroups"] (ReqArg set_nout "NUM") "The first NUM inputs are outgroups (1)"
     , Option "k" ["numrefpanel"]  (ReqArg set_nref "NUM") "The next NUM inputs are the reference panel"
     , Option "J" ["blocksize"]    (ReqArg set_jack "NUM") "Set blocksize for Jackknife to NUM bases (5M)"
-    , Option "t" ["transversions"]     (NoArg set_tvonly) "Restrict to transversion sites" ]
+    , Option "t" ["transversions"]     (NoArg set_tvonly) "Restrict to transversion sites"
+    , Option [ ] ["custom"]    (ReqArg set_custom "VARS") "Set custom filter" ]
   where
     set_ref  a c = return $ c { conf_reference = a }
     set_nout a c = readIO a >>= \n -> return $ c { conf_noutgroups = n }
     set_nref a c = readIO a >>= \n -> return $ c { conf_nrefpanel = n }
     set_jack a c = readNumIO a >>= \n -> return $ c { conf_blocksize = n }
     set_tvonly c = return $ c { conf_filter = transversions }
+    set_custom a c = return $ c { conf_filter = custom a, conf_msg = a ++ " " }
 
 main_patterson :: [String] -> IO ()
 main_patterson args = do
@@ -281,7 +290,8 @@ main_patterson args = do
                  $ conf_filter $ merge_hefs conf_noutgroups ref inps
 
     forM_ (zip labels stats) $ \((sn,cn,r1,r2), SillyStats k n r v p) ->
-        putStrLn $ "D( " ++ r1 ++ ", " ++ r2 ++ "; " ++ sn ++ ", " ++ cn ++ ") = "
+        putStrLn $ conf_msg
+                ++ "D( " ++ r1 ++ ", " ++ r2 ++ "; " ++ sn ++ ", " ++ cn ++ ") = "
                 ++ showFFloat (Just 0) k "/" ++ showFFloat (Just 0) n " = "
                 ++ showFFloat (Just 2) (100 * r) "% ± "
                 ++ showFFloat (Just 2) (100 * sqrt v) "%, p = "

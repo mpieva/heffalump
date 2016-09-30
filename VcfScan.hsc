@@ -59,19 +59,18 @@ initVcf fp = do
     (#{ poke scanner, next_work } psc work_buf)
     (#{ poke scanner, last_work } psc work_buf)
 
-    smps <- let loop = do _ <- fillWork psc hdl
-                          p <- scan_hdr psc
-                          if p == nullPtr then loop
-                                          else B.packCString p
-            in B.split '\t' <$> loop
+    smps <- let lp = do _ <- fillWork psc hdl
+                        p <- scan_hdr psc
+                        if p == nullPtr then lp
+                                        else B.packCString p
+            in B.split '\t' <$> lp
 
     unless (length smps == 1) . error $
         "Sorry, this VCF scanner only supports one individual."
 
-    let loop = do  _ <- fillWork psc hdl
-                   r <- skip_hdr psc
-                   when (r == 0) loop
-        in loop
+    fix $ \lp -> do  _ <- fillWork psc hdl
+                     r <- skip_hdr psc
+                     when (r == 0) lp
 
     (#{ poke scanner, nsmp } psc (length smps))
     Scanner hdl fp <$> newForeignPtr free_scanner psc
