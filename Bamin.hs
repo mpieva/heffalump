@@ -23,35 +23,44 @@ import qualified Data.Vector.Unboxed as U
 import Stretch
 import Util
 
-data Pick = Ostrich | Artificial | Ignore | ArtificialIgnore | Stranded | UDG
+data Pick = Ostrich | Artificial | Ignore_T | Ignore_A | ArtificialIgnore | Stranded | UDG | Kay
   deriving Show
 
 data ConfBam = ConfBam {
     conf_bam_output :: FilePath,
     conf_bam_reference :: FilePath,
-    conf_pick :: Pick }
+    conf_pick :: Pick,
+    conf_min_qual :: Int }
   deriving Show
 
 conf_bam0 :: ConfBam
-conf_bam0 = ConfBam (error "no output file specified") (error "no reference file specified") Ostrich
+conf_bam0 = ConfBam (error "no output file specified") (error "no reference file specified") Ostrich 0
 
 opts_bam :: [ OptDescr ( ConfBam -> IO ConfBam ) ]
 opts_bam =
     [ Option "o" ["output"]      (ReqArg set_output "FILE") "Write output to FILE (.hef)"
     , Option "r" ["reference"]      (ReqArg set_ref "FILE") "Read reference from FILE (.fa)"
+    , Option "m" ["min-qual"]   (ReqArg set_minqual "QUAL") "Discard bases below quality QUAL"
     , Option [ ] ["deaminate"]        (NoArg set_deaminate) "Artificially deaminate"
-    , Option [ ] ["ignore-t"]           (NoArg  set_ignore) "Ignore T on forward strand"
+    , Option [ ] ["ignore-t"]         (NoArg  set_ignore_t) "Ignore T on forward strand"
+    , Option [ ] ["ignore-a"]         (NoArg  set_ignore_a) "Ignore A on forward strand"
     , Option [ ] ["deaminate-ignore-t"] (NoArg set_deamign) "Artificially deaminate, then ignore T"
     , Option [ ] ["stranded"]          (NoArg set_stranded) "Call only G&A on forward strand"
-    , Option [ ] ["udg"]                    (NoArg set_udg) "Simulate UDG treatment" ]
+    , Option [ ] ["udg"]                    (NoArg set_udg) "Simulate UDG treatment"
+    , Option [ ] ["kay"]                    (NoArg set_kay) "Ts become Ns" ]
   where
     set_output  a c = return $ c { conf_bam_output    = a }
     set_ref     a c = return $ c { conf_bam_reference = a }
     set_deaminate c = return $ c { conf_pick = Artificial }
-    set_ignore    c = return $ c { conf_pick = Ignore }
+    set_ignore_t  c = return $ c { conf_pick = Ignore_T }
+    set_ignore_a  c = return $ c { conf_pick = Ignore_A }
     set_deamign   c = return $ c { conf_pick = ArtificialIgnore }
     set_stranded  c = return $ c { conf_pick = Stranded }
     set_udg       c = return $ c { conf_pick = UDG }
+    set_kay       c = return $ c { conf_pick = Kay }
+
+    set_minqual a c = readIO a >>= \b -> return $ c { conf_min_qual = b }
+
 
 main_bam :: [String] -> IO ()
 main_bam args = do
@@ -61,7 +70,7 @@ main_bam args = do
     withFile (conf_bam_output ++ "~") WriteMode        $ \hdl ->
         hPutBuilder hdl . encode_hap . importPile ref
                 . progress conf_bam_output . concat
-                =<< mapM (htsPileup conf_pick) bams
+                =<< mapM (htsPileup conf_min_qual conf_pick) bams
     renameFile (conf_bam_output ++ "~") conf_bam_output
 
 progress :: String -> [Var0] -> [Var0]
@@ -163,8 +172,8 @@ word8 Buf{..} x = do
 
 
 {-# INLINE htsPileup #-}
-htsPileup :: Pick -> FilePath -> IO [ Var0 ]
-htsPileup pick fp = do
+htsPileup :: Int -> Pick -> FilePath -> IO [ Var0 ]
+htsPileup min_qual pick fp = do
     plp <- throwErrnoIfNull "c_pileup_init" $ withCString fp $ c_pileup_init
     repeatedly (step plp)
   where
@@ -183,18 +192,19 @@ htsPileup pick fp = do
                else do
                    rs <- Refseq . fromIntegral <$> peek ptid
                    po <-          fromIntegral <$> peek ppos
-                   nuc <- foldVec po vec (fromIntegral n_plp) 0 (U.replicate 5 0)
+                   nuc <- foldVec po vec (fromIntegral n_plp) 0 (U.replicate 6 0)
                    return $ Just $ Var0 rs po nuc
 
     foldVec po !p !n !i !acc
         | n == i = sample_from acc
         | otherwise = do c <- peekElemOff p i
-                         maybe_count pick acc c >>= foldVec po p n (succ i)
+                         maybe_count min_qual pick acc c
+                            >>= foldVec po p n (succ i)
 
 
-maybe_count :: Pick -> U.Vector Int -> CUInt -> IO (U.Vector Int)
-maybe_count pick counts c = do
-    let -- b_qual =                       c `shiftR`  0 .&. 0x7F
+maybe_count :: Int -> Pick -> U.Vector Int -> CUInt -> IO (U.Vector Int)
+maybe_count min_qual pick counts c = do
+    let b_qual =        fromIntegral $ c `shiftR`  0 .&. 0x7F
         -- b_posn =        fromIntegral $ c `shiftR` 12 .&. 0x3FF
         -- b_rlen =        fromIntegral $ c `shiftR` 22 .&. 0x3FF
         b_revd =                       c .&. 0x80 /= 0
@@ -203,11 +213,15 @@ maybe_count pick counts c = do
                                 | b == 2    -> 1
                                 | b == 4    -> 2
                                 | b == 8    -> 3
-                                | otherwise -> 4
+                                | otherwise -> 5
+            -- 0,1,2,3 are A,C,G,T.  4 is an N we potentially want to
+            -- call (lunacy...).  5 is something we want to ignore.
 
     dam <- (==) 0 . (`mod` 50) <$> getStdRandom next
 
     let nc = case pick of
+            _ | b_qual < min_qual -> 5
+
             -- Ostrich selection method:  pick blindly
             Ostrich -> b_call
 
@@ -220,49 +234,64 @@ maybe_count pick counts c = do
 
             -- "Deal" with deamination by ignoring possibly broken bases:  T
             -- on forward, A on backward strand.
-            Ignore | b_call == 0 &&     b_revd -> 4         -- A, reverse
-                   | b_call == 3 && not b_revd -> 4         -- T, forward
-                   | otherwise                 -> b_call
+            Ignore_T | b_call == 0 &&     b_revd -> 5         -- A, reverse
+                     | b_call == 3 && not b_revd -> 5         -- T, forward
+                     | otherwise                 -> b_call
+
+            -- Same as Ignore_T, in case someone wants a control experiment...
+            Ignore_A | b_call == 3 &&     b_revd -> 5         -- A, reverse
+                     | b_call == 0 && not b_revd -> 5         -- T, forward
+                     | otherwise                 -> b_call
 
             -- Introduce artificial deamination, then "deal" with it by
             -- ignoring damaged bases.
-            ArtificialIgnore | b_call == 0 -> if     b_revd        then 4 else 0   -- A
-                             | b_call == 1 -> if not b_revd && dam then 4 else 1   -- C
-                             | b_call == 2 -> if     b_revd && dam then 4 else 2   -- G
-                             | b_call == 3 -> if not b_revd        then 4 else 3   -- T
-                             | otherwise   ->                           4
+            ArtificialIgnore | b_call == 0 -> if     b_revd        then 5 else 0   -- A
+                             | b_call == 1 -> if not b_revd && dam then 5 else 1   -- C
+                             | b_call == 2 -> if     b_revd && dam then 5 else 2   -- G
+                             | b_call == 3 -> if not b_revd        then 5 else 3   -- T
+                             | otherwise   ->                           5
 
             -- Call only G and A on the forward strand, C and T on the
             -- reverse strand.  This doesn't need to be combined with
             -- simulation code: Whenever a C could turn into a T, we ignore
             -- it either way.
-            Stranded | b_call == 0 -> if b_revd then 4 else 0             -- A
-                     | b_call == 1 -> if b_revd then 1 else 4             -- C
-                     | b_call == 2 -> if b_revd then 4 else 2             -- G
-                     | b_call == 3 -> if b_revd then 3 else 4             -- T
-                     | otherwise   -> 4
+            Stranded | b_call == 0 -> if b_revd then 5 else 0             -- A
+                     | b_call == 1 -> if b_revd then 1 else 5             -- C
+                     | b_call == 2 -> if b_revd then 5 else 2             -- G
+                     | b_call == 3 -> if b_revd then 3 else 5             -- T
+                     | otherwise   -> 5
 
             -- Simulated UDG treatment: 2% of Cs on forward strand are
             -- lost, and so are 2% of Gs on reverse strand.
-            UDG | b_call == 1 && not b_revd && dam -> 4      -- C, !rev
-                | b_call == 2 &&     b_revd && dam -> 4      -- G, rev
+            UDG | b_call == 1 && not b_revd && dam -> 5      -- C, !rev
+                | b_call == 2 &&     b_revd && dam -> 5      -- G, rev
                 | otherwise                        -> b_call
+
+            -- If we pick a T, we turn it into an N.
+            Kay | b_call == 0 &&     b_revd -> 4         -- A, reverse
+                | b_call == 3 && not b_revd -> 4         -- T, forward
+                | otherwise                 -> b_call
+
 
     return $ counts U.// [(nc, succ $ counts U.! nc)]
 
 -- | Takes a random sample from prepared counts.
 sample_from :: U.Vector Int -> IO NucCode
-sample_from vec | U.length vec == 5 = do
-    let s = U.unsafeIndex vec 0 + U.unsafeIndex vec 1 + U.unsafeIndex vec 2 + U.unsafeIndex vec 3
+sample_from vec | U.length vec == 6 = do
+    let s = U.unsafeIndex vec 0 + U.unsafeIndex vec 1 + U.unsafeIndex vec 2
+                + U.unsafeIndex vec 3 + U.unsafeIndex vec 4
     if s == 0
         then return (NucCode 0)
         else do
             i <- (`mod` s) <$> getStdRandom next
             return . NucCode $ case () of
-                _ | i < U.unsafeIndex vec 0                                             -> 11
-                  | i < U.unsafeIndex vec 0 + U.unsafeIndex vec 1                       -> 12
-                  | i < U.unsafeIndex vec 0 + U.unsafeIndex vec 1 + U.unsafeIndex vec 2 -> 13
-                  | otherwise                                                           -> 14
+                _ | i < U.unsafeIndex vec 0                        -> 11
+                  | i < U.unsafeIndex vec 0 + U.unsafeIndex vec 1  -> 12
+                  | i < U.unsafeIndex vec 0 + U.unsafeIndex vec 1
+                      + U.unsafeIndex vec 2                        -> 13
+                  | i < U.unsafeIndex vec 0 + U.unsafeIndex vec 1
+                      + U.unsafeIndex vec 2 + U.unsafeIndex vec 3  -> 14
+                  | otherwise                                      ->  0
 
 
 data PlpAux
