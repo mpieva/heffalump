@@ -20,7 +20,7 @@ executable heffalump
                        Util,
                        VcfScan
 
-  build-depends:       base >=4.7 && <4.9,
+  build-depends:       base >=4.7 && <4.10,
                        base-prelude ==1.*,
                        bytestring,
                        directory,

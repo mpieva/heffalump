@@ -23,18 +23,22 @@ import qualified Data.Vector.Unboxed as U
 import Stretch
 import Util
 
-data Pick = Ostrich | Artificial | Ignore_T | Ignore_A | ArtificialIgnore | Stranded | UDG | Kay
+data Pick = Ostrich | Artificial | Ignore_T | Ignore_A
+          | ArtificialIgnore | Stranded | UDG | Kay
+          | ArtificialKay
   deriving Show
 
 data ConfBam = ConfBam {
     conf_bam_output :: FilePath,
     conf_bam_reference :: FilePath,
     conf_pick :: Pick,
-    conf_min_qual :: Int }
+    conf_min_qual :: Int,
+    conf_snip :: Int,
+    conf_snap :: Int }
   deriving Show
 
 conf_bam0 :: ConfBam
-conf_bam0 = ConfBam (error "no output file specified") (error "no reference file specified") Ostrich 0
+conf_bam0 = ConfBam (error "no output file specified") (error "no reference file specified") Ostrich 0 0 0
 
 opts_bam :: [ OptDescr ( ConfBam -> IO ConfBam ) ]
 opts_bam =
@@ -47,7 +51,10 @@ opts_bam =
     , Option [ ] ["deaminate-ignore-t"] (NoArg set_deamign) "Artificially deaminate, then ignore T"
     , Option [ ] ["stranded"]          (NoArg set_stranded) "Call only G&A on forward strand"
     , Option [ ] ["udg"]                    (NoArg set_udg) "Simulate UDG treatment"
-    , Option [ ] ["kay"]                    (NoArg set_kay) "Ts become Ns" ]
+    , Option [ ] ["kay"]                    (NoArg set_kay) "Ts become Ns"
+    , Option [ ] ["deaminate-kay"]      (NoArg set_deamkay) "Artificialle deaminate, then Ts to Ns"
+    , Option [ ] ["snip"]           (ReqArg set_snip "NUM") "Ignore the first NUM bases in each aread"
+    , Option [ ] ["snap"]           (ReqArg set_snap "NUM") "Ignore the last NUM bases in each aread" ]
   where
     set_output  a c = return $ c { conf_bam_output    = a }
     set_ref     a c = return $ c { conf_bam_reference = a }
@@ -58,19 +65,22 @@ opts_bam =
     set_stranded  c = return $ c { conf_pick = Stranded }
     set_udg       c = return $ c { conf_pick = UDG }
     set_kay       c = return $ c { conf_pick = Kay }
+    set_deamkay   c = return $ c { conf_pick = ArtificialKay }
 
     set_minqual a c = readIO a >>= \b -> return $ c { conf_min_qual = b }
+    set_snip    a c = readIO a >>= \b -> return $ c { conf_snip     = b }
+    set_snap    a c = readIO a >>= \b -> return $ c { conf_snap     = b }
 
 
 main_bam :: [String] -> IO ()
 main_bam args = do
-    ( bams, ConfBam{..} ) <- parseOpts True conf_bam0 (mk_opts "bamin" "[bam-file...]" opts_bam) args
+    ( bams, cfg@ConfBam{..} ) <- parseOpts True conf_bam0 (mk_opts "bamin" "[bam-file...]" opts_bam) args
     ref <- readReference conf_bam_reference
 
     withFile (conf_bam_output ++ "~") WriteMode        $ \hdl ->
         hPutBuilder hdl . encode_hap . importPile ref
                 . progress conf_bam_output . concat
-                =<< mapM (htsPileup conf_min_qual conf_pick) bams
+                =<< mapM (htsPileup cfg) bams
     renameFile (conf_bam_output ++ "~") conf_bam_output
 
 progress :: String -> [Var0] -> [Var0]
@@ -172,8 +182,8 @@ word8 Buf{..} x = do
 
 
 {-# INLINE htsPileup #-}
-htsPileup :: Int -> Pick -> FilePath -> IO [ Var0 ]
-htsPileup min_qual pick fp = do
+htsPileup :: ConfBam -> FilePath -> IO [ Var0 ]
+htsPileup cfg fp = do
     plp <- throwErrnoIfNull "c_pileup_init" $ withCString fp $ c_pileup_init
     repeatedly (step plp)
   where
@@ -198,15 +208,15 @@ htsPileup min_qual pick fp = do
     foldVec po !p !n !i !acc
         | n == i = sample_from acc
         | otherwise = do c <- peekElemOff p i
-                         maybe_count min_qual pick acc c
+                         maybe_count cfg acc c
                             >>= foldVec po p n (succ i)
 
 
-maybe_count :: Int -> Pick -> U.Vector Int -> CUInt -> IO (U.Vector Int)
-maybe_count min_qual pick counts c = do
+maybe_count :: ConfBam -> U.Vector Int -> CUInt -> IO (U.Vector Int)
+maybe_count ConfBam{..} counts c = do
     let b_qual =        fromIntegral $ c `shiftR`  0 .&. 0x7F
-        -- b_posn =        fromIntegral $ c `shiftR` 12 .&. 0x3FF
-        -- b_rlen =        fromIntegral $ c `shiftR` 22 .&. 0x3FF
+        b_posn =        fromIntegral $ c `shiftR` 12 .&. 0x3FF
+        b_rlen =        fromIntegral $ c `shiftR` 22 .&. 0x3FF
         b_revd =                       c .&. 0x80 /= 0
         b_call =                 case  c `shiftR`  8 .&. 0xF  of
                               b | b == 1    -> 0
@@ -219,8 +229,10 @@ maybe_count min_qual pick counts c = do
 
     dam <- (==) 0 . (`mod` 50) <$> getStdRandom next
 
-    let nc = case pick of
-            _ | b_qual < min_qual -> 5
+    let nc = case conf_pick of
+            _ | b_qual < conf_min_qual      -> 5
+              | b_posn < conf_snip          -> 5
+              | b_posn > b_rlen - conf_snap -> 5
 
             -- Ostrich selection method:  pick blindly
             Ostrich -> b_call
@@ -271,6 +283,12 @@ maybe_count min_qual pick counts c = do
             Kay | b_call == 0 &&     b_revd -> 4         -- A, reverse
                 | b_call == 3 && not b_revd -> 4         -- T, forward
                 | otherwise                 -> b_call
+
+            ArtificialKay | b_call == 0 -> if     b_revd        then 4 else 0   -- A
+                          | b_call == 1 -> if not b_revd && dam then 4 else 1   -- C
+                          | b_call == 2 -> if     b_revd && dam then 4 else 2   -- G
+                          | b_call == 3 -> if not b_revd        then 4 else 3   -- T
+                          | otherwise   ->                           5
 
 
     return $ counts U.// [(nc, succ $ counts U.! nc)]
