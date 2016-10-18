@@ -57,6 +57,7 @@ data ConfGen = ConfGen {
     conf_blocksize  :: Int,
     conf_width      :: Int64,
     conf_all        :: Bool,
+    conf_nosplit    :: Bool,
     conf_nrefpanel  :: Int,
     conf_output     :: FilePath,
     conf_reference  :: FilePath,
@@ -64,7 +65,7 @@ data ConfGen = ConfGen {
   deriving Show
 
 defaultConfGen :: ConfGen
-defaultConfGen = ConfGen 1 5000000 50 True
+defaultConfGen = ConfGen 1 5000000 50 True False
                          (error "size of reference panel not known")
                          (error "no output file specified")
                          (error "no reference file specified")
@@ -165,15 +166,17 @@ main_treemix args = do
 
 opts_eigen :: [ OptDescr (ConfGen -> IO ConfGen) ]
 opts_eigen =
-    [ Option "o" ["output"] (ReqArg set_output "FILE") "Write output to FILE.geno and FILE.snp"
-    , Option "r" ["reference"] (ReqArg set_ref "FILE") "Read reference from FILE (.fa)"
-    , Option "n" ["numoutgroups"] (ReqArg set_nout "NUM") "The first NUM individuals are outgroups (1)"
-    , Option "t" ["only-transversions"] (NoArg set_no_all) "Output only transversion sites" ]
+    [ Option "o" ["output"]     (ReqArg set_output "FILE") "Write output to FILE.geno and FILE.snp"
+    , Option "r" ["reference"]     (ReqArg set_ref "FILE") "Read reference from FILE (.fa)"
+    , Option "n" ["numoutgroups"]  (ReqArg set_nout "NUM") "The first NUM individuals are outgroups (1)"
+    , Option "t" ["only-transversions"] (NoArg set_no_all) "Output only transversion sites"
+    , Option "b" ["only-biallelic"]   (NoArg set_no_split) "Discard, don't split, polyallelic sites" ]
   where
     set_output a c = return $ c { conf_output    = a }
     set_ref    a c = return $ c { conf_reference = a }
     set_nout   a c = readIO a >>= \n -> return $ c { conf_noutgroups = n }
     set_no_all   c = return $ c { conf_all = False }
+    set_no_split c = return $ c { conf_nosplit = False }
 
 -- merge multiple files with the reference, write Eigenstrat format (geno & snp files)
 main_eigenstrat :: [String] -> IO ()
@@ -184,7 +187,7 @@ main_eigenstrat args = do
 
     withFile (conf_output ++ ".snp") WriteMode $ \hsnp ->
         withFile (conf_output ++ ".geno") WriteMode $ \hgeno ->
-            forM_ (merge_hefs conf_noutgroups ref inps) $ \Variant{..} ->
+            forM_ (merge_hefs conf_nosplit conf_noutgroups ref inps) $ \Variant{..} ->
                 -- samples (not outgroups) must show ref and alt allele at least once
                 let ve = U.foldl' (.|.) 0 $ U.drop conf_noutgroups v_calls
                     is_ti = conf_all || is_transversion (toUpper v_ref) (toUpper v_alt) in
@@ -192,7 +195,7 @@ main_eigenstrat args = do
                     hPutStrLn hgeno $ map (B.index "9222011101110111" . fromIntegral) $ U.toList v_calls
                     hPutStrLn hsnp $ intercalate "\t"
                         -- 1st column is SNP name
-                        [ mkname v_chr v_pos
+                        [ mkname v_chr v_pos v_alt
                         -- "2nd column is chromosome.  X chromosome is encoded as 23.
                         -- Also, Y is encoded as 24, mtDNA is encoded as 90, ..."
                         , show $ if v_chr == 24 then 90 else v_chr + 1
@@ -442,7 +445,7 @@ treemix noutgr outfile indfile reff = do
 
     withFile outfile WriteMode $ \hout -> do
         B.hPut hout $ B.unwords pops `B.snoc` '\n'
-        forM_ (merge_hefs noutgr ref inps) $ \Variant{..} -> do
+        forM_ (merge_hefs False noutgr ref inps) $ \Variant{..} -> do
             -- XXX  Some variants are probably useless.  Should we
             -- attempt to remove private variants?  Variants where
             -- everyone is different from the reference?

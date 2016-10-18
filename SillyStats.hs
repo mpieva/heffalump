@@ -211,7 +211,7 @@ main_kayvergence args = do
 
     let labels = kaylabels conf_noutgroups hefs
         stats  = gen_stats conf_blocksize (kayvergence conf_noutgroups)
-                 $ conf_filter $ merge_hefs 0 ref inps
+                 $ conf_filter $ merge_hefs False 0 ref inps
 
     forM_ (zip labels stats) $ \((rn,sn,cn), SillyStats k n r v _) ->
         putStrLn $ "Kiv( " ++ rn ++ "; " ++ sn ++ "; " ++ cn ++ " ) = "
@@ -287,7 +287,7 @@ main_patterson args = do
 
     let labels = pattersonlbls conf_noutgroups conf_nrefpanel hefs
         stats  = gen_stats conf_blocksize (pattersons conf_noutgroups conf_nrefpanel)
-                 $ conf_filter $ merge_hefs conf_noutgroups ref inps
+                 $ conf_filter $ merge_hefs False conf_noutgroups ref inps
 
     forM_ (zip labels stats) $ \((sn,cn,r1,r2), SillyStats k n r v p) ->
         putStrLn $ conf_msg
@@ -393,7 +393,7 @@ main_yaddayadda args = do
 
     let labels = yaddalbls conf_noutgroups conf_nafricans conf_nrefpanel hefs
         stats  = gen_stats conf_blocksize (yaddayadda conf_noutgroups conf_nafricans conf_nrefpanel)
-                 $ conf_filter $ merge_hefs (conf_noutgroups+conf_nafricans) ref inps
+                 $ conf_filter $ merge_hefs False (conf_noutgroups+conf_nafricans) ref inps
 
     forM_ (zip labels stats) $ \((cn,an,n1,n2,sn), SillyStats k n r v p) ->
         putStrLn $ "Y( " ++ cn ++ "; " ++ n1 ++ ", " ++ n2 ++ "; " ++ sn ++ ", " ++ an ++ ") = "

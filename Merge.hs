@@ -37,9 +37,9 @@ data Variant = Variant { v_chr :: !Int                  -- index into 'chroms'
                        , v_calls :: !(U.Vector Word8) } -- # of reference alles, 9 is no call
   deriving Show
 
-merge_hefs :: Int -> Reference -> [Stretch] -> [Variant]
-merge_hefs          !_ (Reference [          ]) = const [ ]
-merge_hefs !noutgroups (Reference (ref0:refs0)) = go refs0 0 0 ref0 . V.fromList
+merge_hefs :: Bool -> Int -> Reference -> [Stretch] -> [Variant]
+merge_hefs       !_          !_ (Reference [          ]) = const [ ]
+merge_hefs !nosplit !noutgroups (Reference (ref0:refs0)) = go refs0 0 0 ref0 . V.fromList
     -- Merging stretches.  We define a 'Variant' as anything that is
     -- different from the reference.  Therefore, 'Eqs' ('Eqs1') and 'Ns'
     -- never create a 'Variant' and we can skip forwards.  A 'Done' is
@@ -120,24 +120,27 @@ merge_hefs !noutgroups (Reference (ref0:refs0)) = go refs0 0 0 ref0 . V.fromList
                      |    x <= 4 = NucCode (x+10)
                      | otherwise = NucCode x
 
-    -- Collect calls, then collect alleles.  We got a valid variant if we
-    -- get exactly two alleles (6 ways to do so).
+    -- Find all the variants, anchored on the reference allele, and
+    -- split them.  Misfitting alleles are not counted.
     tryVar :: Int -> Int -> NucCode -> (NucCode -> V.Vector Stretch -> V.Vector NucCode) -> V.Vector Stretch -> [Variant] -> [Variant]
-    tryVar ix pos r which ss k
-        | good      = Variant ix pos (tr r) (tr' $ xor vacc $ alleles r) (V.convert $ V.map (ct r) vs) : k
-        | otherwise = {- nothing, invariant, or polyallelic -}                                           k
+    tryVar ix pos r which ss
+        | r == NucCode 0      = id
+        | nosplit && not good = id
+        | otherwise           = (++) [ Variant ix pos (tr r) (tr' v) (V.convert $ V.map (ct (alleles r) v) vs)
+                                     | v <- map Alleles [1,2,4,8], vacc .&. v /= Alleles 0 ]
       where
         vs   = which r ss
-        vacc = V.foldl' (\a c -> a .|. alleles c) (alleles r) vs
-        good = r /= NucCode 0 && ( vacc == Alleles 3 || vacc == Alleles  5 || vacc == Alleles  9
-                                || vacc == Alleles 6 || vacc == Alleles 10 || vacc == Alleles 12 )
+        -- collect variant alleles, ref doesn't count
+        vacc = V.foldl' (\a c -> a .|. alleles c) (Alleles 0) vs .&. complement (alleles r)
+        -- good == only one variant
+        good = vacc == Alleles 1 || vacc == Alleles 2 || vacc == Alleles 4 || vacc == Alleles 8
 
 -- Variant codes:  #ref + 4 * #alt
-ct :: NucCode -> NucCode -> Word8
-ct r v | v == NucCode 0                       = 0
-       | alleles v == alleles r               = if isHap v then 1 else 2
-       | alleles v .&. alleles r == Alleles 0 = if isHap v then 4 else 8
-       | otherwise                            = 5
+ct :: Alleles -> Alleles -> NucCode -> Word8
+ct r v n | alleles n == r                       = if isHap n then 1 else 2
+         | alleles n == v                       = if isHap n then 4 else 8
+         | alleles n == r .|. v                 = 5
+         | otherwise                            = 0
 
 isHap :: NucCode -> Bool
 isHap (NucCode n) = n >= 11

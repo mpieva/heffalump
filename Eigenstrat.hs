@@ -39,15 +39,15 @@ nick_hashit = LB.foldl (\h c -> 23 * h + fromIntegral c) 0
 nick_hasharr :: F.Foldable v => v L.ByteString -> Int32
 nick_hasharr = F.foldl (\h s -> 17 * h `xor` nick_hashit s) 0
 
-mkname :: Int -> Int -> String
-mkname a b = let (n1,x1) = hash (a `shiftL` 32 .|. b) `divMod` 18
-                 (n2,x2) = n1 `divMod` 17
-                 (n3,y1) = n2 `divMod` 23
-                 (n4,y2) = n3 `divMod` 22
-                 y3      = n4 `mod` 22
-             in uc1 (snaffi_syl !! x1) ++ snaffi_syl !! (if x2 >= x1 then x2+1 else x2) ++ "_" ++
-                uc1 (kuruk_syl  !! y1) ++ kuruk_syl  !! (if y2 >= y1 then y2+1 else y2) ++
-                                          kuruk_syl  !! (if y3 >= y2 then y3+1 else y3)
+mkname :: Int -> Int -> Char -> String
+mkname x y z = let (n1,x1) = hash (x `shiftL` 38 .|. y `shiftL` 8 .|. ord z) `divMod` 18
+                   (n2,x2) = n1 `divMod` 17
+                   (n3,y1) = n2 `divMod` 23
+                   (n4,y2) = n3 `divMod` 22
+                   y3      = n4 `mod` 22
+               in uc1 (snaffi_syl !! x1) ++ snaffi_syl !! (if x2 >= x1 then x2+1 else x2) ++ "_" ++
+                  uc1 (kuruk_syl  !! y1) ++ kuruk_syl  !! (if y2 >= y1 then y2+1 else y2) ++
+                                            kuruk_syl  !! (if y3 >= y2 then y3+1 else y3)
   where
     uc1 [    ] = []
     uc1 (c:cs) = toUpper c : cs
