@@ -7,6 +7,7 @@ module SillyStats (
 import BasePrelude
 import Numeric.SpecFunctions            ( incompleteBeta )
 import System.Console.GetOpt
+import System.FilePath                  ( takeBaseName )
 
 import qualified Data.ByteString.Lazy.Char8      as L
 import qualified Data.Vector                     as V
@@ -209,16 +210,21 @@ main_kayvergence args = do
     ref <- readReference conf_reference
     inps <- mapM (fmap (decode . decomp) . L.readFile) hefs
 
-    let labels = kaylabels conf_noutgroups hefs
+    let labels = kaylabels conf_noutgroups (map takeBaseName hefs)
         stats  = gen_stats conf_blocksize (kayvergence conf_noutgroups)
                  $ conf_filter $ merge_hefs False 0 ref inps
 
-    forM_ (zip labels stats) $ \((rn,sn,cn), SillyStats k n r v _) ->
-        putStrLn $ "Kiv( " ++ rn ++ "; " ++ sn ++ "; " ++ cn ++ " ) = "
-                ++ showFFloat (Just 0) k "/" ++ showFFloat (Just 0) n " = "
-                ++ showFFloat (Just 2) (100 * r) "% ± "
-                ++ showFFloat (Just 2) (100 * sqrt v) "%"
+        fmt1 (rn,sn,cn) (SillyStats k n r v _) =
+                [ Left $ "Kiv( " ++ rn ++ "; "
+                , Left $ sn ++ "; "
+                , Left $ cn
+                , Left $ " ) = "
+                , Right $ showFFloat (Just 0) k "/"
+                , Right $ showFFloat (Just 0) n " = "
+                , Right $ showFFloat (Just 2) (100 * r) "% ± "
+                , Right $ showFFloat (Just 2) (100 * sqrt v) "%" ]
 
+    print_table $ zipWith fmt1 labels stats
 
 -- --------------- D-Stats
 
@@ -285,17 +291,25 @@ main_patterson args = do
     ref <- readReference conf_reference
     inps <- mapM (fmap (decode . decomp) . L.readFile) hefs
 
-    let labels = pattersonlbls conf_noutgroups conf_nrefpanel hefs
+    let labels = pattersonlbls conf_noutgroups conf_nrefpanel (map takeBaseName hefs)
         stats  = gen_stats conf_blocksize (pattersons conf_noutgroups conf_nrefpanel)
                  $ conf_filter $ merge_hefs False conf_noutgroups ref inps
 
-    forM_ (zip labels stats) $ \((sn,cn,r1,r2), SillyStats k n r v p) ->
-        putStrLn $ conf_msg
-                ++ "D( " ++ r1 ++ ", " ++ r2 ++ "; " ++ sn ++ ", " ++ cn ++ ") = "
-                ++ showFFloat (Just 0) k "/" ++ showFFloat (Just 0) n " = "
-                ++ showFFloat (Just 2) (100 * r) "% ± "
-                ++ showFFloat (Just 2) (100 * sqrt v) "%, p = "
-                ++ showPValue p []
+        fmt1 (sn,cn,r1,r2) (SillyStats k n r v p) =
+                [ Left conf_msg
+                , Left "D( "
+                , Left $ r1 ++ ", "
+                , Left $ r2 ++ "; "
+                , Left $ sn ++ ", "
+                , Left $ cn
+                , Left " ) = "
+                , Right $ showFFloat (Just 0) k "/"
+                , Right $ showFFloat (Just 0) n " = "
+                , Right $ showFFloat (Just 2) (100 * r) "% ± "
+                , Right $ showFFloat (Just 2) (100 * sqrt v) "%, p = "
+                , Right $ showPValue p [] ]
+
+    print_table $ zipWith fmt1 labels stats
 
 -- --------------- Yadda-yadda
 
@@ -391,14 +405,30 @@ main_yaddayadda args = do
     ref <- readReference conf_reference
     inps <- mapM (fmap (decode . decomp) . L.readFile) hefs
 
-    let labels = yaddalbls conf_noutgroups conf_nafricans conf_nrefpanel hefs
+    let labels = yaddalbls conf_noutgroups conf_nafricans conf_nrefpanel (map takeBaseName hefs)
         stats  = gen_stats conf_blocksize (yaddayadda conf_noutgroups conf_nafricans conf_nrefpanel)
                  $ conf_filter $ merge_hefs False (conf_noutgroups+conf_nafricans) ref inps
 
-    forM_ (zip labels stats) $ \((cn,an,n1,n2,sn), SillyStats k n r v p) ->
-        putStrLn $ "Y( " ++ cn ++ "; " ++ n1 ++ ", " ++ n2 ++ "; " ++ sn ++ ", " ++ an ++ ") = "
-                ++ showFFloat (Just 0) k "/" ++ showFFloat (Just 0) n " = "
-                ++ showFFloat (Just 2) (100 * r) "% ± "
-                ++ showFFloat (Just 2) (100 * sqrt v) "%, p = "
-                ++ showPValue p ""
+        fmt1 (cn,an,n1,n2,sn) (SillyStats k n r v p) =
+                [ Left "Y( "
+                , Left $ cn ++ "; "
+                , Left $ n1 ++ ", "
+                , Left $ n2 ++ "; "
+                , Left $ sn ++ ", "
+                , Left $ an
+                , Left " ) = "
+                , Right $ showFFloat (Just 0) k "/"
+                , Right $ showFFloat (Just 0) n " = "
+                , Right $ showFFloat (Just 2) (100 * r) "% ± "
+                , Right $ showFFloat (Just 2) (100 * sqrt v) "%, p = "
+                , Right $ showPValue p [] ]
+
+    print_table $ zipWith fmt1 labels stats
+
+print_table :: [[Either String String]] -> IO ()
+print_table tab = putStrLn . unlines $ map (concat . zipWith fmt1 lns) tab
+  where
+    lns = map (maximum . map (either length length)) $ transpose $ tab
+    fmt1 l (Left  s) = s ++ replicate (l - length s) ' '
+    fmt1 l (Right s) =      replicate (l - length s) ' ' ++ s
 
