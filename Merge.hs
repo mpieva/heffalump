@@ -130,10 +130,10 @@ merge_hefs !nosplit !noutgroups (Reference (ref0:refs0)) = go refs0 0 0 ref0 . V
                                      | v <- map Alleles [1,2,4,8], vacc .&. v /= Alleles 0 ]
       where
         vs   = which r ss
-        -- collect variant alleles, ref doesn't count
-        vacc = V.foldl' (\a c -> a .|. alleles c) (Alleles 0) vs .&. complement (alleles r)
-        -- good == only one variant
-        good = vacc == Alleles 1 || vacc == Alleles 2 || vacc == Alleles 4 || vacc == Alleles 8
+        -- collect variant alleles, ref and outgroups don't count
+        vacc = V.foldl' (\a c -> a .|. alleles c) (Alleles 0) (V.drop noutgroups vs) .&. complement (alleles r)
+        -- good == exactly one variant
+        good = vacc `elem` map Alleles [1,2,4,8]
 
 -- Variant codes:  #ref + 4 * #alt
 ct :: Alleles -> Alleles -> NucCode -> Word8

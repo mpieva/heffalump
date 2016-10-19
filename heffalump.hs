@@ -176,7 +176,7 @@ opts_eigen =
     set_ref    a c = return $ c { conf_reference = a }
     set_nout   a c = readIO a >>= \n -> return $ c { conf_noutgroups = n }
     set_no_all   c = return $ c { conf_all = False }
-    set_no_split c = return $ c { conf_nosplit = False }
+    set_no_split c = return $ c { conf_nosplit = True }
 
 -- merge multiple files with the reference, write Eigenstrat format (geno & snp files)
 main_eigenstrat :: [String] -> IO ()
