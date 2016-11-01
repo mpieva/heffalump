@@ -9,6 +9,7 @@ struct plp_aux_t {
     htsFile *fp ;
     bam_hdr_t *h ;
     bam_plp_t iter ;
+    int min_mapq ;
 } ;
 
 // Fetches stuff, put it into *b, returns 1 if something was fetched.
@@ -20,11 +21,14 @@ int plp_func( void *data, bam1_t *b )
     int ret ;
     do {
         ret = sam_read1(ma->fp, ma->h, b);
-    } while( ret >= 0 && (b->core.tid < 0 || (b->core.flag&BAM_FUNMAP)) ) ;
+    } while( ret >= 0 && (
+                b->core.tid < 0 || 
+                (b->core.flag&BAM_FUNMAP) ||
+                b->core.qual < ma->min_mapq )) ;
     return ret;
 }
 
-struct plp_aux_t *pileup_init( const char *fn )
+struct plp_aux_t *pileup_init( int min_mapq_, const char *fn )
 {
     struct plp_aux_t *data = malloc( sizeof( struct plp_aux_t ) ) ;
     if( data ) {
@@ -33,6 +37,7 @@ struct plp_aux_t *pileup_init( const char *fn )
             // XXX  This header is never freed
             data->h = sam_hdr_read( data->fp ) ;
             data->iter = bam_plp_init( plp_func, data ) ;
+            data->min_mapq = min_mapq_ ;
             return data ;
         }
         free( data ) ;

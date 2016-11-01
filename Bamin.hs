@@ -33,18 +33,20 @@ data ConfBam = ConfBam {
     conf_bam_reference :: FilePath,
     conf_pick :: Pick,
     conf_min_qual :: Int,
+    conf_min_mapq :: Int,
     conf_snip :: Int,
     conf_snap :: Int }
   deriving Show
 
 conf_bam0 :: ConfBam
-conf_bam0 = ConfBam (error "no output file specified") (error "no reference file specified") Ostrich 0 0 0
+conf_bam0 = ConfBam (error "no output file specified") (error "no reference file specified") Ostrich 0 0 0 0
 
 opts_bam :: [ OptDescr ( ConfBam -> IO ConfBam ) ]
 opts_bam =
     [ Option "o" ["output"]      (ReqArg set_output "FILE") "Write output to FILE (.hef)"
     , Option "r" ["reference"]      (ReqArg set_ref "FILE") "Read reference from FILE (.fa)"
     , Option "m" ["min-qual"]   (ReqArg set_minqual "QUAL") "Discard bases below quality QUAL"
+    , Option "q" ["min-mapq"]   (ReqArg set_minmapq "QUAL") "Discard reads below mapq QUAL"
     , Option [ ] ["deaminate"]        (NoArg set_deaminate) "Artificially deaminate"
     , Option [ ] ["ignore-t"]         (NoArg  set_ignore_t) "Ignore T on forward strand"
     , Option [ ] ["ignore-a"]         (NoArg  set_ignore_a) "Ignore A on forward strand"
@@ -68,6 +70,7 @@ opts_bam =
     set_deamkay   c = return $ c { conf_pick = ArtificialKay }
 
     set_minqual a c = readIO a >>= \b -> return $ c { conf_min_qual = b }
+    set_minmapq a c = readIO a >>= \b -> return $ c { conf_min_mapq = b }
     set_snip    a c = readIO a >>= \b -> return $ c { conf_snip     = b }
     set_snap    a c = readIO a >>= \b -> return $ c { conf_snap     = b }
 
@@ -184,7 +187,8 @@ word8 Buf{..} x = do
 {-# INLINE htsPileup #-}
 htsPileup :: ConfBam -> FilePath -> IO [ Var0 ]
 htsPileup cfg fp = do
-    plp <- throwErrnoIfNull "c_pileup_init" $ withCString fp $ c_pileup_init
+    plp <- throwErrnoIfNull "c_pileup_init" $ withCString fp $
+                c_pileup_init (fromIntegral $ conf_min_mapq cfg)
     repeatedly (step plp)
   where
     vsize = 2048
@@ -316,7 +320,7 @@ data PlpAux
 
 -- struct plp_aux_t *pileup_init( const char *fn )
 foreign import ccall unsafe "mini-pileup.h pileup_init"
-    c_pileup_init :: CString -> IO (Ptr PlpAux)
+    c_pileup_init :: CInt -> CString -> IO (Ptr PlpAux)
 
 -- An array of 32 bit words is supplied.  For each base, we store one
 -- integer:  bits 0..6:  quality
