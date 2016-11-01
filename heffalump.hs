@@ -1,14 +1,11 @@
 import BasePrelude
-import Data.ByteString.Builder          ( hPutBuilder, Builder, intDec, char7 )
+import Data.ByteString.Builder          ( hPutBuilder, Builder )
 import System.Console.GetOpt
-import System.Directory
-import System.FilePath
 import System.IO
 
 import qualified Data.ByteString.Char8           as B
 import qualified Data.ByteString.Lazy            as LB
 import qualified Data.ByteString.Lazy.Char8      as L
-import qualified Data.HashMap.Strict             as H
 import qualified Data.Vector.Unboxed             as U
 
 import Bamin
@@ -16,6 +13,7 @@ import Eigenstrat
 import Merge
 import SillyStats
 import Stretch
+import Treemix
 import Util
 import VcfScan
 
@@ -144,24 +142,6 @@ main_debhetfa _ = hPutStrLn stderr $ "Usage: debhetfa [ref.fa] [smp.hetfa]"
 main_dumppatch :: [String] -> IO ()
 main_dumppatch [inf] = debugStretch . decode . decomp =<< L.readFile inf
 main_dumppatch     _ = hPutStrLn stderr "Usage: dumppatch [foo.hef]"
-
-
-opts_treemix :: [ OptDescr (ConfGen -> IO ConfGen) ]
-opts_treemix =
-    [ Option "o" ["output"] (ReqArg set_output "FILE") "Write output to FILE (.tmx)"
-    , Option "r" ["reference"] (ReqArg set_ref "FILE") "Read reference from FILE (.fa)"
-    , Option "i" ["individuals"] (ReqArg set_indiv "FILE") "Read individuals from FILE (.ind)"
-    , Option "n" ["numoutgroups"] (ReqArg set_nout "NUM") "The first NUM individuals are outgroups (1)" ]
-  where
-    set_output a c = return $ c { conf_output    = a }
-    set_ref    a c = return $ c { conf_reference = a }
-    set_indiv  a c = return $ c { conf_sample    = a }
-    set_nout   a c = readIO a >>= \n -> return $ c { conf_noutgroups = n }
-
-main_treemix :: [String] -> IO ()
-main_treemix args = do
-    ( _, ConfGen{..} ) <- parseOpts False defaultConfGen (mk_opts "treemix" [] opts_treemix) args
-    treemix conf_noutgroups conf_output conf_sample conf_reference
 
 
 opts_eigen :: [ OptDescr (ConfGen -> IO ConfGen) ]
@@ -427,66 +407,4 @@ readVcf fp = do
         case mv of
             Nothing -> return []
             Just  v -> (:) v <$> self
-
--- read individual file, then read HEF files for each individual,
--- group them according to population, print allele counts for each
--- variable site
-treemix :: Int -> FilePath -> FilePath -> FilePath -> IO ()
-treemix noutgr outfile indfile reff = do
-    (indivs, popixs, pops) <- foldIndFile <$> B.readFile indfile
-    heffalumps <- scanDirectory "."
-    let hefs = fmap (\i -> case H.lookup i heffalumps of
-                        Nothing -> error $ "no .hef file found for " ++ show i
-                        Just hf -> hf) indivs
-        npops = length pops
-
-    ref <- readReference reff
-    inps <- mapM (fmap (decode . decomp) . L.readFile) hefs
-
-    withFile outfile WriteMode $ \hout -> do
-        B.hPut hout $ B.unwords pops `B.snoc` '\n'
-        forM_ (merge_hefs False noutgr ref inps) $ \Variant{..} -> do
-            -- XXX  Some variants are probably useless.  Should we
-            -- attempt to remove private variants?  Variants where
-            -- everyone is different from the reference?
-
-            let refcounts = U.accumulate (+) (U.replicate npops 0) $
-                            U.zip popixs $ U.map (fromIntegral . (3 .&.)) v_calls
-                altcounts = U.accumulate (+) (U.replicate npops 0) $
-                            U.zip popixs $ U.map (fromIntegral . (`shiftR` 2)) v_calls
-
-            let show1 (a,b) k = intDec a <> char7 ',' <> intDec b <> char7 ' ' <> k
-            hPutBuilder hout $ U.foldr show1 (char7 '\n') $ U.zip refcounts altcounts
-
-
--- | Recursively scans a directory for .hef files, makes a hashmap.
--- This assumes unique names, which have to match the indivividual
--- names.
-scanDirectory :: FilePath -> IO (H.HashMap B.ByteString FilePath)
-scanDirectory fp = do
-    nms <- filter (\n -> n /= "." && n /= "..") <$> getDirectoryContents fp
-    foldM (\t n -> do isdir <- doesDirectoryExist (fp </> n)
-                      t' <- if isdir then H.union t <$> scanDirectory (fp </> n) else return t
-                      return $ if takeExtension n == ".hef" then
-                            H.insert (B.pack $ dropExtension n) (fp </> n) t' else t') H.empty nms
-
-
-
--- Folds over an individual file, returns list of individuals, indices
--- into the population list, and the population list.
-foldIndFile :: B.ByteString -> ([B.ByteString], U.Vector Int, [B.ByteString])
-foldIndFile = go [] [] [] H.empty . filter (not . null) . map B.words
-            . filter (not . B.isPrefixOf "#") . B.lines
-  where
-    go indivs popixs pops _hpops []
-        = ( reverse indivs, U.reverse $ U.fromList popixs, reverse pops )
-
-    go indivs popixs pops  hpops ([ ind, _, pop ] : xs)
-        = case H.lookup pop hpops of
-            Nothing -> go (ind:indivs) (H.size hpops:popixs) (pop:pops)
-                          (H.insert pop (H.size hpops) hpops) xs
-            Just ix -> go (ind:indivs) (ix:popixs) pops hpops xs
-
-    go _ _ _ _ (ws:_) = error $ "Parse error in individual file at:\n" ++ show (B.unwords ws)
-
 
