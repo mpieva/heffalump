@@ -93,10 +93,14 @@ readIndFile = mapMaybe get1 . map B.words . filter (not . B.isPrefixOf "#") . B.
 -- individual whose name is a prefix of the basename of the filepath,
 -- the result is its associated population.
 lookupHef :: [(B.ByteString, B.ByteString)] -> FilePath -> B.ByteString
-lookupHef assocs fp = case filter (\(x,_) -> x `B.isPrefixOf` B.pack (takeBaseName fp)) assocs of
-    [ y ] -> snd y
+lookupHef assocs fp = case matches of
+    (_ ,y) : []                   -> y
+    (x1,y) : (x2,_) : _ | x1 > x2 -> y
     _:_:_ -> error $ "Multiple populations match " ++ takeBaseName fp
     [   ] -> error $ "No population matches " ++ takeBaseName fp
+  where
+    matches = reverse. sort . map (\(x,y) -> (B.length x, y)) .
+              filter (\(x,_) -> x `B.isPrefixOf` B.pack (takeBaseName fp)) $ assocs
 
 -- | Takes a list of stuff, returns the list without dups, its length,
 -- and a list of symbols.
