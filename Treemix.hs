@@ -18,26 +18,29 @@ import Util
 data ConfTmx = ConfTmx {
     conf_noutgroups :: Int,
     conf_indivs     :: Maybe FilePath,
+    conf_transv     :: Bool,
     conf_output     :: FilePath,
     conf_reference  :: FilePath }
   deriving Show
 
 defaultConfTmx :: ConfTmx
-defaultConfTmx = ConfTmx 1 Nothing
+defaultConfTmx = ConfTmx 1 Nothing False
                          (error "no output file specified")
                          (error "no reference file specified")
 
 opts_treemix :: [ OptDescr (ConfTmx -> IO ConfTmx) ]
 opts_treemix =
-    [ Option "o" ["output"] (ReqArg set_output "FILE") "Write output to FILE (.tmx)"
-    , Option "r" ["reference"] (ReqArg set_ref "FILE") "Read reference from FILE (.fa)"
-    , Option "i" ["individuals"] (ReqArg set_indiv "FILE") "Read individuals from FILE (.ind)"
-    , Option "n" ["numoutgroups"] (ReqArg set_nout "NUM") "The first NUM individuals are outgroups (1)" ]
+    [ Option "o" ["output"]        (ReqArg set_output "FILE") "Write output to FILE (.tmx)"
+    , Option "r" ["reference"]     (ReqArg set_ref    "FILE") "Read reference from FILE (.fa)"
+    , Option "i" ["individuals"]   (ReqArg set_indiv  "FILE") "Read individuals from FILE (.ind)"
+    , Option "n" ["numoutgroups"]  (ReqArg set_nout    "NUM") "The first NUM individuals are outgroups (1)"
+    , Option "t" ["transversions"] (NoArg  set_transv       ) "Restrict to transversion variants" ]
   where
     set_output a c =                    return $ c { conf_output     =      a }
     set_ref    a c =                    return $ c { conf_reference  =      a }
     set_indiv  a c =                    return $ c { conf_indivs     = Just a }
     set_nout   a c = readIO a >>= \n -> return $ c { conf_noutgroups =      n }
+    set_transv   c =                    return $ c { conf_transv     =   True }
 
 main_treemix :: [String] -> IO ()
 main_treemix args = do
@@ -58,17 +61,23 @@ main_treemix args = do
     withFile conf_output WriteMode $ \hout -> do
         B.hPut hout $ B.unwords pops `B.snoc` '\n'
         forM_ (merge_hefs False conf_noutgroups ref inps) $ \Variant{..} -> do
-            -- XXX  Some variants are probably useless.  Should we
-            -- attempt to remove private variants?  Variants where
-            -- everyone is different from the reference?
+            -- samples (not outgroups) must show ref and alt allele at least once
+            let ve = U.foldl' (.|.) 0 $ U.drop conf_noutgroups v_calls
+                is_ti = not conf_transv || is_transversion (toUpper v_ref) (toUpper v_alt)
+            when (ve .&. 3 /= 0 && ve .&. 12 /= 0 && is_ti) $ do
+                let refcounts = U.accumulate (+) (U.replicate npops 0) $
+                                U.zip popixs $ U.map (fromIntegral . (3 .&.)) v_calls
+                    altcounts = U.accumulate (+) (U.replicate npops 0) $
+                                U.zip popixs $ U.map (fromIntegral . (`shiftR` 2)) v_calls
 
-            let refcounts = U.accumulate (+) (U.replicate npops 0) $
-                            U.zip popixs $ U.map (fromIntegral . (3 .&.)) v_calls
-                altcounts = U.accumulate (+) (U.replicate npops 0) $
-                            U.zip popixs $ U.map (fromIntegral . (`shiftR` 2)) v_calls
-
-            let show1 (a,b) k = intDec a <> char7 ',' <> intDec b <> char7 ' ' <> k
-            hPutBuilder hout $ U.foldr show1 (char7 '\n') $ U.zip refcounts altcounts
+                let show1 (a,b) k = intDec a <> char7 ',' <> intDec b <> char7 ' ' <> k
+                hPutBuilder hout $ U.foldr show1 (char7 '\n') $ U.zip refcounts altcounts
+  where
+    is_transversion 'C' 'T' = False
+    is_transversion 'T' 'C' = False
+    is_transversion 'G' 'A' = False
+    is_transversion 'A' 'G' = False
+    is_transversion  _   _  = True
 
 
 -- | Reads an individual file.  Returns a map from individual to pop
