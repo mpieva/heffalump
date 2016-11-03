@@ -1,10 +1,10 @@
 module Treemix( main_treemix ) where
 
 import BasePrelude
-import Data.ByteString.Builder          ( hPutBuilder, intDec, char7 )
+import Codec.Compression.GZip           ( compress )
+import Data.ByteString.Builder          ( toLazyByteString, intDec, char7, byteString )
 import System.Console.GetOpt
 import System.FilePath                  ( takeBaseName )
-import System.IO
 
 import qualified Data.ByteString.Char8           as B
 import qualified Data.ByteString.Lazy.Char8      as L
@@ -30,7 +30,7 @@ defaultConfTmx = ConfTmx 1 Nothing False
 
 opts_treemix :: [ OptDescr (ConfTmx -> IO ConfTmx) ]
 opts_treemix =
-    [ Option "o" ["output"]        (ReqArg set_output "FILE") "Write output to FILE (.tmx)"
+    [ Option "o" ["output"]        (ReqArg set_output "FILE") "Write output to FILE (.tmx.gz)"
     , Option "r" ["reference"]     (ReqArg set_ref    "FILE") "Read reference from FILE (.fa)"
     , Option "i" ["individuals"]   (ReqArg set_indiv  "FILE") "Read individuals from FILE (.ind)"
     , Option "n" ["numoutgroups"]  (ReqArg set_nout    "NUM") "The first NUM individuals are outgroups (1)"
@@ -58,20 +58,23 @@ main_treemix args = do
     ref <- readReference conf_reference
     inps <- mapM (fmap (decode . decomp) . L.readFile) hefs
 
-    withFile conf_output WriteMode $ \hout -> do
-        B.hPut hout $ B.unwords pops `B.snoc` '\n'
-        forM_ (merge_hefs False conf_noutgroups ref inps) $ \Variant{..} -> do
-            -- samples (not outgroups) must show ref and alt allele at least once
-            let ve = U.foldl' (.|.) 0 $ U.drop conf_noutgroups v_calls
-                is_ti = not conf_transv || is_transversion (toUpper v_ref) (toUpper v_alt)
-            when (ve .&. 3 /= 0 && ve .&. 12 /= 0 && is_ti) $ do
-                let refcounts = U.accumulate (+) (U.replicate npops 0) $
-                                U.zip popixs $ U.map (fromIntegral . (3 .&.)) v_calls
-                    altcounts = U.accumulate (+) (U.replicate npops 0) $
-                                U.zip popixs $ U.map (fromIntegral . (`shiftR` 2)) v_calls
+    L.writeFile conf_output $ compress $ toLazyByteString $
+        foldr (\a k -> byteString a <> char7 ' ' <> k) (char7 '\n') pops <>
+        foldMap
+            (\Variant{..} -> let ve = U.foldl' (.|.) 0 $ U.drop conf_noutgroups v_calls
+                                 is_ti = not conf_transv || is_transversion (toUpper v_ref) (toUpper v_alt)
 
-                let show1 (a,b) k = intDec a <> char7 ',' <> intDec b <> char7 ' ' <> k
-                hPutBuilder hout $ U.foldr show1 (char7 '\n') $ U.zip refcounts altcounts
+                                 refcounts = U.accumulate (+) (U.replicate npops 0) $
+                                             U.zip popixs $ U.map (fromIntegral . (3 .&.)) v_calls
+                                 altcounts = U.accumulate (+) (U.replicate npops 0) $
+                                             U.zip popixs $ U.map (fromIntegral . (`shiftR` 2)) v_calls
+
+                                 show1 (a,b) k = intDec a <> char7 ',' <> intDec b <> char7 ' ' <> k
+                             -- samples (not outgroups) must show ref and alt allele at least once
+                             in if ve .&. 3 /= 0 && ve .&. 12 /= 0 && is_ti
+                               then U.foldr show1 (char7 '\n') $ U.zip refcounts altcounts
+                               else mempty)
+            (merge_hefs False conf_noutgroups ref inps)
   where
     is_transversion 'C' 'T' = False
     is_transversion 'T' 'C' = False
