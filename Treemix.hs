@@ -19,12 +19,13 @@ data ConfTmx = ConfTmx {
     conf_noutgroups :: Int,
     conf_indivs     :: Maybe FilePath,
     conf_transv     :: Bool,
+    conf_chroms     :: (Int,Int),
     conf_output     :: FilePath,
     conf_reference  :: FilePath }
   deriving Show
 
 defaultConfTmx :: ConfTmx
-defaultConfTmx = ConfTmx 1 Nothing False
+defaultConfTmx = ConfTmx 1 Nothing False (0,21)
                          (error "no output file specified")
                          (error "no reference file specified")
 
@@ -34,13 +35,15 @@ opts_treemix =
     , Option "r" ["reference"]     (ReqArg set_ref    "FILE") "Read reference from FILE (.fa)"
     , Option "i" ["individuals"]   (ReqArg set_indiv  "FILE") "Read individuals from FILE (.ind)"
     , Option "n" ["numoutgroups"]  (ReqArg set_nout    "NUM") "The first NUM individuals are outgroups (1)"
-    , Option "t" ["transversions"] (NoArg  set_transv       ) "Restrict to transversion variants" ]
+    , Option "t" ["transversions"] (NoArg  set_transv       ) "Restrict to transversion variants"
+    , Option "x" ["x-chromosome"]  (NoArg  set_xchrom       ) "Analyze X chromsome, not autosomes" ]
   where
     set_output a c =                    return $ c { conf_output     =      a }
     set_ref    a c =                    return $ c { conf_reference  =      a }
     set_indiv  a c =                    return $ c { conf_indivs     = Just a }
     set_nout   a c = readIO a >>= \n -> return $ c { conf_noutgroups =      n }
     set_transv   c =                    return $ c { conf_transv     =   True }
+    set_xchrom   c =                    return $ c { conf_chroms     = (22,22)}
 
 main_treemix :: [String] -> IO ()
 main_treemix args = do
@@ -71,7 +74,7 @@ main_treemix args = do
 
                                  show1 (a,b) k = intDec a <> char7 ',' <> intDec b <> char7 ' ' <> k
                              -- samples (not outgroups) must show ref and alt allele at least once
-                             in if ve .&. 3 /= 0 && ve .&. 12 /= 0 && is_ti
+                             in if inRange conf_chroms v_chr && ve .&. 3 /= 0 && ve .&. 12 /= 0 && is_ti
                                then U.foldr show1 (char7 '\n') $ U.zip refcounts altcounts
                                else mempty)
             (merge_hefs False conf_noutgroups ref inps)
