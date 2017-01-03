@@ -9,6 +9,7 @@ import qualified Data.ByteString.Lazy.Char8      as L
 import qualified Data.Vector.Unboxed             as U
 
 import Bamin
+import Bcf
 import Eigenstrat
 import Merge
 import SillyStats
@@ -43,6 +44,8 @@ main = do
         , z "kayvergence" main_kayvergence        "Compute Kayvergence ratios"
         , z "dstatistics" main_patterson          "Compute Patterson's D"
         , z "yaddayadda"  main_yaddayadda         "Compute Yadda-yadda-counts"
+        , z "bcfhc" (main_bcf "bcfhc" encode_dip) "Import high coverage bcf (diploid)"
+        , z "bcflc" (main_bcf "bcflc" encode_hap) "Import low coverage bcf (haploid)"
         , z "vcfhc" (main_vcf "vcfhc" encode_dip) "Import high coverage vcf (diploid)"
         , z "vcflc" (main_vcf "vcflc" encode_hap) "Import low coverage vcf (haploid)"
         , z "debhetfa"    main_debhetfa           "(debugging aid)"
@@ -196,14 +199,20 @@ main_eigenstrat args = do
 
 
 main_vcf :: String -> (Stretch -> Builder) -> [String] -> IO ()
-main_vcf key enc args = do
+main_vcf = main_xcf "vcf" readVcf
+
+main_bcf :: String -> (Stretch -> Builder) -> [String] -> IO ()
+main_bcf = main_xcf "bcf" readBcf
+
+main_xcf :: String -> (FilePath -> IO [RawVariant]) -> String
+         -> (Stretch -> Builder) -> [String] -> IO ()
+main_xcf ext reader key enc args = do
     ( vcfs, conf_output ) <- parseOpts True (error "no output file specified")
-                                            (mk_opts key "[vcf-file...]" opts_maf) args
+                                            (mk_opts key ("["++ext++"-file...]") opts_maf) args
     withFile conf_output WriteMode $ \hdl ->
         hPutBuilder hdl . enc .
             importVcf chroms . dedupVcf . cleanVcf . concat
-                =<< mapM readVcf vcfs
-
+                =<< mapM reader vcfs
 
 patchFasta :: Handle -> Int64 -> [L.ByteString] -> Reference -> Stretch -> IO ()
 patchFasta hdl wd = p1
@@ -356,13 +365,14 @@ importVcf (c:cs) = generic (hashChrom $ B.concat $ L.toChunks c) 1
     -- have characters for the variants, and we need to map a pair of
     -- them to a code.
     get_nuc_code RawVariant{..}
-        | rv_gt .&. 0xFF00 == 0xFF00        -- haploid call
+        -- haploid call or one allele missing
+        | rv_gt .&. 0xFF00 == 0xFF00 || rv_gt .&. 0xFF00 == 0x0000
             = let z = toUpper $ safeIndex "z" rv_vars ( fromIntegral (rv_gt .&. 0x00FE - 2) )
               in NucCode $ maybe (error $ "What's a " ++ shows z "?") fromIntegral
                          $ B.elemIndex z nuc_chars
         | otherwise                         -- diploid
             = let c1 = toUpper $ safeIndex "c1" rv_vars ( fromIntegral (rv_gt            .&. 0x00FE - 2) )
-                  c2 = toUpper $ safeIndex "c2" rv_vars ( fromIntegral (rv_gt `shiftR` 8 .&. 0x00FE - 2) )
+                  c2 = toUpper $ safeIndex ("c2 "++shows rv_pos " " ++ showHex rv_gt " ") rv_vars ( fromIntegral (rv_gt `shiftR` 8 .&. 0x00FE - 2) )
 
                   n1 = maybe (error $ "What's a " ++ shows c1 "?") id $ B.elemIndex c1 nuc_chars
                   n2 = maybe (error $ "What's a " ++ shows c2 "?") id $ B.elemIndex c2 nuc_chars
