@@ -8,7 +8,10 @@ import BasePrelude
 import Util ( decomp )
 import VcfScan ( RawVariant(..), hashChrom )
 
-import Foreign.Storable ( peekByteOff )
+import Foreign.C.Types
+import Foreign.Marshal.Utils ( copyBytes )
+import Foreign.Ptr
+import Foreign.Storable ( peekByteOff, pokeByteOff )
 
 import qualified Data.ByteString                 as B
 import qualified Data.ByteString.Unsafe          as B
@@ -19,9 +22,8 @@ import qualified Data.Vector.Unboxed             as V
 readBcf :: FilePath -> IO [ RawVariant ]
 readBcf fp = decodeBcf . decomp <$> L.readFile fp
 
--- Skip over header, for now we won't parse it.  Then scan records.
--- Missing: - decode the GT field (*should* be the first in the indiv part)
---          - figure out the variant alleles
+-- Skip over header, for now we won't parse it.  This fails if GT is not
+-- the first individual field that's encoded.
 decodeBcf :: L.ByteString -> [ RawVariant ]
 decodeBcf str0
     | "BCF\2" == L.take 4 str0 = let l_text     = slow_word32 (L.drop 5 str0)
@@ -37,77 +39,98 @@ decodeBcf str0
                     fromIntegral (L.index s 2) `shiftL` 16 .|.
                     fromIntegral (L.index s 3) `shiftL` 24
 
-    getvars :: V.Vector Int -> [B.ByteString] -> B.ByteString -> [RawVariant]
-    getvars tab strs str
-        | B.length str < 32                 = case strs of (s:ss) -> getvars tab ss (B.append str s)
-                                                           [    ] | B.null str -> []
-                                                                  | otherwise  -> error "Short record."
-        | B.length str < fromIntegral l_tot = case strs of (s:ss) -> getvars tab ss (B.append str s)
-        | otherwise = unsafeDupablePerformIO (B.unsafeUseAsCString str $ \p -> do
-                          !l_shared <- fromIntegral        <$> (peekByteOff p  0 :: IO Word32)
-                          !refid    <- fromIntegral        <$> (peekByteOff p  8 :: IO Word32)
-                          !rv_pos   <- fromIntegral . succ <$> (peekByteOff p 12 :: IO Word32)
-                          !n_allls  <- (`shiftR` 16)       <$> (peekByteOff p 24 :: IO Word32)
-                          let !rv_vars = get_als (fromIntegral n_allls) (B.drop 32 str)
-                              !rv_gt   = get_gts (B.drop (l_shared + 8) str)
+getvars :: V.Vector Int -> [B.ByteString] -> B.ByteString -> [RawVariant]
+getvars !tab strs !str = go 0
+  where
+    go !off
+        | B.length str < 32 + off                 = case strs of (s:ss) -> getvars tab ss (B.append (B.drop off str) s)
+                                                                 [    ] | B.length str == off -> []
+                                                                        | otherwise           -> error "Short record."
+        | B.length str < fromIntegral l_tot + off = case strs of (s:ss) -> getvars tab ss (B.append (B.drop off str) s)
+
+        | otherwise = unsafeDupablePerformIO (B.unsafeUseAsCString str $ \p0 -> do
+                          let !p = plusPtr p0 off
+                          !l_shared <- fromIntegral        <$> peek32 p  0
+                          !refid    <- fromIntegral        <$> peek32 p  8
+                          !rv_pos   <- fromIntegral . succ <$> peek32 p 12
+                          !n_allls  <- (`shiftR` 16)       <$> peek32 p 24
+                          !rv_vars  <- get_als n_allls (plusPtr p 32)
+                          !rv_gt    <- get_gts         (plusPtr p (l_shared + 8))
                           return $! RawVariant{ rv_chrom = tab V.! refid, .. })
-                      : getvars tab strs (B.drop (fromIntegral l_tot) str)
+                      : go (off + fromIntegral l_tot)
       where
         l_tot = unsafeDupablePerformIO $ B.unsafeUseAsCString str $ \p -> do
-                    a <- peekByteOff p 0
-                    b <- peekByteOff p 4
-                    return (8 + a + b :: Word32)
+                    a <- peek32 p off
+                    b <- peek32 p (off+4)
+                    return $! 8 + a + b
 
 
-    -- skip over variant ID, then get alleles
-    get_als :: Int -> B.ByteString -> B.ByteString
-    get_als n !s = let !sk = case B.index s 0 of
-                                0xF7 -> case B.index s 1 of
-                                            0x01 -> 3 + fromIntegral (B.index  s 2) -- should be plenty
-                                            0x02 -> 4 + fromIntegral (indexW16 s 2) -- but isn't :(
-                                            0x03 -> 6 + fromIntegral (indexW32 s 2) -- but isn't :(
-                                            x -> error $ "Huh? " ++ show x
-                                tp | tp .&. 0xF == 7 -> 1 + fromIntegral (tp `shiftR` 4)
+-- skip over variant ID, then get alleles
+get_als :: Word32 -> Ptr CChar -> IO B.ByteString
+get_als n !p = do !k1 <- peek8 p 0
+                  case k1 of
+                        0xF7 -> do !k2 <- peek8 p 1
+                                   case k2 of
+                                        0x01 -> peek8  p 2 >>= kont . (+3) . fromIntegral  -- should be plenty
+                                        0x02 -> peek16 p 2 >>= kont . (+4) . fromIntegral  -- but isn't  :-(
+                                        0x03 -> peek32 p 2 >>= kont . (+6) . fromIntegral  -- not even close  :,-(
+                                        x -> error $ "Huh? " ++ show x
+                        tp | tp .&. 0xF == 7 -> kont (1 + fromIntegral (tp `shiftR` 4))
+                        _                    -> error "string expected"
+  where
+    kont !sk = let !p' = plusPtr p sk in get_als' p' p' n p'
+
+
+-- This is borderline criminal:  We change the input /in place/ (which
+-- we shouldn't do), the reuse it as a ByteString.  This works, because
+-- the input is always longer that the output needed (so no overflows)
+-- and nobody else is ever going to look at the input data.  So I think
+-- this is safe, and it does cut down on allocation.
+get_als' :: Ptr CChar -> Ptr CChar -> Word32 -> Ptr CChar -> IO B.ByteString
+get_als' !p0 !p1 0 !_ = B.unsafePackCStringLen (p0, minusPtr p1 p0 - 1)
+get_als' !p0 !p1 n !p = do !k1 <- peek8 p 0
+                           case k1 of
+                                0xF7 -> do !k2 <- peek8 p 1
+                                           case k2 of
+                                                0x01 -> peek8  p 2 >>= kont 3 . fromIntegral -- should be plenty
+                                                0x02 -> peek16 p 2 >>= kont 4 . fromIntegral -- but isn't  :-(
+                                                0x03 -> peek32 p 2 >>= kont 6 . fromIntegral -- not even close  :,-(
+                                                x -> error $ "Huh? " ++ show x
+                                tp | tp .&. 0xF == 7 -> kont 1 (fromIntegral $ tp `shiftR` 4)
                                 _                    -> error "string expected"
-                   in get_als' [] n (B.drop sk s)
-
-    get_als' :: [B.ByteString] -> Int -> B.ByteString -> B.ByteString
-    get_als' acc 0 !_ = B.intercalate "," $ reverse acc
-    get_als' acc n !s = let (!sk,!ln) = case B.index s 0 of
-                                            0xF7 -> case B.index s 1 of
-                                                        0x01 -> (3, fromIntegral $ B.index  s 2) -- should be plenty
-                                                        0x02 -> (4, fromIntegral $ indexW16 s 2) -- but isn't :(
-                                                        0x03 -> (6, fromIntegral $ indexW32 s 2) -- but isn't :(
-                                                        x -> error $ "Huh? " ++ show x
-                                            tp | tp .&. 0xF == 7 -> (1, fromIntegral $ tp `shiftR` 4)
-                                            _                    -> error "string expected"
-                        in get_als' (B.take ln (B.drop sk s) : acc) (n-1) (B.drop (sk+ln) s)
+  where
+    kont !sk !ln = do copyBytes p1 (plusPtr p sk) ln
+                      pokeByteOff p1 ln (fromIntegral (ord ',') :: Word8)
+                      get_als' p0 (plusPtr p1 (ln+1)) (n-1) (plusPtr p (sk+ln))
 
 
-    get_gts :: B.ByteString -> Word16
-    get_gts str = let !ks = case B.index str 0 of 1 -> 2; 2 -> 3; 3 -> 5; _ -> error "WTF?"  -- key size, value ignored
-                      !tp_byte = B.index str ks
-                    -- we support haploid and diploid, and Word8 and Word16
-                  in case tp_byte of
-                    0x11 -> 0xFF00 .|. fromIntegral (B.index str (ks+1))
-                    0x12 -> 0xFF00 .|. indexW16 str (ks+1)
+peek8 :: Ptr a -> Int -> IO Word8
+peek8 = peekByteOff
 
-                    0x21 -> let x = fromIntegral $ B.index str (ks+1)
-                                y = fromIntegral $ B.index str (ks+2)
-                            in y `shiftL` 8 .|. x
+peek16 :: Ptr a -> Int -> IO Word16
+peek16 = peekByteOff
 
-                    0x22 -> let x = indexW16 str (ks+1)
-                                y = indexW16 str (ks+3)
-                            in y `shiftL` 8 .|. x
+peek32 :: Ptr a -> Int -> IO Word32
+peek32 = peekByteOff
+
+get_gts :: Ptr CChar -> IO Word16
+get_gts p = do !k1 <- peek8 p 0
+               let !ks = case k1 of 1 -> 2; 2 -> 3; 3 -> 5; _ -> error "WTF?"  -- key size, value ignored
+               !tp_byte <- peek8 p ks
+                -- we support haploid and diploid, and Word8 and Word16
+               case tp_byte of
+                    0x11 -> (.|.) 0xFF00 . fromIntegral <$> peek8  p (ks+1)
+                    0x12 -> (.|.) 0xFF00 . fromIntegral <$> peek16 p (ks+1)
+
+                    0x21 -> do !x <- fromIntegral <$> peek8 p (ks+1)
+                               !y <- fromIntegral <$> peek8 p (ks+2)
+                               return $! y `shiftL` 8 .|. x
+
+                    0x22 -> do !x <- peek16 p (ks+1)
+                               !y <- peek16 p (ks+3)
+                               return $! y `shiftL` 8 .|. x
 
                     _    -> error $ "only haploid or diploid calls are supported " ++ showHex tp_byte []
-
-    indexW16 :: B.ByteString -> Int -> Word16
-    indexW16 s i = unsafeDupablePerformIO $ B.unsafeUseAsCString s $ \p -> peekByteOff p i
-
-    indexW32 :: B.ByteString -> Int -> Word32
-    indexW32 s i = unsafeDupablePerformIO $ B.unsafeUseAsCString s $ \p -> peekByteOff p i
-
 
 mkSymTab :: L.ByteString -> V.Vector Int
 mkSymTab = V.fromList . mapMaybe parse . C.lines
