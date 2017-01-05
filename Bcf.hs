@@ -20,16 +20,16 @@ import qualified Data.ByteString.Lazy.Char8      as C
 import qualified Data.Vector.Unboxed             as V
 
 readBcf :: FilePath -> IO [ RawVariant ]
-readBcf fp = decodeBcf . decomp <$> L.readFile fp
+readBcf fp = decodeBcf . decomp =<< L.readFile fp
 
 -- Skip over header, for now we won't parse it.  This fails if GT is not
 -- the first individual field that's encoded.
-decodeBcf :: L.ByteString -> [ RawVariant ]
+decodeBcf :: L.ByteString -> IO [ RawVariant ]
 decodeBcf str0
     | "BCF\2" == L.take 4 str0 = let l_text     = slow_word32 (L.drop 5 str0)
                                      (hdr,body) = L.splitAt l_text $ L.drop 9 str0
                                  in case L.toChunks body of
-                                     [  ] -> []
+                                     [  ] -> return []
                                      s:ss -> getvars (mkSymTab hdr) ss s
     | otherwise = error "not a BCFv2 file"
 
@@ -39,30 +39,30 @@ decodeBcf str0
                     fromIntegral (L.index s 2) `shiftL` 16 .|.
                     fromIntegral (L.index s 3) `shiftL` 24
 
-getvars :: V.Vector Int -> [B.ByteString] -> B.ByteString -> [RawVariant]
+getvars :: V.Vector Int -> [B.ByteString] -> B.ByteString -> IO [RawVariant]
 getvars !tab strs !str = go 0
   where
     go !off
-        | B.length str < 32 + off                 = case strs of (s:ss) -> getvars tab ss (B.append (B.drop off str) s)
-                                                                 [    ] | B.length str == off -> []
-                                                                        | otherwise           -> error "Short record."
-        | B.length str < fromIntegral l_tot + off = case strs of (s:ss) -> getvars tab ss (B.append (B.drop off str) s)
+        | B.length str < 32 + off = case strs of (s:ss) -> getvars tab ss (B.append (B.drop off str) s)
+                                                 [    ] | B.length str == off -> return []
+                                                        | otherwise           -> error "Short record."
+        | otherwise = do
+            (!l_shared, !l_indiv) <- B.unsafeUseAsCString str $ \p -> do
+                                                    (,) <$> peek32 p off <*> peek32 p (off+4)
+            let !l_tot = l_shared + l_indiv + 8
 
-        | otherwise = unsafeDupablePerformIO (B.unsafeUseAsCString str $ \p0 -> do
-                          let !p = plusPtr p0 off
-                          !l_shared <- fromIntegral        <$> peek32 p  0
-                          !refid    <- fromIntegral        <$> peek32 p  8
-                          !rv_pos   <- fromIntegral . succ <$> peek32 p 12
-                          !n_allls  <- (`shiftR` 16)       <$> peek32 p 24
-                          !rv_vars  <- get_als n_allls (plusPtr p 32)
-                          !rv_gt    <- get_gts         (plusPtr p (l_shared + 8))
-                          return $! RawVariant{ rv_chrom = tab V.! refid, .. })
-                      : go (off + fromIntegral l_tot)
-      where
-        l_tot = unsafeDupablePerformIO $ B.unsafeUseAsCString str $ \p -> do
-                    a <- peek32 p off
-                    b <- peek32 p (off+4)
-                    return $! 8 + a + b
+            if B.length str < fromIntegral l_tot + off
+                then getvars tab (tail strs) (B.append (B.drop off str) (head strs))
+                else do !v1 <- B.unsafeUseAsCString str $ \p0 -> do
+                                      let !p = plusPtr p0 off
+                                      !refid    <- fromIntegral        <$> peek32 p  8
+                                      !rv_pos   <- fromIntegral . succ <$> peek32 p 12
+                                      !n_allls  <- (`shiftR` 16)       <$> peek32 p 24
+                                      !rv_vars  <- get_als n_allls (plusPtr p 32)
+                                      !rv_gt    <- get_gts         (plusPtr p (fromIntegral l_shared + 8))
+                                      return $! RawVariant{ rv_chrom = tab V.! refid, .. }
+                        vs <- unsafeInterleaveIO $ go (off + fromIntegral l_tot)
+                        return (v1:vs)
 
 
 -- skip over variant ID, then get alleles
