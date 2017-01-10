@@ -211,8 +211,20 @@ main_xcf ext reader key enc args = do
                                             (mk_opts key ("["++ext++"-file...]") opts_maf) args
     withFile conf_output WriteMode $ \hdl ->
         hPutBuilder hdl . enc .
-            importVcf chroms . dedupVcf . cleanVcf . concat
+            importVcf chroms . progress conf_output . dedupVcf . cleanVcf . concat
                 =<< mapM reader vcfs
+  where
+    progress :: String -> [RawVariant] -> [RawVariant]
+    progress fp = go 0 0
+      where
+        go  _  _ [    ] = []
+        go rs po (v:vs)
+            | rs /= rv_chrom v || po + 10000000 <= rv_pos v
+                = unsafePerformIO $ do
+                    hPutStrLn stderr $ fp ++ "@" ++ show (rv_chrom v) ++ ":" ++ show (rv_pos v)
+                    return $ v : go (rv_chrom v) (rv_pos v) vs
+            | otherwise =  v : go rs po vs
+
 
 patchFasta :: Handle -> Int64 -> [L.ByteString] -> Reference -> Stretch -> IO ()
 patchFasta hdl wd = p1

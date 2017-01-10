@@ -5,15 +5,17 @@ module Bcf ( readBcf, decodeBcf ) where
 -- first individual.  Should allow for a handful of shortcuts...
 
 import BasePrelude
-import Util ( decomp )
-import VcfScan ( RawVariant(..), hashChrom )
+import Util                     ( decomp )
+import VcfScan                  ( RawVariant(..), hashChrom )
 
-import Foreign.C.Types
-import Foreign.Marshal.Utils ( copyBytes )
-import Foreign.Ptr
-import Foreign.Storable ( peekByteOff, pokeByteOff )
+import Foreign.C.Types          ( CChar )
+import Foreign.ForeignPtr       ( mallocForeignPtrBytes, withForeignPtr )
+import Foreign.Marshal.Utils    ( copyBytes )
+import Foreign.Ptr              ( Ptr, plusPtr )
+import Foreign.Storable         ( peekByteOff, pokeByteOff )
 
 import qualified Data.ByteString                 as B
+import qualified Data.ByteString.Internal        as B
 import qualified Data.ByteString.Unsafe          as B
 import qualified Data.ByteString.Lazy            as L
 import qualified Data.ByteString.Lazy.Char8      as C
@@ -61,7 +63,7 @@ getvars !tab strs !str = go 0
                                       !rv_vars  <- get_als n_allls (plusPtr p 32)
                                       !rv_gt    <- get_gts         (plusPtr p (fromIntegral l_shared + 8))
                                       return $! RawVariant{ rv_chrom = tab V.! refid, .. }
-                        vs <- unsafeInterleaveIO $ go (off + fromIntegral l_tot)
+                        vs <- unsafeInterleaveIO $ go (fromIntegral l_tot + off)
                         return (v1:vs)
 
 
@@ -78,30 +80,34 @@ get_als n !p = do !k1 <- peek8 p 0
                         tp | tp .&. 0xF == 7 -> kont (1 + fromIntegral (tp `shiftR` 4))
                         _                    -> error "string expected"
   where
-    kont !sk = let !p' = plusPtr p sk in get_als' p' p' n p'
+    kont !sk = let !p' = plusPtr p sk in get_als' NoFrags 0 n p'
 
 
--- This is borderline criminal:  We change the input /in place/ (which
--- we shouldn't do), the reuse it as a ByteString.  This works, because
--- the input is always longer that the output needed (so no overflows)
--- and nobody else is ever going to look at the input data.  So I think
--- this is safe, and it does cut down on allocation.
-get_als' :: Ptr CChar -> Ptr CChar -> Word32 -> Ptr CChar -> IO B.ByteString
-get_als' !p0 !p1 0 !_ = B.unsafePackCStringLen (p0, minusPtr p1 p0 - 1)
-get_als' !p0 !p1 n !p = do !k1 <- peek8 p 0
-                           case k1 of
-                                0xF7 -> do !k2 <- peek8 p 1
-                                           case k2 of
-                                                0x01 -> peek8  p 2 >>= kont 3 . fromIntegral -- should be plenty
-                                                0x02 -> peek16 p 2 >>= kont 4 . fromIntegral -- but isn't  :-(
-                                                0x03 -> peek32 p 2 >>= kont 6 . fromIntegral -- not even close  :,-(
-                                                x -> error $ "Huh? " ++ show x
-                                tp | tp .&. 0xF == 7 -> kont 1 (fromIntegral $ tp `shiftR` 4)
-                                _                    -> error "string expected"
+data Frags = Frag !(Ptr CChar) !Int Frags | NoFrags
+
+get_als' :: Frags -> Int -> Word32 -> Ptr CChar -> IO B.ByteString
+get_als' !acc !l 0 !_ = do fp <- mallocForeignPtrBytes l
+                           withForeignPtr fp $ cpfrags acc . (`plusPtr` l)
+                           return $! B.PS fp 0 (l-1)
   where
-    kont !sk !ln = do copyBytes p1 (plusPtr p sk) ln
-                      pokeByteOff p1 ln (fromIntegral (ord ',') :: Word8)
-                      get_als' p0 (plusPtr p1 (ln+1)) (n-1) (plusPtr p (sk+ln))
+    cpfrags  NoFrags        _ = return ()
+    cpfrags (Frag ps ln fs) p = do let !p' = plusPtr p (-ln-1)
+                                   copyBytes p' ps ln
+                                   pokeByteOff p (-1) (fromIntegral (ord ',') :: Word8)
+                                   cpfrags fs p'
+
+get_als' !acc !l n !p = do !k1 <- peek8 p 0
+                           case k1 of
+                                    0xF7 -> do !k2 <- peek8 p 1
+                                               case k2 of
+                                                    0x01 -> peek8  p 2 >>= kont 3 . fromIntegral -- should be plenty
+                                                    0x02 -> peek16 p 2 >>= kont 4 . fromIntegral -- but isn't  :-(
+                                                    0x03 -> peek32 p 2 >>= kont 6 . fromIntegral -- not even close  :,-(
+                                                    x -> error $ "Huh? " ++ show x
+                                    tp | tp .&. 0xF == 7 -> kont 1 (fromIntegral $ tp `shiftR` 4)
+                                    _                    -> error "string expected"
+  where
+    kont !sk !ln = get_als' (Frag (plusPtr p sk) ln acc) (l+ln+1) (n-1) (plusPtr p (sk+ln))
 
 
 peek8 :: Ptr a -> Int -> IO Word8
