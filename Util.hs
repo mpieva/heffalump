@@ -4,6 +4,7 @@ import BasePrelude
 import System.Console.GetOpt
 import System.IO                        ( hPutStrLn, stderr )
 
+import qualified Data.ByteString                 as S
 import qualified Data.ByteString.Lazy            as B
 import qualified Data.ByteString.Lazy.Char8      as L
 import qualified Data.ByteString.Lazy.Internal   as L ( ByteString(..) )
@@ -39,20 +40,21 @@ parseOpts fileargs def ods args = do
 newtype Reference = Reference [L.ByteString]
 
 -- Reference is FastA format, treated as haploid.
-readReference :: FilePath -> IO Reference
-readReference fp = Reference . parseFasta chroms . L.lines . decomp <$> L.readFile fp
+readReference :: FilePath -> IO ([S.ByteString], Reference)
+readReference fp = (id *** Reference) . unzip . parseFasta chroms . L.lines . decomp <$> L.readFile fp
 
 -- Samples in FastA format are treated as diploid.
 readSampleFa :: FilePath -> IO [L.ByteString]
-readSampleFa fp = map (B.map up) . parseFasta chroms . L.lines . decomp <$> L.readFile fp
+readSampleFa fp = map (B.map up . snd) . parseFasta chroms . L.lines . decomp <$> L.readFile fp
 
-parseFasta :: [L.ByteString] -> [L.ByteString] -> [L.ByteString]
+parseFasta :: [L.ByteString] -> [L.ByteString] -> [(S.ByteString, L.ByteString)]
 parseFasta [    ]  _ = []
 parseFasta (c:cs) ls =
     case dropWhile (not . isHeader) ls of
         [   ] -> error $ "expected chromosome " ++ show c ++ " not found"
-        _:ls' -> case span isBody ls' of
-            (mine,rest) -> L.concat mine : parseFasta cs rest
+        h:ls' -> case span isBody ls' of
+            (mine,rest) -> ( S.concat . concatMap L.toChunks . take 1 . L.words $ L.tail h, L.concat mine )
+                           : parseFasta cs rest
   where
     isBody s = L.null s || L.head s /= '>'
     isHeader s = case L.words s of

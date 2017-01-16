@@ -207,7 +207,7 @@ opts_kiv =
 main_kayvergence :: [String] -> IO ()
 main_kayvergence args = do
     ( hefs, Config{..} ) <- parseOpts True defaultConfig (mk_opts "kayvergence" "[hef-file...]" opts_kiv) args
-    ref <- readReference conf_reference
+    (_,ref) <- readReference conf_reference
     inps <- mapM (fmap (decode . decomp) . L.readFile) hefs
 
     let labels = kaylabels conf_noutgroups (map takeBaseName hefs)
@@ -288,7 +288,7 @@ opts_dstat =
 main_patterson :: [String] -> IO ()
 main_patterson args = do
     ( hefs, Config{..} ) <- parseOpts True defaultConfig (mk_opts "dstatistics" "[hef-file...]" opts_dstat) args
-    ref <- readReference conf_reference
+    (_,ref) <- readReference conf_reference
     inps <- mapM (fmap (decode . decomp) . L.readFile) hefs
 
     let labels = pattersonlbls conf_noutgroups conf_nrefpanel (map takeBaseName hefs)
@@ -402,7 +402,7 @@ main_yaddayadda :: [String] -> IO ()
 main_yaddayadda args = do
     ( hefs, Config{..} ) <- parseOpts True (defaultConfig { conf_nrefpanel = 2 })
                                       (mk_opts "yaddayadda" "[hef-file...]" opts_yadda) args
-    ref <- readReference conf_reference
+    (_,ref) <- readReference conf_reference
     inps <- mapM (fmap (decode . decomp) . L.readFile) hefs
 
     let labels = yaddalbls conf_noutgroups conf_nafricans conf_nrefpanel (map takeBaseName hefs)

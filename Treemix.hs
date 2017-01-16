@@ -58,7 +58,7 @@ main_treemix args = do
                       return . toSymtab $ map (lookupHef popmap) hefs
         Nothing -> return (map (B.pack . takeBaseName) hefs, length hefs, U.enumFromN 0 (length hefs))
 
-    ref <- readReference conf_reference
+    (_,ref) <- readReference conf_reference
     inps <- mapM (fmap (decode . decomp) . L.readFile) hefs
 
     L.writeFile conf_output $ compress $ toLazyByteString $

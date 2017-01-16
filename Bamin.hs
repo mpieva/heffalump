@@ -23,7 +23,7 @@ import qualified Data.Vector.Unboxed as U
 import Stretch
 import Util
 
-data Pick = Ostrich | Artificial | Ignore_T | Ignore_A
+data Pick = Ostrich | Artificial | Ignore_T | Ignore_A | Ignore_C | Ignore_G
           | ArtificialIgnore | Stranded | UDG | Kay
           | ArtificialKay
   deriving Show
@@ -50,6 +50,8 @@ opts_bam =
     , Option [ ] ["deaminate"]        (NoArg set_deaminate) "Artificially deaminate"
     , Option [ ] ["ignore-t"]         (NoArg  set_ignore_t) "Ignore T on forward strand"
     , Option [ ] ["ignore-a"]         (NoArg  set_ignore_a) "Ignore A on forward strand"
+    , Option [ ] ["ignore-c"]         (NoArg  set_ignore_c) "Ignore C on forward strand"
+    , Option [ ] ["ignore-g"]         (NoArg  set_ignore_g) "Ignore G on forward strand"
     , Option [ ] ["deaminate-ignore-t"] (NoArg set_deamign) "Artificially deaminate, then ignore T"
     , Option [ ] ["stranded"]          (NoArg set_stranded) "Call only G&A on forward strand"
     , Option [ ] ["udg"]                    (NoArg set_udg) "Simulate UDG treatment"
@@ -63,6 +65,8 @@ opts_bam =
     set_deaminate c = return $ c { conf_pick = Artificial }
     set_ignore_t  c = return $ c { conf_pick = Ignore_T }
     set_ignore_a  c = return $ c { conf_pick = Ignore_A }
+    set_ignore_c  c = return $ c { conf_pick = Ignore_C }
+    set_ignore_g  c = return $ c { conf_pick = Ignore_G }
     set_deamign   c = return $ c { conf_pick = ArtificialIgnore }
     set_stranded  c = return $ c { conf_pick = Stranded }
     set_udg       c = return $ c { conf_pick = UDG }
@@ -78,7 +82,7 @@ opts_bam =
 main_bam :: [String] -> IO ()
 main_bam args = do
     ( bams, cfg@ConfBam{..} ) <- parseOpts True conf_bam0 (mk_opts "bamin" "[bam-file...]" opts_bam) args
-    ref <- readReference conf_bam_reference
+    (_,ref) <- readReference conf_bam_reference
 
     withFile (conf_bam_output ++ "~") WriteMode        $ \hdl ->
         hPutBuilder hdl . encode_hap . importPile ref
@@ -255,8 +259,14 @@ maybe_count ConfBam{..} counts c = do
                      | otherwise                 -> b_call
 
             -- Same as Ignore_T, in case someone wants a control experiment...
-            Ignore_A | b_call == 3 &&     b_revd -> 5         -- A, reverse
-                     | b_call == 0 && not b_revd -> 5         -- T, forward
+            Ignore_A | b_call == 3 &&     b_revd -> 5
+                     | b_call == 0 && not b_revd -> 5
+                     | otherwise                 -> b_call
+            Ignore_C | b_call == 2 &&     b_revd -> 5
+                     | b_call == 1 && not b_revd -> 5
+                     | otherwise                 -> b_call
+            Ignore_G | b_call == 1 &&     b_revd -> 5
+                     | b_call == 2 && not b_revd -> 5
                      | otherwise                 -> b_call
 
             -- Introduce artificial deamination, then "deal" with it by

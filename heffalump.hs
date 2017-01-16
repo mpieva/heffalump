@@ -1,11 +1,14 @@
 import BasePrelude
 import Data.ByteString.Builder          ( hPutBuilder, Builder )
 import System.Console.GetOpt
+import System.FilePath                  ( takeBaseName )
 import System.IO
 
+import qualified Data.ByteString.Builder         as B
 import qualified Data.ByteString.Char8           as B
 import qualified Data.ByteString.Lazy            as LB
 import qualified Data.ByteString.Lazy.Char8      as L
+import qualified Data.Vector                     as V
 import qualified Data.Vector.Unboxed             as U
 
 import Bamin
@@ -36,6 +39,7 @@ main = do
 
     mains = let z a b c = (a,(b,c)) in
         [ z "eigenstrat"  main_eigenstrat         "Merge heffalumps into Eigenstrat format"
+        , z "vcfexport"   main_vcfout             "Merge heffalumps into VCF"
         , z "hetfa"       main_hetfa              "Import hetfa file"
         , z "bamin"       main_bam                "Import BAM file"
         , z "maf"         main_maf                "Import two-species maf"
@@ -87,7 +91,7 @@ opts_hetfa =
 main_hetfa :: [String] -> IO ()
 main_hetfa args = do
     ( _, ConfGen{..} ) <- parseOpts False defaultConfGen (mk_opts "hetfa" [] opts_hetfa) args
-    Reference ref <- readReference conf_reference
+    (_, Reference ref) <- readReference conf_reference
     smp <- readSampleFa conf_sample
 
     withFile conf_output WriteMode $ \hdl ->
@@ -124,7 +128,7 @@ opts_patch =
 main_patch :: [String] -> IO ()
 main_patch args = do
     ( _, ConfGen{..} ) <- parseOpts False defaultConfGen (mk_opts "patch" [] opts_patch) args
-    ref <- readReference conf_reference
+    (_,ref) <- readReference conf_reference
     pat <- decode . decomp <$> L.readFile conf_sample
 
     withFile conf_output WriteMode $ \hdl ->
@@ -137,7 +141,7 @@ main_debmaf _ =  hPutStrLn stderr $ "Usage: debmaf [ref.fa] [smp.hetfa]"
 
 main_debhetfa :: [String] -> IO ()
 main_debhetfa [reff, smpf] = do
-    Reference ref <- readReference reff
+    (_,Reference ref) <- readReference reff
     smp <- readSampleFa smpf
     debugStretch . ($ Done) . head $ zipWith diff ref smp
 main_debhetfa _ = hPutStrLn stderr $ "Usage: debhetfa [ref.fa] [smp.hetfa]"
@@ -165,7 +169,7 @@ opts_eigen =
 main_eigenstrat :: [String] -> IO ()
 main_eigenstrat args = do
     ( hefs, ConfGen{..} ) <- parseOpts True defaultConfGen (mk_opts "eigenstrat" "[hef-file...]" opts_eigen) args
-    ref <- readReference conf_reference
+    (_,ref) <- readReference conf_reference
     inps <- mapM (fmap (decode . decomp) . L.readFile) hefs
 
     withFile (conf_output ++ ".snp") WriteMode $ \hsnp ->
@@ -196,6 +200,48 @@ main_eigenstrat args = do
     is_transversion 'A' 'G' = False
     is_transversion  _   _  = True
 
+main_vcfout :: [String] -> IO ()
+main_vcfout args = do
+    ( hefs, ConfGen{..} ) <- parseOpts True defaultConfGen { conf_noutgroups = 0 }
+                                            (mk_opts "vcfexport" "[hef-file...]" (tail opts_eigen)) args
+    (chrs,ref) <- readReference conf_reference
+    inps <- mapM (fmap (decode . decomp) . L.readFile) hefs
+
+    B.putStr $ "##fileformat=VCFv4.1\n" <>
+               "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n" <>
+               "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT" <>
+               mconcat [ '\t' `B.cons` B.pack (takeBaseName f) | f <- hefs ] <>
+               B.singleton '\n'
+
+    forM_ (merge_hefs False conf_noutgroups ref inps) $ \Variant{..} ->
+        -- samples (not outgroups) must show alt allele at least once
+        let ve = U.foldl' (.|.) 0 $ U.drop conf_noutgroups v_calls in
+        when (ve .&. 12 /= 0) $ do
+            B.hPutBuilder stdout $
+                B.byteString (chrs !! v_chr) <> B.char8 '\t' <>
+                B.intDec (v_pos+1) <> B.string8 "\t.\t" <>
+                B.char8 (toUpper v_ref) <> B.char8 '\t' <>
+                B.char8 (toUpper v_alt) <> B.string8 "\t.\t.\t.\tGT" <>
+                U.foldr ((<>) . B.byteString . (V.!) gts . fromIntegral) mempty v_calls <>
+                B.char8 '\n'
+  where
+    gts :: V.Vector B.ByteString
+    gts = V.fromList [ "\t./."      -- 0, N
+                     , "\t0"        -- 1, 1xref
+                     , "\t0/0"      -- 2, 2xref
+                     , "\t0/0"      -- 3, 3xref (whatever)
+                     , "\t1"        -- 4, 1xalt
+                     , "\t0/1"      -- 5, ref+alt
+                     , "\t0/1"      -- 6, 2xref+alt (whatever)
+                     , "\t0/1"      -- 7, 3xref+alt (whatever)
+                     , "\t1/1"      -- 8, 2xalt
+                     , "\t0/1"      -- 9, ref+2xalt (whatever)
+                     , "\t0/1"      -- 10, 2xref+2xalt (whatever)
+                     , "\t0/1"      -- 11, 3xref+2xalt (whatever)
+                     , "\t1/1"      -- 12, 3xalt (whatever)
+                     , "\t0/1"      -- 13, ref+3xalt (whatever)
+                     , "\t0/1"      -- 14, 2xref+3xalt (whatever)
+                     , "\t0/1" ]    -- 15, 3xref+3xalt (whatever)
 
 
 main_vcf :: String -> (Stretch -> Builder) -> [String] -> IO ()

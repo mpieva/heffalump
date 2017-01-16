@@ -34,7 +34,7 @@ data Variant = Variant { v_chr :: !Int                  -- index into 'chroms'
                        , v_pos :: !Int                  -- 0-based
                        , v_ref :: !Char                 -- A,C,G or T
                        , v_alt :: !Char                 -- A,C,G or T
-                       , v_calls :: !(U.Vector Word8) } -- # of reference alles, 9 is no call
+                       , v_calls :: !(U.Vector Word8) }
   deriving Show
 
 merge_hefs :: Bool -> Int -> Reference -> [Stretch] -> [Variant]
