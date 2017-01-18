@@ -215,8 +215,9 @@ main_vcfout args = do
 
     forM_ (merge_hefs False conf_noutgroups ref inps) $ \Variant{..} ->
         -- samples (not outgroups) must show alt allele at least once
-        let ve = U.foldl' (.|.) 0 $ U.drop conf_noutgroups v_calls in
-        when (ve .&. 12 /= 0) $ do
+        let ve    = U.foldl' (.|.) 0 $ U.drop conf_noutgroups v_calls
+            is_ti = conf_all || is_transversion (toUpper v_ref) (toUpper v_alt) in
+        when (ve .&. 12 /= 0 && is_ti) $ do
             B.hPutBuilder stdout $
                 B.byteString (chrs !! v_chr) <> B.char8 '\t' <>
                 B.intDec (v_pos+1) <> B.string8 "\t.\t" <>
@@ -225,6 +226,12 @@ main_vcfout args = do
                 U.foldr ((<>) . B.byteString . (V.!) gts . fromIntegral) mempty v_calls <>
                 B.char8 '\n'
   where
+    is_transversion 'C' 'T' = False
+    is_transversion 'T' 'C' = False
+    is_transversion 'G' 'A' = False
+    is_transversion 'A' 'G' = False
+    is_transversion  _   _  = True
+
     gts :: V.Vector B.ByteString
     gts = V.fromList [ "\t./."      -- 0, N
                      , "\t0"        -- 1, 1xref
