@@ -9,7 +9,6 @@ import Util                     ( decomp )
 import VcfScan                  ( RawVariant(..), hashChrom )
 
 import Foreign.C.Types          ( CChar )
-import Foreign.Marshal.Utils    ( copyBytes )
 import Foreign.Ptr              ( Ptr, plusPtr )
 import Foreign.Storable         ( peekByteOff, pokeByteOff )
 
@@ -85,13 +84,14 @@ get_als n !p = do !k1 <- peek8 p 0
 data Frags = Frag !(Ptr CChar) !Int Frags | NoFrags
 
 get_als' :: Frags -> Int -> Word32 -> Ptr CChar -> IO B.ByteString
-get_als' !acc !l 0 !_ = B.createUptoN l $ \p -> cpfrags acc (plusPtr p l) >> return (l-1)
+get_als' !acc !l 0 !_ = B.createUptoN l $ cpfrags acc l
   where
-    cpfrags  NoFrags        _ = return ()
-    cpfrags (Frag ps ln fs) p = do let !p' = plusPtr p (-ln-1)
-                                   copyBytes p' ps ln
-                                   pokeByteOff p (-1) (fromIntegral (ord ',') :: Word8)
-                                   cpfrags fs p'
+    cpfrags (Frag ps ln fs) !o !p = do forM_ [0..ln-1] $ \i -> do
+                                            x <- peekByteOff ps i
+                                            pokeByteOff p (o-ln-1+i) (x::Word8)
+                                       pokeByteOff p (o-1) (fromIntegral (ord ',') :: Word8)
+                                       cpfrags fs (o-ln-1) p
+    cpfrags  NoFrags         _  _ = return (l-1)
 
 get_als' !acc !l n !p = do !k1 <- peek8 p 0
                            case k1 of
