@@ -3,6 +3,6 @@
 
 struct plp_aux_t ;
 
-struct plp_aux_t *pileup_init( int mmapq, const char *fn ) ;
+struct plp_aux_t *pileup_init( int min_mapq_, int ignore_indels_, const char *fn ) ;
 int pileup_step( struct plp_aux_t *data, int *tid, int *pos, int vsize, uint32_t *vec ) ;
 void pileup_done( struct plp_aux_t *data ) ;

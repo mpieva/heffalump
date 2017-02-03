@@ -54,7 +54,8 @@ main = do
         , z "vcflc" (main_vcf "vcflc" encode_hap) "Import low coverage vcf (haploid)"
         , z "debhetfa"    main_debhetfa           "(debugging aid)"
         , z "debmaf"      main_debmaf             "(debugging aid)"
-        , z "dumppatch"   main_dumppatch          "(debugging aid)" ]
+        , z "dumppatch"   main_dumppatch          "(debugging aid)"
+        , z "test"        main_test               "(test)" ]
 
 
 data ConfGen = ConfGen {
@@ -482,4 +483,59 @@ readVcf fp = do
         case mv of
             Nothing -> return []
             Just  v -> (:) v <$> self
+
+main_test :: [String] -> IO ()
+main_test hefs = do
+    (chrs,ref) <- readReference "/var/tmp/ref.fa"
+    inps <- mapM (fmap (decode . decomp) . L.readFile) hefs
+    forM_ (merge_hefs False 0 ref inps) $ \Variant{..} ->
+        -- We need an ABBA+ pattern.  So all samples except the second
+        -- and third must be alt alleles only while the second and third
+        -- are ref only, or the other way around.
+        let c1    = v_calls U.! 0
+            c2    = v_calls U.! 1
+            c3    = v_calls U.! 2
+            cs    = U.drop 3 v_calls
+            is_ti = is_transversion (toUpper v_ref) (toUpper v_alt)
+
+            adda  = U.all (not . isRef) cs && isRef c2 && isRef c3 && isAlt c1
+            daad  = U.all (not . isAlt) cs && isAlt c2 && isAlt c3 && isRef c1
+            defnd = U.length (U.filter (== 0) cs) <= 3  in
+
+        when (is_ti && defnd && (adda || daad)) $ do
+            B.hPutBuilder stdout $
+                B.byteString (chrs !! v_chr) <> B.char8 '\t' <>
+                B.intDec (v_pos+1) <> B.string8 "\t.\t" <>
+                B.char8 (toUpper v_ref) <> B.char8 '\t' <>
+                B.char8 (toUpper v_alt) <> B.string8 "\t.\t.\t.\tGT" <>
+                U.foldr ((<>) . B.byteString . (V.!) gts . fromIntegral) mempty v_calls <>
+                B.char8 '\n'
+  where
+    is_transversion 'C' 'T' = False
+    is_transversion 'T' 'C' = False
+    is_transversion 'G' 'A' = False
+    is_transversion 'A' 'G' = False
+    is_transversion  _   _  = True
+
+    isRef v = v /= 0 && v .&. 12 == 0
+    isAlt v = v /= 0 && v .&.  3 == 0
+
+    gts :: V.Vector B.ByteString
+    gts = V.fromList [ "\t./."      -- 0, N
+                     , "\t0"        -- 1, 1xref
+                     , "\t0/0"      -- 2, 2xref
+                     , "\t0/0"      -- 3, 3xref (whatever)
+                     , "\t1"        -- 4, 1xalt
+                     , "\t0/1"      -- 5, ref+alt
+                     , "\t0/1"      -- 6, 2xref+alt (whatever)
+                     , "\t0/1"      -- 7, 3xref+alt (whatever)
+                     , "\t1/1"      -- 8, 2xalt
+                     , "\t0/1"      -- 9, ref+2xalt (whatever)
+                     , "\t0/1"      -- 10, 2xref+2xalt (whatever)
+                     , "\t0/1"      -- 11, 3xref+2xalt (whatever)
+                     , "\t1/1"      -- 12, 3xalt (whatever)
+                     , "\t0/1"      -- 13, ref+3xalt (whatever)
+                     , "\t0/1"      -- 14, 2xref+3xalt (whatever)
+                     , "\t0/1" ]    -- 15, 3xref+3xalt (whatever)
+
 

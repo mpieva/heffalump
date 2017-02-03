@@ -34,12 +34,13 @@ data ConfBam = ConfBam {
     conf_pick :: Pick,
     conf_min_qual :: Int,
     conf_min_mapq :: Int,
+    conf_ignore_indels :: Bool,
     conf_snip :: Int,
     conf_snap :: Int }
   deriving Show
 
 conf_bam0 :: ConfBam
-conf_bam0 = ConfBam (error "no output file specified") (error "no reference file specified") Ostrich 0 0 0 0
+conf_bam0 = ConfBam (error "no output file specified") (error "no reference file specified") Ostrich 0 0 False 0 0
 
 opts_bam :: [ OptDescr ( ConfBam -> IO ConfBam ) ]
 opts_bam =
@@ -58,7 +59,8 @@ opts_bam =
     , Option [ ] ["kay"]                    (NoArg set_kay) "Ts become Ns"
     , Option [ ] ["deaminate-kay"]      (NoArg set_deamkay) "Artificialle deaminate, then Ts to Ns"
     , Option [ ] ["snip"]           (ReqArg set_snip "NUM") "Ignore the first NUM bases in each aread"
-    , Option [ ] ["snap"]           (ReqArg set_snap "NUM") "Ignore the last NUM bases in each aread" ]
+    , Option [ ] ["snap"]           (ReqArg set_snap "NUM") "Ignore the last NUM bases in each aread"
+    , Option "c" ["contiguous"]          (NoArg set_contig) "Use only reads that align without indels" ]
   where
     set_output  a c = return $ c { conf_bam_output    = a }
     set_ref     a c = return $ c { conf_bam_reference = a }
@@ -72,6 +74,7 @@ opts_bam =
     set_udg       c = return $ c { conf_pick = UDG }
     set_kay       c = return $ c { conf_pick = Kay }
     set_deamkay   c = return $ c { conf_pick = ArtificialKay }
+    set_contig    c = return $ c { conf_ignore_indels = True }
 
     set_minqual a c = readIO a >>= \b -> return $ c { conf_min_qual = b }
     set_minmapq a c = readIO a >>= \b -> return $ c { conf_min_mapq = b }
@@ -193,6 +196,7 @@ htsPileup :: ConfBam -> FilePath -> IO [ Var0 ]
 htsPileup cfg fp = do
     plp <- throwErrnoIfNull "c_pileup_init" $ withCString fp $
                 c_pileup_init (fromIntegral $ conf_min_mapq cfg)
+                              (fromIntegral $ fromEnum $ conf_ignore_indels cfg)
     repeatedly (step plp)
   where
     vsize = 2048
@@ -330,7 +334,7 @@ data PlpAux
 
 -- struct plp_aux_t *pileup_init( const char *fn )
 foreign import ccall unsafe "mini-pileup.h pileup_init"
-    c_pileup_init :: CInt -> CString -> IO (Ptr PlpAux)
+    c_pileup_init :: CInt -> CInt -> CString -> IO (Ptr PlpAux)
 
 -- An array of 32 bit words is supplied.  For each base, we store one
 -- integer:  bits 0..6:  quality

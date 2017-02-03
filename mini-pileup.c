@@ -10,12 +10,27 @@ struct plp_aux_t {
     bam_hdr_t *h ;
     bam_plp_t iter ;
     int min_mapq ;
+    int ignore_indels ;
 } ;
 
-// Fetches stuff, put it into *b, returns 1 if something was fetched.
+static int has_indels( bam1_t *b ) 
+{
+    for( int i = 0 ; i != b->core.n_cigar ; ++i ) {
+        switch( bam_cigar_op( bam_get_cigar(b)[i] ) ) {
+            case BAM_CINS:
+            case BAM_CDEL:
+            case BAM_CSOFT_CLIP:
+                return 1 ;
+        }
+    }
+    return 0 ;
+}
+
+
+// Fetches stuff, puts it into *b, returns 1 if something was fetched.
 // Gets called by bam_plp_auto to fetch fresh input.  We just read from
 // a single bam file.
-int plp_func( void *data, bam1_t *b )
+static int plp_func( void *data, bam1_t *b )
 {
     struct plp_aux_t *ma = (struct plp_aux_t*)data ;
     int ret ;
@@ -24,11 +39,12 @@ int plp_func( void *data, bam1_t *b )
     } while( ret >= 0 && (
                 b->core.tid < 0 || 
                 (b->core.flag&BAM_FUNMAP) ||
-                b->core.qual < ma->min_mapq )) ;
+                b->core.qual < ma->min_mapq ||
+                (ma->ignore_indels && has_indels(b))) ) ;
     return ret;
 }
 
-struct plp_aux_t *pileup_init( int min_mapq_, const char *fn )
+struct plp_aux_t *pileup_init( int min_mapq_, int ignore_indels_, const char *fn )
 {
     struct plp_aux_t *data = malloc( sizeof( struct plp_aux_t ) ) ;
     if( data ) {
@@ -38,6 +54,7 @@ struct plp_aux_t *pileup_init( int min_mapq_, const char *fn )
             data->h = sam_hdr_read( data->fp ) ;
             data->iter = bam_plp_init( plp_func, data ) ;
             data->min_mapq = min_mapq_ ;
+            data->ignore_indels = ignore_indels_ ;
             return data ;
         }
         free( data ) ;
@@ -45,8 +62,8 @@ struct plp_aux_t *pileup_init( int min_mapq_, const char *fn )
     return 0 ;
 }
 
-// All right, fuck this---there doesn't seem to be a clean qay to get
-// the reference sequence; we get it from a FastA file instead.  ~:-/
+// All right, fuck this---there doesn't seem to be a clean way to get
+// the reference sequence; we get it from a FastA file instead.  ≈:-/
 
 // An array of 32 bit words is supplied.  For each base, we store one
 // integer:  bits 0..6:  quality
