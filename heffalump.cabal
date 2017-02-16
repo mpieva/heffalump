@@ -1,5 +1,5 @@
 name:                heffalump
-version:             0.1.0.0
+version:             0.1
 license:             GPL-3
 license-file:        LICENSE
 author:              Udo Stenzel
@@ -26,7 +26,6 @@ executable heffalump
                        bytestring,
                        directory,
                        filepath,
-                       iteratee,
                        math-functions,
                        primitive,
                        random,

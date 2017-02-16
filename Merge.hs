@@ -38,8 +38,11 @@ data Variant = Variant { v_chr :: !Int                  -- index into 'chroms'
   deriving Show
 
 merge_hefs :: Bool -> Int -> Reference -> [Stretch] -> [Variant]
-merge_hefs       !_          !_ (Reference [          ]) = const [ ]
-merge_hefs !nosplit !noutgroups (Reference (ref0:refs0)) = go refs0 0 0 ref0 . V.fromList
+merge_hefs nosplit nougroups ref = concat . merge_hefs' nosplit nougroups ref
+
+merge_hefs' :: Bool -> Int -> Reference -> [Stretch] -> [[Variant]]
+merge_hefs'       !_          !_ (Reference [          ]) = const [ ]
+merge_hefs' !nosplit !noutgroups (Reference (ref0:refs0)) = go refs0 0 0 ref0 . V.fromList
     -- Merging stretches.  We define a 'Variant' as anything that is
     -- different from the reference.  Therefore, 'Eqs' ('Eqs1') and 'Ns'
     -- never create a 'Variant' and we can skip forwards.  A 'Done' is
@@ -47,7 +50,7 @@ merge_hefs !nosplit !noutgroups (Reference (ref0:refs0)) = go refs0 0 0 ref0 . V
     -- collect the alleles, check if we found exactly two, then output
     -- and skip forward by two bases.
   where
-    go :: [L.ByteString] -> Int -> Int -> L.ByteString -> V.Vector Stretch -> [Variant]
+    go :: [L.ByteString] -> Int -> Int -> L.ByteString -> V.Vector Stretch -> [[Variant]]
     go refs !ix !pos !ref !smps
         | L.null ref = case refs of (r:rs) -> go rs (succ ix) 0 r (V.map skipBreaks smps)
                                     [    ] -> []
@@ -122,12 +125,12 @@ merge_hefs !nosplit !noutgroups (Reference (ref0:refs0)) = go refs0 0 0 ref0 . V
 
     -- Find all the variants, anchored on the reference allele, and
     -- split them.  Misfitting alleles are not counted.
-    tryVar :: Int -> Int -> NucCode -> (NucCode -> V.Vector Stretch -> V.Vector NucCode) -> V.Vector Stretch -> [Variant] -> [Variant]
+    tryVar :: Int -> Int -> NucCode -> (NucCode -> V.Vector Stretch -> V.Vector NucCode) -> V.Vector Stretch -> [[Variant]] -> [[Variant]]
     tryVar ix pos r which ss
         | r == NucCode 0      = id
         | nosplit && not good = id
-        | otherwise           = (++) [ Variant ix pos (tr r) (tr' v) (V.convert $ V.map (ct (alleles r) v) vs)
-                                     | v <- map Alleles [1,2,4,8], vacc .&. v /= Alleles 0 ]
+        | otherwise           = (:) [ Variant ix pos (tr r) (tr' v) (V.convert $ V.map (ct (alleles r) v) vs)
+                                    | v <- map Alleles [1,2,4,8], vacc .&. v /= Alleles 0 ]
       where
         vs   = which r ss
         -- collect variant alleles, ref and outgroups don't count

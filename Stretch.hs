@@ -24,8 +24,6 @@ import qualified Data.ByteString.Internal       as B
 import qualified Data.ByteString.Lazy.Char8     as L
 import qualified Data.ByteString.Lazy           as LB
 import qualified Data.ByteString.Unsafe         as B
-import qualified Data.Nullable                  as Null
-import qualified Data.NullPoint                 as Null
 
 import Util ( low )
 
@@ -59,11 +57,6 @@ data Stretch = Ns   !Int64            Stretch
              | Break                  Stretch
              | Done
     deriving Show
-
-instance Null.NullPoint (Stretch -> Stretch) where empty = id
-instance Null.Nullable  (Stretch -> Stretch) where
-    nullC f = case f Done of Done -> True ; _ -> False
-
 
 debugStretch :: Stretch -> IO ()
 debugStretch = debugStretch' 0 0

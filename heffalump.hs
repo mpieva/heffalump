@@ -52,6 +52,7 @@ main = do
         , z "bcflc" (main_bcf "bcflc" encode_hap) "Import low coverage bcf (haploid)"
         , z "vcfhc" (main_vcf "vcfhc" encode_dip) "Import high coverage vcf (diploid)"
         , z "vcflc" (main_vcf "vcflc" encode_hap) "Import low coverage vcf (haploid)"
+        , z "cdstatistics" main_patterson_corr    "(failed experiment)"
         , z "debhetfa"    main_debhetfa           "(debugging aid)"
         , z "debmaf"      main_debmaf             "(debugging aid)"
         , z "dumppatch"   main_dumppatch          "(debugging aid)"
@@ -488,29 +489,33 @@ main_test :: [String] -> IO ()
 main_test hefs = do
     (chrs,ref) <- readReference "/var/tmp/ref.fa"
     inps <- mapM (fmap (decode . decomp) . L.readFile) hefs
-    forM_ (merge_hefs False 0 ref inps) $ \Variant{..} ->
+    forM_ (merge_hefs' False 0 ref inps) $ \vs ->
         -- We need an ABBA+ pattern.  So all samples except the second
         -- and third must be alt alleles only while the second and third
-        -- are ref only, or the other way around.
-        let c1    = v_calls U.! 0
-            c2    = v_calls U.! 1
-            c3    = v_calls U.! 2
-            cs    = U.drop 3 v_calls
-            is_ti = is_transversion (toUpper v_ref) (toUpper v_alt)
-
-            adda  = U.all (not . isRef) cs && isRef c2 && isRef c3 && isAlt c1
-            daad  = U.all (not . isAlt) cs && isAlt c2 && isAlt c3 && isRef c1
-            defnd = U.length (U.filter (== 0) cs) <= 3  in
-
-        when (is_ti && defnd && (adda || daad)) $ do
-            B.hPutBuilder stdout $
-                B.byteString (chrs !! v_chr) <> B.char8 '\t' <>
-                B.intDec (v_pos+1) <> B.string8 "\t.\t" <>
-                B.char8 (toUpper v_ref) <> B.char8 '\t' <>
-                B.char8 (toUpper v_alt) <> B.string8 "\t.\t.\t.\tGT" <>
-                U.foldr ((<>) . B.byteString . (V.!) gts . fromIntegral) mempty v_calls <>
-                B.char8 '\n'
+        -- are ref only, or the other way around.  Any of the set of
+        -- variants is fine, we print all.
+        when (any is_good vs) $
+            forM_ vs $ \Variant{..} ->
+                B.hPutBuilder stdout $
+                    B.byteString (chrs !! v_chr) <> B.char8 '\t' <>
+                    B.intDec (v_pos+1) <> B.string8 "\t.\t" <>
+                    B.char8 (toUpper v_ref) <> B.char8 '\t' <>
+                    B.char8 (toUpper v_alt) <> B.string8 "\t.\t.\t.\tGT" <>
+                    U.foldr ((<>) . B.byteString . (V.!) gts . fromIntegral) mempty v_calls <>
+                    B.char8 '\n'
   where
+    is_good Variant{..} = is_ti && defnd && (adda || daad)
+      where
+        c1    = v_calls U.! 0
+        c2    = v_calls U.! 1
+        c3    = v_calls U.! 2
+        cs    = U.drop 3 v_calls
+        is_ti = is_transversion (toUpper v_ref) (toUpper v_alt)
+
+        adda  = U.all (not . isRef) cs && isRef c2 && isRef c3 && isAlt c1
+        daad  = U.all (not . isAlt) cs && isAlt c2 && isAlt c3 && isRef c1
+        defnd = U.length (U.filter (== 0) cs) <= 3
+
     is_transversion 'C' 'T' = False
     is_transversion 'T' 'C' = False
     is_transversion 'G' 'A' = False
