@@ -6,6 +6,7 @@ module Bamin where
 
 import BasePrelude
 import Data.ByteString.Builder      ( hPutBuilder )
+import Data.ByteString.Internal     ( c2w )
 import Foreign.C
 import Foreign.Ptr                  ( Ptr, plusPtr )
 import Foreign.Marshal.Array        ( allocaArray )
@@ -14,29 +15,30 @@ import Foreign.Storable
 import System.Directory             ( renameFile )
 import System.Console.GetOpt
 import System.IO
-import System.Random                ( getStdRandom, next )
+import System.Random                ( StdGen, newStdGen, next )
 
 import qualified Data.ByteString.Unsafe as B
 import qualified Data.ByteString.Lazy as L
 import qualified Data.Vector.Unboxed as U
+import qualified Data.Vector.Unboxed.Mutable as U ( IOVector, new, read, write )
 
 import Stretch
 import Util
 
 data Pick = Ostrich | Artificial | Ignore_T | Ignore_A | Ignore_C | Ignore_G
-          | ArtificialIgnore | Stranded | UDG | Kay
-          | ArtificialKay
+          | ArtificialIgnore | Stranded | UDG | Kay | Mateja
+          | ArtificialKay | ArtificialMateja
   deriving Show
 
 data ConfBam = ConfBam {
-    conf_bam_output :: FilePath,
+    conf_bam_output    :: FilePath,
     conf_bam_reference :: FilePath,
-    conf_pick :: Pick,
-    conf_min_qual :: Int,
-    conf_min_mapq :: Int,
+    conf_pick          :: Pick,
+    conf_min_qual      :: Int,
+    conf_min_mapq      :: Int,
     conf_ignore_indels :: Bool,
-    conf_snip :: Int,
-    conf_snap :: Int }
+    conf_snip          :: Int,
+    conf_snap          :: Int }
   deriving Show
 
 conf_bam0 :: ConfBam
@@ -44,36 +46,30 @@ conf_bam0 = ConfBam (error "no output file specified") (error "no reference file
 
 opts_bam :: [ OptDescr ( ConfBam -> IO ConfBam ) ]
 opts_bam =
-    [ Option "o" ["output"]      (ReqArg set_output "FILE") "Write output to FILE (.hef)"
-    , Option "r" ["reference"]      (ReqArg set_ref "FILE") "Read reference from FILE (.fa)"
-    , Option "m" ["min-qual"]   (ReqArg set_minqual "QUAL") "Discard bases below quality QUAL"
-    , Option "q" ["min-mapq"]   (ReqArg set_minmapq "QUAL") "Discard reads below mapq QUAL"
-    , Option [ ] ["deaminate"]        (NoArg set_deaminate) "Artificially deaminate"
-    , Option [ ] ["ignore-t"]         (NoArg  set_ignore_t) "Ignore T on forward strand"
-    , Option [ ] ["ignore-a"]         (NoArg  set_ignore_a) "Ignore A on forward strand"
-    , Option [ ] ["ignore-c"]         (NoArg  set_ignore_c) "Ignore C on forward strand"
-    , Option [ ] ["ignore-g"]         (NoArg  set_ignore_g) "Ignore G on forward strand"
-    , Option [ ] ["deaminate-ignore-t"] (NoArg set_deamign) "Artificially deaminate, then ignore T"
-    , Option [ ] ["stranded"]          (NoArg set_stranded) "Call only G&A on forward strand"
-    , Option [ ] ["udg"]                    (NoArg set_udg) "Simulate UDG treatment"
-    , Option [ ] ["kay"]                    (NoArg set_kay) "Ts become Ns"
-    , Option [ ] ["deaminate-kay"]      (NoArg set_deamkay) "Artificialle deaminate, then Ts to Ns"
-    , Option [ ] ["snip"]           (ReqArg set_snip "NUM") "Ignore the first NUM bases in each aread"
-    , Option [ ] ["snap"]           (ReqArg set_snap "NUM") "Ignore the last NUM bases in each aread"
-    , Option "c" ["contiguous"]          (NoArg set_contig) "Use only reads that align without indels" ]
+    [ Option "o" ["output"]             (ReqArg set_output  "FILE") "Write output to FILE (.hef)"
+    , Option "r" ["reference"]          (ReqArg set_ref     "FILE") "Read reference from FILE (.fa)"
+    , Option "m" ["min-qual"]           (ReqArg set_minqual "QUAL") "Discard bases below quality QUAL"
+    , Option "q" ["min-mapq"]           (ReqArg set_minmapq "QUAL") "Discard reads below mapq QUAL"
+    , Option [ ] ["deaminate"]          (set_pick       Artificial) "Artificially deaminate"
+    , Option [ ] ["ignore-t"]           (set_pick         Ignore_T) "Ignore T on forward strand"
+    , Option [ ] ["ignore-a"]           (set_pick         Ignore_A) "Ignore A on forward strand"
+    , Option [ ] ["ignore-c"]           (set_pick         Ignore_C) "Ignore C on forward strand"
+    , Option [ ] ["ignore-g"]           (set_pick         Ignore_G) "Ignore G on forward strand"
+    , Option [ ] ["deaminate-ignore-t"] (set_pick ArtificialIgnore) "Artificially deaminate, then ignore T"
+    , Option [ ] ["stranded"]           (set_pick         Stranded) "Call only G&A on forward strand"
+    , Option [ ] ["udg"]                (set_pick              UDG) "Simulate UDG treatment"
+    , Option [ ] ["kay"]                (set_pick              Kay) "Ts become Ns"
+    , Option [ ] ["deaminate-kay"]      (set_pick    ArtificialKay) "Artificially deaminate, then --kay"
+    , Option [ ] ["mateja"]             (set_pick           Mateja) "See man page"
+    , Option [ ] ["deaminate-mateja"]   (set_pick ArtificialMateja) "Artificially deaminate, then --mateja"
+    , Option [ ] ["snip"]               (ReqArg set_snip     "NUM") "Ignore the first NUM bases in each aread"
+    , Option [ ] ["snap"]               (ReqArg set_snap     "NUM") "Ignore the last NUM bases in each aread"
+    , Option "c" ["contiguous"]         (NoArg          set_contig) "Use only reads that align without indels" ]
   where
+    set_pick p = NoArg (\c -> return $ c { conf_pick = p })
+
     set_output  a c = return $ c { conf_bam_output    = a }
     set_ref     a c = return $ c { conf_bam_reference = a }
-    set_deaminate c = return $ c { conf_pick = Artificial }
-    set_ignore_t  c = return $ c { conf_pick = Ignore_T }
-    set_ignore_a  c = return $ c { conf_pick = Ignore_A }
-    set_ignore_c  c = return $ c { conf_pick = Ignore_C }
-    set_ignore_g  c = return $ c { conf_pick = Ignore_G }
-    set_deamign   c = return $ c { conf_pick = ArtificialIgnore }
-    set_stranded  c = return $ c { conf_pick = Stranded }
-    set_udg       c = return $ c { conf_pick = UDG }
-    set_kay       c = return $ c { conf_pick = Kay }
-    set_deamkay   c = return $ c { conf_pick = ArtificialKay }
     set_contig    c = return $ c { conf_ignore_indels = True }
 
     set_minqual a c = readIO a >>= \b -> return $ c { conf_min_qual = b }
@@ -87,8 +83,10 @@ main_bam args = do
     ( bams, cfg@ConfBam{..} ) <- parseOpts True conf_bam0 (mk_opts "bamin" "[bam-file...]" opts_bam) args
     (_,ref) <- readReference conf_bam_reference
 
+    rnd_gen <- newStdGen
     withFile (conf_bam_output ++ "~") WriteMode        $ \hdl ->
         hPutBuilder hdl . encode_hap . importPile ref
+                . sample_piles rnd_gen conf_pick ref
                 . progress conf_bam_output . concat
                 =<< mapM (htsPileup cfg) bams
     renameFile (conf_bam_output ++ "~") conf_bam_output
@@ -104,14 +102,34 @@ progress fp = go 0 0
                 return $ v : go (unRefseq (v_refseq v)) (v_pos v) vs
         | otherwise =  v : go rs po vs
 
--- Our varcall: position, base, and counter for the rnd. sampling
-data Var0 = Var0 { v_refseq :: !Refseq
-                 , v_pos    :: !Int
-                 , v_call   :: !NucCode }
+-- Our varcall: position, base, and counters for the rnd. sampling
+data Var a = Var { v_refseq  :: !Refseq
+                 , v_pos     :: !Int
+                 , v_call    :: a }
     deriving Show
 
--- Hrm.  Need reference sequence.
-importPile :: Reference -> [ Var0 ] -> Stretch
+type Var0 = Var (U.Vector Int)
+type Var1 = Var NucCode
+
+sample_piles :: StdGen -> Pick -> Reference -> [ Var0 ] -> [ Var1 ]
+sample_piles g0 pick (Reference cs0) = nextChrom g0 cs0 (Refseq 0)
+  where
+    nextChrom _ [    ]  _ = const []
+    nextChrom g (c:cs) rs = generic g cs c rs 0
+
+    generic _  _ _ !_     _ [          ]     = []
+    generic g cs c !rs !pos (var1:mvars)
+        | rs /= v_refseq var1 = nextChrom g cs (succ rs) (var1:mvars)
+        | L.null c' =                        generic g   cs c' rs (v_pos var1) mvars
+        | otherwise = var1 { v_call = nc } : generic g'' cs c' rs (v_pos var1) mvars
+      where
+        c' = L.drop (fromIntegral $ v_pos var1 - pos) c
+        (cc, g') = post_collect (L.head c') pick (v_call var1) g
+        (nc, g'') = sample_from cc g'
+
+
+
+importPile :: Reference -> [ Var1 ] -> Stretch
 importPile (Reference cs0) = nextChrom cs0 (Refseq 0)
   where
     nextChrom [    ]  _ = const $ Break Done
@@ -214,32 +232,41 @@ htsPileup cfg fp = do
                else do
                    rs <- Refseq . fromIntegral <$> peek ptid
                    po <-          fromIntegral <$> peek ppos
-                   nuc <- foldVec po vec (fromIntegral n_plp) 0 (U.replicate 6 0)
-                   return $ Just $ Var0 rs po nuc
+                   nuc <- foldVec po vec (fromIntegral n_plp) 0 =<< U.new 8
+                   return $ Just $ Var rs po nuc
 
     foldVec po !p !n !i !acc
-        | n == i = sample_from acc
-        | otherwise = do c <- peekElemOff p i
-                         maybe_count cfg acc c
-                            >>= foldVec po p n (succ i)
+        | n /= i = do c <- peekElemOff p i
+                      maybe_count cfg acc c
+                      foldVec po p n (succ i) acc
+
+        | otherwise = U.freeze acc
 
 
-maybe_count :: ConfBam -> U.Vector Int -> CUInt -> IO (U.Vector Int)
+-- | Filters for the various cutoffs, then counts the base.  Updates a
+-- vector of eight counts:  forward ACGT, reverse ACGT.
+maybe_count :: ConfBam -> U.IOVector Int -> CUInt -> IO ()
 maybe_count ConfBam{..} counts c = do
     let b_qual =        fromIntegral $ c `shiftR`  0 .&. 0x7F
         b_posn =        fromIntegral $ c `shiftR` 12 .&. 0x3FF
         b_rlen =        fromIntegral $ c `shiftR` 22 .&. 0x3FF
         b_revd =                       c .&. 0x80 /= 0
+        -- 0,1,2,3 are A,C,G,T.  4 is something we want to ignore.
         b_call =                 case  c `shiftR`  8 .&. 0xF  of
                               b | b == 1    -> 0
                                 | b == 2    -> 1
                                 | b == 4    -> 2
                                 | b == 8    -> 3
-                                | otherwise -> 5
-            -- 0,1,2,3 are A,C,G,T.  4 is an N we potentially want to
-            -- call (lunacy...).  5 is something we want to ignore.
+                                | otherwise -> 4
+        ix = b_call + if b_revd then 4 else 0
 
-    dam <- (==) 0 . (`mod` 50) <$> getStdRandom next
+    when ( and [ b_qual >= conf_min_qual
+               , b_posn >= conf_snip
+               , b_posn <= b_rlen - conf_snap
+               , b_call < 4 ] )
+         ( U.read counts ix >>= U.write counts ix . succ )
+
+    {- dam <- (==) 0 . (`mod` 50) <$> getStdRandom next
 
     let nc = case conf_pick of
             _ | b_qual < conf_min_qual      -> 5
@@ -306,29 +333,99 @@ maybe_count ConfBam{..} counts c = do
                           | b_call == 1 -> if not b_revd && dam then 4 else 1   -- C
                           | b_call == 2 -> if     b_revd && dam then 4 else 2   -- G
                           | b_call == 3 -> if not b_revd        then 4 else 3   -- T
-                          | otherwise   ->                           5
+                          | otherwise   ->                           5 -}
 
 
-    return $ counts U.// [(nc, succ $ counts U.! nc)]
+    -- return $ counts U.// [(nc, succ $ counts U.! nc)]
+
+-- | Let's say we count bases A,C,G,T (not N, it's unneeded), separately
+-- for the strands.  So we get 8 numbers as input.  Depending on the
+-- sampling scheme, we now modify the counts into five (this time *with*
+-- N) effective counts, then sample.
+--
+-- XXX  Argh, this doesn't work:  We don't have the reference allele.
+-- So we need to count, put the eight counts into the Var0 record, zip
+-- with the reference and *then* postprocess and sample.
+post_collect :: Word8 -> Pick -> U.Vector Int -> StdGen -> (U.Vector Int, StdGen)
+post_collect ref pp vv gen0 = ( U.fromListN 5 $ go pp, gen2 )
+  where
+    [a,c,g,t,a',c',g',t'] = U.toList vv
+
+    (dc, gen1) = ifrac 50 c gen0
+    (dg, gen2) = ifrac 50 g gen1
+
+    -- Integer fraction.  ifrac x f returns either floor(x/f) or ceil
+    -- (x/f) such that E(ifrac x f) == x/f.
+    ifrac f x g0 = let (p,g1) = next g0
+                       (y, r) = x `divMod` f
+                   in ( y + fromEnum (p `mod` f < r), g1 )
+
+    -- Ostrich selection method:  pick blindly
+    go Ostrich = [ a+a', c+c', g+g', t+t', 0 ]
+
+    -- Ostrich selection method, also deaminates artificially:  2%
+    -- of the time, a C becomes a T instead.  Likewise, 2% of the
+    -- time, a G in a reversed-alignment becomes an A.
+    go Artificial = [ a+a'+dg, c+c'-dc, g+g'-dg, t+t'+dc, 0 ]
+
+    -- "Deal" with deamination by ignoring possibly broken bases:  T on
+    -- forward, A on backward strand.
+    go Ignore_T = [ a, c+c', g+g', t', 0 ]
+
+    -- Same as Ignore_T, in case someone wants a control experiment...
+    go Ignore_A = [ a', c+c', g+g', t, 0 ]
+    go Ignore_C = [ a+a', c', g, t+t', 0 ]
+    go Ignore_G = [ a+a', c, g', t+t', 0 ]
+
+    -- Introduce artificial deamination, then "deal" with it by ignoring
+    -- damaged bases.
+    go ArtificialIgnore = [ a, c+c'-dc, g+g'-dg, t', 0 ]
+
+    -- Call only G and A on the forward strand, C and T on the reverse
+    -- strand.  This doesn't need to be combined with simulation code:
+    -- Whenever a C could turn into a T, we ignore it either way.
+    go Stranded = [ a, c', g, t', 0 ]
+
+    -- Simulated UDG treatment: 2% of Cs on forward strand are lost, and
+    -- so are 2% of Gs on reverse strand.
+    go UDG = [ a+a', c+c'-dc, g+g'-dg, t+t', 0 ]
+
+    -- If we pick a T, we turn it into an N.
+    go Kay           = [ a, c+c',    g+g',    t', t+a'       ]
+    go ArtificialKay = [ a, c+c'-dc, g+g'-dg, t', t+a'+dc+dg ]
+
+    -- Mateja's method depends on the reference allele:  if the
+    -- reference is C and we see at least one (forward) T, we sample
+    -- from reverse-strand reads only.  Same for G/A.
+    go Mateja | isC && t  > 0 = [ a',     c',   g',   t', 0 ]
+              | isG && a' > 0 = [   a,  c,    g,    t,    0 ]
+              | otherwise     = [ a+a', c+c', g+g', t+t', 0 ]
+
+    go ArtificialMateja | isC && t +dc > 0 = [   a',   c',   g',   t', 0 ]
+                        | isG && a'+dg > 0 = [ a,    c,    g,    t,    0 ]
+                        | otherwise        = [ a+a', c+c', g+g', t+t', 0 ]
+
+    isC = ref == c2w 'C' || ref == c2w 'c'
+    isG = ref == c2w 'G' || ref == c2w 'g'
 
 -- | Takes a random sample from prepared counts.
-sample_from :: U.Vector Int -> IO NucCode
-sample_from vec | U.length vec == 6 = do
+sample_from :: U.Vector Int -> StdGen -> (NucCode, StdGen)
+sample_from vec gen | U.length vec == 5 || U.length vec == 6 = do
     let s = U.unsafeIndex vec 0 + U.unsafeIndex vec 1 + U.unsafeIndex vec 2
                 + U.unsafeIndex vec 3 + U.unsafeIndex vec 4
     if s == 0
-        then return (NucCode 0)
-        else do
-            i <- (`mod` s) <$> getStdRandom next
-            return . NucCode $ case () of
-                _ | i < U.unsafeIndex vec 0                        -> 11
-                  | i < U.unsafeIndex vec 0 + U.unsafeIndex vec 1  -> 12
-                  | i < U.unsafeIndex vec 0 + U.unsafeIndex vec 1
-                      + U.unsafeIndex vec 2                        -> 13
-                  | i < U.unsafeIndex vec 0 + U.unsafeIndex vec 1
-                      + U.unsafeIndex vec 2 + U.unsafeIndex vec 3  -> 14
-                  | otherwise                                      ->  0
-
+        then (NucCode 0, gen)
+        else let (ii, gen') = next gen
+                 i = ii `mod` s
+                 nn = case () of
+                        _ | i < U.unsafeIndex vec 0                        -> 11
+                          | i < U.unsafeIndex vec 0 + U.unsafeIndex vec 1  -> 12
+                          | i < U.unsafeIndex vec 0 + U.unsafeIndex vec 1
+                              + U.unsafeIndex vec 2                        -> 13
+                          | i < U.unsafeIndex vec 0 + U.unsafeIndex vec 1
+                              + U.unsafeIndex vec 2 + U.unsafeIndex vec 3  -> 14
+                          | otherwise                                      ->  0
+             in (NucCode nn, gen')
 
 data PlpAux
 
