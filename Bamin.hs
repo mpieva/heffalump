@@ -26,8 +26,8 @@ import Stretch
 import Util
 
 data Pick = Ostrich | Artificial | Ignore_T | Ignore_A | Ignore_C | Ignore_G
-          | ArtificialIgnore | Stranded | UDG | Kay | Mateja
-          | ArtificialKay | ArtificialMateja
+          | ArtificialIgnore | Stranded | UDG | Kay | Mateja | Mateja2
+          | ArtificialKay | ArtificialMateja | ArtificialMateja2
   deriving Show
 
 data ConfBam = ConfBam {
@@ -61,7 +61,9 @@ opts_bam =
     , Option [ ] ["kay"]                (set_pick              Kay) "Ts become Ns"
     , Option [ ] ["deaminate-kay"]      (set_pick    ArtificialKay) "Artificially deaminate, then --kay"
     , Option [ ] ["mateja"]             (set_pick           Mateja) "See man page"
+    , Option [ ] ["mateja2"]            (set_pick          Mateja2) "See man page"
     , Option [ ] ["deaminate-mateja"]   (set_pick ArtificialMateja) "Artificially deaminate, then --mateja"
+    , Option [ ] ["deaminate-mateja2"] (set_pick ArtificialMateja2) "Artificially deaminate, then --mateja2"
     , Option [ ] ["snip"]               (ReqArg set_snip     "NUM") "Ignore the first NUM bases in each aread"
     , Option [ ] ["snap"]               (ReqArg set_snap     "NUM") "Ignore the last NUM bases in each aread"
     , Option "c" ["contiguous"]         (NoArg          set_contig) "Use only reads that align without indels" ]
@@ -404,6 +406,17 @@ post_collect ref pp vv gen0 = ( U.fromListN 5 $ go pp, gen2 )
     go ArtificialMateja | isC && t +dc > 0 = [   a',   c',   g',   t', 0 ]
                         | isG && a'+dg > 0 = [ a,    c,    g,    t,    0 ]
                         | otherwise        = [ a+a', c+c', g+g', t+t', 0 ]
+
+    -- Mateja's second method depends on the reference allele:  if the
+    -- reference is C, we ignore the forward Ts and sample from the
+    -- rest.
+    go Mateja2 | isC       = [ a+a', c+c', g+g',   t', 0 ]
+               | isG       = [ a   , c+c', g+g', t+t', 0 ]
+               | otherwise = [ a+a', c+c', g+g', t+t', 0 ]
+
+    go ArtificialMateja2 | isC       = [ a+a'   , c+c'-dc, g+g'   ,   t'   , 0 ]
+                         | isG       = [ a      , c+c'-dc, g+g'-dg, t+t'+dc, 0 ]
+                         | otherwise = [ a+a'+dg, c+c'-dc, g+g'-dg, t+t'+dc, 0 ]
 
     isC = ref == c2w 'C' || ref == c2w 'c'
     isG = ref == c2w 'G' || ref == c2w 'g'
