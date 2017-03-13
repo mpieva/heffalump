@@ -14,6 +14,7 @@ executable heffalump
   other-modules:       Bamin,
                        Bcf,
                        Eigenstrat,
+                       Emf,
                        Merge,
                        Pileup, 
                        SillyStats,
@@ -21,14 +22,17 @@ executable heffalump
                        Util,
                        VcfScan
 
-  build-depends:       base >=4.7 && <4.10,
+  build-depends:       attoparsec,
+                       base >=4.7 && <4.10,
                        base-prelude ==1.*,
                        bytestring,
+                       containers,
                        directory,
                        filepath,
                        math-functions,
                        primitive,
                        random,
+                       snappy,
                        unordered-containers,
                        vector,
                        zlib ==0.6.*

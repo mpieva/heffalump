@@ -6,7 +6,6 @@ import System.IO
 
 import qualified Data.ByteString.Builder         as B
 import qualified Data.ByteString.Char8           as B
-import qualified Data.ByteString.Lazy            as LB
 import qualified Data.ByteString.Lazy.Char8      as L
 import qualified Data.Vector                     as V
 import qualified Data.Vector.Unboxed             as U
@@ -14,6 +13,7 @@ import qualified Data.Vector.Unboxed             as U
 import Bamin
 import Bcf
 import Eigenstrat
+import Emf
 import Merge
 import SillyStats
 import Stretch
@@ -43,6 +43,7 @@ main = do
         , z "hetfa"       main_hetfa              "Import hetfa file"
         , z "bamin"       main_bam                "Import BAM file"
         , z "maf"         main_maf                "Import two-species maf"
+        , z "emf"         main_emf                "Import one genome from emf (Compara)"
         , z "patch"       main_patch              "Make a hetfa file by patching the reference"
         , z "treemix"     main_treemix            "Merge heffalumps into Treemix format"
         , z "kayvergence" main_kayvergence        "Compute Kayvergence ratios"
@@ -313,66 +314,6 @@ patchFasta hdl wd = p1
 --
 -- Note that we turn small letters into capital letters in the
 -- sequences.  Saves us from dealing with them later.
-
--- Read MAF.  We discard the header lines starting with '#'.  The rest
--- must be alignment blocks.  Each a-block must contain its own header
--- line and exactly two s-lines.  The first line must have human
--- coordinates, and the file must be sorted by human coordinates.   We
--- ignore the chromosome name.
---
--- We wish to skip about between blocks.  But sometimes blocks join
--- immediately, and then we get into trouble because 'diff' only works
--- correctly for stretches of even length.  So instead we return a new
--- data type to make that explicit.
-
-data MafStretch = Skip !Int MafStretch | Aln !L.ByteString !L.ByteString MafStretch | MafDone
-
-parseMaf :: L.ByteString -> Stretch -> Stretch
-parseMaf inp done = norm . parse1 0 $ L.lines inp
-  where
-    parse1 oldpos lns = case dropWhile (\l -> L.null l || L.all isSpace l || L.head l == '#') lns of
-        [] -> MafDone
-        (ahdr:shum:sother:lns')
-            | "a " `L.isPrefixOf` ahdr
-            , ["s", _, hpos_, _hlen, "+",  _clen, hum_seq] <- L.words shum
-            , ["s", _, _opos, _olen,   _, _oclen, oth_seq] <- L.words sother
-            , Just (hpos, "") <- L.readInt hpos_
-            , hpos >= oldpos ->
-                -- We have to deal with gaps.  Gaps in the reference can
-                -- simply be removed.  If the sample is gapped, we want
-                -- to encode an N.  Thankfully, that's precisely what
-                -- diff already does when it sees a gap.
-                let (ref', smp') = LB.unzip $ map (up *** up) $ filter ((/=) 45 . fst) $ LB.zip hum_seq oth_seq
-                in Skip (hpos - oldpos) $ Aln ref' smp' $
-                   parse1 (fromIntegral (L.length ref') + hpos) lns'
-
-        ls -> error $ "WTF?! (" ++ show oldpos ++ ") near \n" ++ L.unpack (L.unlines $ take 3 ls)
-
-    -- remove degenerate stretches
-    norm :: MafStretch -> Stretch
-    norm (Skip  0 ms)            = norm ms
-    norm (Aln r _ ms) | L.null r = norm ms
-
-    -- join adjacent similar stretches
-    norm (Skip n1   (Skip n2   ms)) = norm $ Skip (n1+n2) ms
-    norm (Aln r1 s1 (Aln r2 s2 ms)) = norm $ Aln (L.append r1 r2) (L.append s1 s2) ms
-
-    -- emit 'Skip' or 'Aln', but transfer an N to make the length even
-    norm (Skip n1 (Aln ref smp ms))
-        | L.null ref = norm $ Skip n1 ms
-        | even n1    = Ns (fromIntegral $ n1 `div` 2) $ norm $ Aln             ref              smp  ms
-        | n1 == 1    =                                  norm $ Aln (L.cons 'X' ref) (L.cons 'N' smp) ms
-        | otherwise  = Ns (fromIntegral $ n1 `div` 2) $ norm $ Aln (L.cons 'X' ref) (L.cons 'N' smp) ms
-
-    norm (Aln r1 s1 (Skip n2 ms))
-        | n2 == 0            = norm $ Aln r1 s1 ms
-        | even (L.length r1) = diff         r1              s1      (norm $ Skip       n2  ms)
-        | otherwise          = diff (L.snoc r1 'X') (L.snoc s1 'N') (norm $ Skip (pred n2) ms)
-
-    -- anything else runs into the end
-    norm (Aln r1 s1 MafDone) = diff r1 s1 done
-    norm (Skip n1   MafDone) = Ns (fromIntegral $ succ n1 `div` 2) done
-    norm            MafDone  = done
 
 
 -- Reads and parses a VCF.  We assume one VCF per chromosome, so we go
