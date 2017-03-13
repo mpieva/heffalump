@@ -27,6 +27,7 @@ executable heffalump
                        base-prelude ==1.*,
                        bytestring,
                        containers,
+                       data-fix,
                        directory,
                        filepath,
                        math-functions,
