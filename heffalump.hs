@@ -14,6 +14,7 @@ import Bamin
 import Bcf
 import Eigenstrat
 import Emf
+import qualified Lump
 import Merge
 import SillyStats
 import Stretch

@@ -15,6 +15,7 @@ executable heffalump
                        Bcf,
                        Eigenstrat,
                        Emf,
+                       Lump,
                        Merge,
                        Pileup, 
                        SillyStats,
