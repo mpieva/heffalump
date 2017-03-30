@@ -25,15 +25,15 @@ import qualified Data.Vector.Unboxed.Mutable as U ( IOVector, new, read, write )
 import Stretch
 import Util
 
-data Pick = Ostrich | Artificial | Ignore_T | Ignore_A | Ignore_C | Ignore_G
-          | ArtificialIgnore | Stranded | UDG | Kay | Mateja | Mateja2
-          | ArtificialKay | ArtificialMateja | ArtificialMateja2
+data Pick = Ostrich | Ignore_T | Ignore_A | Ignore_C | Ignore_G
+          | Stranded | UDG | Kay | Mateja | Mateja2
   deriving Show
 
 data ConfBam = ConfBam {
     conf_bam_output    :: FilePath,
     conf_bam_reference :: FilePath,
     conf_pick          :: Pick,
+    conf_deaminate     :: Bool,
     conf_min_qual      :: Int,
     conf_min_mapq      :: Int,
     conf_ignore_indels :: Bool,
@@ -42,7 +42,7 @@ data ConfBam = ConfBam {
   deriving Show
 
 conf_bam0 :: ConfBam
-conf_bam0 = ConfBam (error "no output file specified") (error "no reference file specified") Ostrich 0 0 False 0 0
+conf_bam0 = ConfBam (error "no output file specified") (error "no reference file specified") Ostrich False 0 0 False 0 0
 
 opts_bam :: [ OptDescr ( ConfBam -> IO ConfBam ) ]
 opts_bam =
@@ -50,20 +50,16 @@ opts_bam =
     , Option "r" ["reference"]          (ReqArg set_ref     "FILE") "Read reference from FILE (.fa)"
     , Option "m" ["min-qual"]           (ReqArg set_minqual "QUAL") "Discard bases below quality QUAL"
     , Option "q" ["min-mapq"]           (ReqArg set_minmapq "QUAL") "Discard reads below mapq QUAL"
-    , Option [ ] ["deaminate"]          (set_pick       Artificial) "Artificially deaminate"
+    , Option [ ] ["deaminate"]          (NoArg       set_deaminate) "Artificially deaminate"
     , Option [ ] ["ignore-t"]           (set_pick         Ignore_T) "Ignore T on forward strand"
     , Option [ ] ["ignore-a"]           (set_pick         Ignore_A) "Ignore A on forward strand"
     , Option [ ] ["ignore-c"]           (set_pick         Ignore_C) "Ignore C on forward strand"
     , Option [ ] ["ignore-g"]           (set_pick         Ignore_G) "Ignore G on forward strand"
-    , Option [ ] ["deaminate-ignore-t"] (set_pick ArtificialIgnore) "Artificially deaminate, then ignore T"
     , Option [ ] ["stranded"]           (set_pick         Stranded) "Call only G&A on forward strand"
     , Option [ ] ["udg"]                (set_pick              UDG) "Simulate UDG treatment"
     , Option [ ] ["kay"]                (set_pick              Kay) "Ts become Ns"
-    , Option [ ] ["deaminate-kay"]      (set_pick    ArtificialKay) "Artificially deaminate, then --kay"
     , Option [ ] ["mateja"]             (set_pick           Mateja) "See man page"
     , Option [ ] ["mateja2"]            (set_pick          Mateja2) "See man page"
-    , Option [ ] ["deaminate-mateja"]   (set_pick ArtificialMateja) "Artificially deaminate, then --mateja"
-    , Option [ ] ["deaminate-mateja2"] (set_pick ArtificialMateja2) "Artificially deaminate, then --mateja2"
     , Option [ ] ["snip"]               (ReqArg set_snip     "NUM") "Ignore the first NUM bases in each aread"
     , Option [ ] ["snap"]               (ReqArg set_snap     "NUM") "Ignore the last NUM bases in each aread"
     , Option "c" ["contiguous"]         (NoArg          set_contig) "Use only reads that align without indels" ]
@@ -73,6 +69,7 @@ opts_bam =
     set_output  a c = return $ c { conf_bam_output    = a }
     set_ref     a c = return $ c { conf_bam_reference = a }
     set_contig    c = return $ c { conf_ignore_indels = True }
+    set_deaminate c = return $ c { conf_deaminate     = True }
 
     set_minqual a c = readIO a >>= \b -> return $ c { conf_min_qual = b }
     set_minmapq a c = readIO a >>= \b -> return $ c { conf_min_mapq = b }
@@ -88,7 +85,7 @@ main_bam args = do
     rnd_gen <- newStdGen
     withFile (conf_bam_output ++ "~") WriteMode        $ \hdl ->
         hPutBuilder hdl . encode_hap . importPile ref
-                . sample_piles rnd_gen conf_pick ref
+                . sample_piles rnd_gen conf_deaminate conf_pick ref
                 . progress conf_bam_output . concat
                 =<< mapM (htsPileup cfg) bams
     renameFile (conf_bam_output ++ "~") conf_bam_output
@@ -113,8 +110,8 @@ data Var a = Var { v_refseq  :: !Refseq
 type Var0 = Var (U.Vector Int)
 type Var1 = Var NucCode
 
-sample_piles :: StdGen -> Pick -> Reference -> [ Var0 ] -> [ Var1 ]
-sample_piles g0 pick (Reference cs0) = nextChrom g0 cs0 (Refseq 0)
+sample_piles :: StdGen -> Bool -> Pick -> Reference -> [ Var0 ] -> [ Var1 ]
+sample_piles g0 deam pick (Reference cs0) = nextChrom g0 cs0 (Refseq 0)
   where
     nextChrom _ [    ]  _ = const []
     nextChrom g (c:cs) rs = generic g cs c rs 0
@@ -126,7 +123,8 @@ sample_piles g0 pick (Reference cs0) = nextChrom g0 cs0 (Refseq 0)
         | otherwise = var1 { v_call = nc } : generic g'' cs c' rs (v_pos var1) mvars
       where
         c' = L.drop (fromIntegral $ v_pos var1 - pos) c
-        (cc, g') = post_collect (L.head c') pick (v_call var1) g
+        (vv, g')  = if deam then deaminate (v_call var1) g else (v_call var1, g)
+        cc        = post_collect (L.head c') pick vv
         (nc, g'') = sample_from cc g'
 
 
@@ -234,7 +232,7 @@ htsPileup cfg fp = do
                else do
                    rs <- Refseq . fromIntegral <$> peek ptid
                    po <-          fromIntegral <$> peek ppos
-                   nuc <- foldVec po vec (fromIntegral n_plp) 0 =<< U.new 8
+                   nuc <- foldVec po vec (fromIntegral n_plp) 0 =<< U.new 10
                    return $ Just $ Var rs po nuc
 
     foldVec po !p !n !i !acc
@@ -268,158 +266,76 @@ maybe_count ConfBam{..} counts c = do
                , b_call < 4 ] )
          ( U.read counts ix >>= U.write counts ix . succ )
 
-    {- dam <- (==) 0 . (`mod` 50) <$> getStdRandom next
-
-    let nc = case conf_pick of
-            _ | b_qual < conf_min_qual      -> 5
-              | b_posn < conf_snip          -> 5
-              | b_posn > b_rlen - conf_snap -> 5
-
-            -- Ostrich selection method:  pick blindly
-            Ostrich -> b_call
-
-            -- Ostrich selection method, also deaminates artificially:  2%
-            -- of the time, a C becomes a T instead.  Likewise, 2% of the
-            -- time, a G in a reversed-alignment becomes an A.
-            Artificial | b_call == 1 && not b_revd && dam -> 3      -- C, !rev
-                       | b_call == 2 &&     b_revd && dam -> 0      -- G, rev
-                       | otherwise                        -> b_call
-
-            -- "Deal" with deamination by ignoring possibly broken bases:  T
-            -- on forward, A on backward strand.
-            Ignore_T | b_call == 0 &&     b_revd -> 5         -- A, reverse
-                     | b_call == 3 && not b_revd -> 5         -- T, forward
-                     | otherwise                 -> b_call
-
-            -- Same as Ignore_T, in case someone wants a control experiment...
-            Ignore_A | b_call == 3 &&     b_revd -> 5
-                     | b_call == 0 && not b_revd -> 5
-                     | otherwise                 -> b_call
-            Ignore_C | b_call == 2 &&     b_revd -> 5
-                     | b_call == 1 && not b_revd -> 5
-                     | otherwise                 -> b_call
-            Ignore_G | b_call == 1 &&     b_revd -> 5
-                     | b_call == 2 && not b_revd -> 5
-                     | otherwise                 -> b_call
-
-            -- Introduce artificial deamination, then "deal" with it by
-            -- ignoring damaged bases.
-            ArtificialIgnore | b_call == 0 -> if     b_revd        then 5 else 0   -- A
-                             | b_call == 1 -> if not b_revd && dam then 5 else 1   -- C
-                             | b_call == 2 -> if     b_revd && dam then 5 else 2   -- G
-                             | b_call == 3 -> if not b_revd        then 5 else 3   -- T
-                             | otherwise   ->                           5
-
-            -- Call only G and A on the forward strand, C and T on the
-            -- reverse strand.  This doesn't need to be combined with
-            -- simulation code: Whenever a C could turn into a T, we ignore
-            -- it either way.
-            Stranded | b_call == 0 -> if b_revd then 5 else 0             -- A
-                     | b_call == 1 -> if b_revd then 1 else 5             -- C
-                     | b_call == 2 -> if b_revd then 5 else 2             -- G
-                     | b_call == 3 -> if b_revd then 3 else 5             -- T
-                     | otherwise   -> 5
-
-            -- Simulated UDG treatment: 2% of Cs on forward strand are
-            -- lost, and so are 2% of Gs on reverse strand.
-            UDG | b_call == 1 && not b_revd && dam -> 5      -- C, !rev
-                | b_call == 2 &&     b_revd && dam -> 5      -- G, rev
-                | otherwise                        -> b_call
-
-            -- If we pick a T, we turn it into an N.
-            Kay | b_call == 0 &&     b_revd -> 4         -- A, reverse
-                | b_call == 3 && not b_revd -> 4         -- T, forward
-                | otherwise                 -> b_call
-
-            ArtificialKay | b_call == 0 -> if     b_revd        then 4 else 0   -- A
-                          | b_call == 1 -> if not b_revd && dam then 4 else 1   -- C
-                          | b_call == 2 -> if     b_revd && dam then 4 else 2   -- G
-                          | b_call == 3 -> if not b_revd        then 4 else 3   -- T
-                          | otherwise   ->                           5 -}
-
-
-    -- return $ counts U.// [(nc, succ $ counts U.! nc)]
 
 -- | Let's say we count bases A,C,G,T (not N, it's unneeded), separately
--- for the strands.  So we get 8 numbers as input.  Depending on the
--- sampling scheme, we now modify the counts into five (this time *with*
--- N) effective counts, then sample.
---
--- XXX  Argh, this doesn't work:  We don't have the reference allele.
--- So we need to count, put the eight counts into the Var0 record, zip
--- with the reference and *then* postprocess and sample.
-post_collect :: Word8 -> Pick -> U.Vector Int -> StdGen -> (U.Vector Int, StdGen)
-post_collect ref pp vv gen0 = ( U.fromListN 5 $ go pp, gen2 )
+-- for the strands.  So we get 8 numbers as input.  We modify the last
+-- two, which will become uracil(!) counts.
+-- to apply deamination.
+deaminate :: U.Vector Int -> StdGen -> (U.Vector Int, StdGen)
+deaminate vv gen0 = ( vv', gen2 )
   where
-    [a,c,g,t,a',c',g',t'] = U.toList vv
+    [a,c,g,t,a',c',g',t',0,0] = U.toList vv
+    vv' = U.fromListN 8 [a,c-dc,g,t,a',c',g'-dg,t',dc,dg]
 
-    (dc, gen1) = ifrac 50 c gen0
-    (dg, gen2) = ifrac 50 g gen1
+    (dc, gen1) = ifrac 50 c  gen0
+    (dg, gen2) = ifrac 50 g' gen1
 
-    -- Integer fraction.  ifrac x f returns either floor(x/f) or ceil
-    -- (x/f) such that E(ifrac x f) == x/f.
+    -- Integer fraction.  ifrac x f returns either floor(x/f) or
+    -- ceil (x/f) such that E(ifrac x f) == x/f.
     ifrac f x g0 = let (p,g1) = next g0
                        (y, r) = x `divMod` f
                    in ( y + fromEnum (p `mod` f < r), g1 )
 
-    -- Ostrich selection method:  pick blindly
-    go Ostrich = [ a+a', c+c', g+g', t+t', 0 ]
 
-    -- Ostrich selection method, also deaminates artificially:  2%
-    -- of the time, a C becomes a T instead.  Likewise, 2% of the
-    -- time, a G in a reversed-alignment becomes an A.
-    go Artificial = [ a+a'+dg, c+c'-dc, g+g'-dg, t+t'+dc, 0 ]
+
+-- | We receive modified bases here and only modify the way we count.
+-- No randomness involved here.
+post_collect :: Word8 -> Pick -> U.Vector Int -> U.Vector Int
+post_collect ref pp vv = U.fromListN 5 $ go pp
+  where
+    -- Most of the time, u acts like t and u' like a'.
+    [a,c,g,t,a',c',g',t',u,u'] = U.toList vv
+
+    -- Ostrich selection method:  pick blindly
+    go Ostrich = [ a+a'+u', c+c', g+g', t+t'+u, 0 ]
 
     -- "Deal" with deamination by ignoring possibly broken bases:  T on
     -- forward, A on backward strand.
     go Ignore_T = [ a, c+c', g+g', t', 0 ]
 
     -- Same as Ignore_T, in case someone wants a control experiment...
-    go Ignore_A = [ a', c+c', g+g', t, 0 ]
-    go Ignore_C = [ a+a', c', g, t+t', 0 ]
-    go Ignore_G = [ a+a', c, g', t+t', 0 ]
-
-    -- Introduce artificial deamination, then "deal" with it by ignoring
-    -- damaged bases.
-    go ArtificialIgnore = [ a, c+c'-dc, g+g'-dg, t', 0 ]
+    go Ignore_A = [ a'+u', c+c', g+g', t+u, 0 ]
+    go Ignore_C = [ a+a'+u', c', g, t+t'+u, 0 ]
+    go Ignore_G = [ a+a'+u', c, g', t+t'+u, 0 ]
 
     -- Call only G and A on the forward strand, C and T on the reverse
     -- strand.  This doesn't need to be combined with simulation code:
     -- Whenever a C could turn into a T, we ignore it either way.
     go Stranded = [ a, c', g, t', 0 ]
 
-    -- Simulated UDG treatment: 2% of Cs on forward strand are lost, and
-    -- so are 2% of Gs on reverse strand.
-    go UDG = [ a+a', c+c'-dc, g+g'-dg, t+t', 0 ]
+    -- Simulated UDG treatment: Uracils vanish without trace.
+    go UDG = [ a+a', c+c', g+g', t+t', 0 ]
 
     -- If we pick a T, we turn it into an N.
-    go Kay           = [ a, c+c',    g+g',    t', t+a'       ]
-    go ArtificialKay = [ a, c+c'-dc, g+g'-dg, t', t+a'+dc+dg ]
+    go Kay = [ a, c+c', g+g', t', t+a'+u'+u ]
 
     -- Mateja's method depends on the reference allele:  if the
     -- reference is C and we see at least one (forward) T, we sample
     -- from reverse-strand reads only.  Same for G/A.
-    go Mateja | isC && t  > 0 = [ a',     c',   g',   t', 0 ]
-              | isG && a' > 0 = [   a,  c,    g,    t,    0 ]
-              | otherwise     = [ a+a', c+c', g+g', t+t', 0 ]
-
-    go ArtificialMateja | isC && t +dc > 0 = [   a',   c',   g',   t', 0 ]
-                        | isG && a'+dg > 0 = [ a,    c,    g,    t,    0 ]
-                        | otherwise        = [ a+a', c+c', g+g', t+t', 0 ]
+    go Mateja | isC &&  t+u  > 0 = [ a'+u',   c',   g',   t',     0 ]
+              | isG && a'+u' > 0 = [ a,       c,    g,    t+u,    0 ]
+              | otherwise        = [ a+a'+u', c+c', g+g', t+t'+u, 0 ]
 
     -- Mateja's second method depends on the reference allele:  if the
     -- reference is C, we ignore the forward Ts and sample from the
     -- rest.
-    go Mateja2 | isC       = [ a+a', c+c', g+g',   t', 0 ]
-               | isG       = [ a   , c+c', g+g', t+t', 0 ]
-               | otherwise = [ a+a', c+c', g+g', t+t', 0 ]
-
-    go ArtificialMateja2 | isC       = [ a+a'   , c+c'-dc, g+g'   ,   t'   , 0 ]
-                         | isG       = [ a      , c+c'-dc, g+g'-dg, t+t'+dc, 0 ]
-                         | otherwise = [ a+a'+dg, c+c'-dc, g+g'-dg, t+t'+dc, 0 ]
+    go Mateja2 | isC       = [ a+a'+u', c+c', g+g', t',     0 ]
+               | isG       = [ a,       c+c', g+g', t+t'+u, 0 ]
+               | otherwise = [ a+a'+u', c+c', g+g', t+t'+u, 0 ]
 
     isC = ref == c2w 'C' || ref == c2w 'c'
     isG = ref == c2w 'G' || ref == c2w 'g'
+
 
 -- | Takes a random sample from prepared counts.
 sample_from :: U.Vector Int -> StdGen -> (NucCode, StdGen)
