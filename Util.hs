@@ -45,7 +45,7 @@ readReference fp = (id *** Reference) . unzip . parseFasta chroms . L.lines . de
 
 -- Samples in FastA format are treated as diploid.
 readSampleFa :: FilePath -> IO [L.ByteString]
-readSampleFa fp = map (B.map up . snd) . parseFasta chroms . L.lines . decomp <$> L.readFile fp
+readSampleFa fp = map snd . parseFasta chroms . L.lines . decomp <$> L.readFile fp
 
 parseFasta :: [L.ByteString] -> [L.ByteString] -> [(S.ByteString, L.ByteString)]
 parseFasta [    ]  _ = []

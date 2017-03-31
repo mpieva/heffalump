@@ -9,6 +9,7 @@ module Stretch (
     encode_mix,
     decode,
     diff,
+    diff2,
     Frag(..),
     patch,
     code,
@@ -26,6 +27,7 @@ import qualified Data.ByteString.Lazy           as LB
 import qualified Data.ByteString.Unsafe         as B
 
 import Util ( low )
+import NewRef
 
 -- ^ A genome is encoded by taking the difference to the reference and
 -- run-length coding the result.
@@ -304,6 +306,77 @@ tr (NucCode w) = B.w2c . B.unsafeIndex iupac_chars . fromIntegral $ w
 -- a meaningful difference in hetfa files.  Note that correct parsing of
 -- MAF files depends on this behavior!  Also, "Q" means a match to the
 -- reference.
+diff2 :: NewRefSeq -> L.ByteString -> Stretch -> Stretch
+diff2 r0 s0 done = generic r0 s0
+  where
+    isN  c = c == 'N' || c == 'n' || c == '-'
+    eq a b = b == 'Q' || b == 'q' || low (B.c2w a) == low (B.c2w b)
+
+    -- Scan generic strings
+    generic ref smp
+        -- corner cases if the reference ends
+        | nullNRS         ref                = done
+        | nullNRS (dropNRS 1 ref) && L.null smp = Chrs         (NucCode 0) (NucCode 0) done
+        | nullNRS (dropNRS 1 ref)               = Chrs (code $ L.head smp) (NucCode 0) done
+
+        | ManyNs l ref' <- ref, l >= 2, even l  = go_n (fromIntegral $ l `div` 2) ref' (L.drop (fromIntegral l) smp)
+        | ManyNs l ref' <- ref, l >= 2, odd  l  = go_n (fromIntegral $ l `div` 2) (ManyNs 1 ref') (L.drop (fromIntegral l-1) smp)
+
+        -- corner cases if the sample ends
+        | L.null smp                        =                                        Ns (succ (lengthNRS ref) `shiftR` 1) done
+        | L.null (L.tail smp)               = Chrs (code $ L.head smp) (NucCode 0) $ Ns       (lengthNRS ref  `shiftR` 1) done
+
+        -- general case, look at two characters
+        | isN  x && isN  y = go_n  1 (dropNRS 2 ref) (L.drop 2 smp)
+        | eq u x && eq v y = go_eq 1 (dropNRS 2 ref) (L.drop 2 smp)
+        | otherwise        = Chrs (code x) (code y) $ generic (dropNRS 2 ref) (L.drop 2 smp)
+      where
+        x = L.head smp
+        y = L.head (L.tail smp)
+        Just (u,_) = unconsNRS ref
+        Just (v,_) = unconsNRS (dropNRS 1 ref)
+
+
+    -- Scan a stretch of Ns
+    go_n !n ref smp
+        -- corner cases if the reference ends
+        | nullNRS         ref                 = Ns  n    done
+        | nullNRS (dropNRS 1 ref) && L.null smp  = Ns (succ n) done
+        | nullNRS (dropNRS 1 ref) && isN x       = Ns (succ n) done
+        | nullNRS (dropNRS 1 ref)                = Ns  n $ Chrs (code x) (NucCode 0) done
+
+        -- corner cases if the sample ends
+        | L.null smp                   = Ns (succ (lengthNRS ref) `shiftR` 1 + n) done
+        | L.null (L.tail smp) && isN x = Ns (succ (lengthNRS ref) `shiftR` 1 + n) done
+        | L.null (L.tail smp)          = Ns n $ Chrs (code x) (NucCode 0) done
+
+        -- general case, look at two characters
+        | isN x && isN y = go_n (succ n) (dropNRS 2 ref) (L.drop 2 smp)
+        | otherwise      = Ns n $ generic ref smp
+      where
+        x = L.head smp
+        y = L.head (L.tail smp)
+
+    -- Scan a stretch of matches
+    go_eq !n ref smp
+        -- corner cases if the reference ends
+        | nullNRS         ref                 = Eqs n done
+        | nullNRS (dropNRS 1 ref) && L.null smp  = Eqs n $ Chrs (NucCode 0) (NucCode 0) done
+        | nullNRS (dropNRS 1 ref) && eq u x      = Eqs (succ n) done
+        | nullNRS (dropNRS 1 ref)                = Eqs n $ Chrs (code $ L.head smp) (NucCode 0) done
+
+        -- corner cases if the sample ends
+        | L.null smp || L.null (L.tail smp)  = Eqs n $ generic ref smp
+
+        -- general case, look at two characters
+        | eq u x && eq v y = go_eq (succ n) (dropNRS 2 ref) (L.drop 2 smp)
+        | otherwise        = Eqs n $ generic ref smp
+      where
+        x = L.head smp
+        y = L.head (L.tail smp)
+        Just (u,_) = unconsNRS ref
+        Just (v,_) = unconsNRS (dropNRS 1 ref)
+
 diff :: L.ByteString -> L.ByteString -> Stretch -> Stretch
 diff r0 s0 done = generic r0 s0
   where
@@ -314,8 +387,8 @@ diff r0 s0 done = generic r0 s0
     generic ref smp
         -- corner cases if the reference ends
         | L.null         ref                = done
-        | L.null (L.tail ref) && L.null smp = Chrs         (NucCode 0) (NucCode 0) done
-        | L.null (L.tail ref)               = Chrs (code $ L.head smp) (NucCode 0) done
+        | L.null (L.drop 1 ref) && L.null smp = Chrs         (NucCode 0) (NucCode 0) done
+        | L.null (L.drop 1 ref)               = Chrs (code $ L.head smp) (NucCode 0) done
 
         -- corner cases if the sample ends
         | L.null smp                        =                                        Ns (succ (L.length ref) `shiftR` 1) done
@@ -329,16 +402,16 @@ diff r0 s0 done = generic r0 s0
         x = L.head smp
         y = L.head (L.tail smp)
         u = L.head ref
-        v = L.head (L.tail ref)
+        v = L.head (L.drop 1 ref)
 
 
     -- Scan a stretch of Ns
     go_n !n ref smp
         -- corner cases if the reference ends
         | L.null         ref                 = Ns  n    done
-        | L.null (L.tail ref) && L.null smp  = Ns (succ n) done
-        | L.null (L.tail ref) && isN x       = Ns (succ n) done
-        | L.null (L.tail ref)                = Ns  n $ Chrs (code x) (NucCode 0) done
+        | L.null (L.drop 1 ref) && L.null smp  = Ns (succ n) done
+        | L.null (L.drop 1 ref) && isN x       = Ns (succ n) done
+        | L.null (L.drop 1 ref)                = Ns  n $ Chrs (code x) (NucCode 0) done
 
         -- corner cases if the sample ends
         | L.null smp                   = Ns (succ (L.length ref) `shiftR` 1 + n) done
@@ -356,9 +429,9 @@ diff r0 s0 done = generic r0 s0
     go_eq !n ref smp
         -- corner cases if the reference ends
         | L.null         ref                 = Eqs n done
-        | L.null (L.tail ref) && L.null smp  = Eqs n $ Chrs (NucCode 0) (NucCode 0) done
-        | L.null (L.tail ref) && eq u x      = Eqs (succ n) done
-        | L.null (L.tail ref)                = Eqs n $ Chrs (code $ L.head smp) (NucCode 0) done
+        | L.null (L.drop 1 ref) && L.null smp  = Eqs n $ Chrs (NucCode 0) (NucCode 0) done
+        | L.null (L.drop 1 ref) && eq u x      = Eqs (succ n) done
+        | L.null (L.drop 1 ref)                = Eqs n $ Chrs (code $ L.head smp) (NucCode 0) done
 
         -- corner cases if the sample ends
         | L.null smp || L.null (L.tail smp)  = Eqs n $ generic ref smp

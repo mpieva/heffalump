@@ -17,6 +17,7 @@ executable heffalump
                        Emf,
                        Lump,
                        Merge,
+                       NewRef,
                        Pileup, 
                        SillyStats,
                        Stretch,
@@ -27,6 +28,7 @@ executable heffalump
                        base >=4.7 && <4.10,
                        base-prelude ==1.*,
                        bytestring,
+                       bytestring-mmap == 0.2.*,
                        containers,
                        data-fix,
                        directory,
@@ -51,7 +53,7 @@ executable heffalump
                        RecordWildCards,
                        TypeFamilies
 
-  ghc-options:         -Wall -auto-all
+  ghc-options:         -Wall -auto-all -optl-static -optl-pthread
   cc-options:          -O3 -std=c99 -fPIC -ggdb -Wall
   c-sources:           vcf-scan.c mini-pileup.c
   include-dirs:        .

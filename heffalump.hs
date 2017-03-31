@@ -16,6 +16,7 @@ import Eigenstrat
 import Emf
 import qualified Lump
 import Merge
+import NewRef
 import SillyStats
 import Stretch
 import Treemix
@@ -95,11 +96,12 @@ opts_hetfa =
 main_hetfa :: [String] -> IO ()
 main_hetfa args = do
     ( _, ConfGen{..} ) <- parseOpts False defaultConfGen (mk_opts "hetfa" [] opts_hetfa) args
-    (_, Reference ref) <- readReference conf_reference
+    -- (_, Reference ref) <- readReference conf_reference
+    refs <- map (\(_,_,s) -> s) <$> readTwoBit conf_reference
     smp <- readSampleFa conf_sample
 
     withFile conf_output WriteMode $ \hdl ->
-        hPutBuilder hdl . encode_dip . catStretches $ zipWith diff ref smp
+        hPutBuilder hdl . encode_dip . catStretches $ zipWith diff2 refs smp
 
 
 opts_maf :: [ OptDescr ( FilePath -> IO FilePath ) ]
