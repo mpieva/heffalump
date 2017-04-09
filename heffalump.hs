@@ -1,3 +1,13 @@
+-- TODO:
+-- - switch everything to the 'Lump' representation (and acknowledge
+--   that the 'Stretch' was a bad choice)
+-- - allow arbitrary reference genomes (use 2bit everywhere)
+-- - import from multi-MAF (either create multiple heffalumps or allow
+--   selection of one species)
+-- - allow import from unsorted MAF or EMF (make 'Lump's from each block
+--   in the file, reorder them in memory)
+
+
 import BasePrelude
 import Data.ByteString.Builder          ( hPutBuilder, Builder )
 import System.Console.GetOpt
