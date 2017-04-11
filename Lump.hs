@@ -9,6 +9,10 @@ import qualified Data.ByteString.Lazy as L
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 
+import Stretch ( Stretch, decode_dip, decode_hap, NucCode(..) )
+import qualified Stretch  as S ( Stretch(..) )
+import NewRef
+
 -- | Improved diff representation and encoding.  Goals:
 --
 -- * support one or two known alleles
@@ -23,7 +27,8 @@ import qualified Data.Vector.Unboxed as U
 -- trans-complement.  Deletions just have a length, insertions have a
 -- length and a sequence of bases.  Complex alleles (such as two different
 -- alleles) would need to be broken up into separate variants---haven't
--- thought about the details.   XXX
+-- thought about the details.  Heterozygotes with two alternative
+-- alleles are unrepresentable.  XXX
 
 data Lump a
     = Ns !Int a                         -- ^ uncalled stretch
@@ -57,6 +62,48 @@ data Lump a
   deriving Functor
 
 type Seq1 = U.Vector Word8
+
+normalizeLump :: Fix Lump -> Fix Lump
+normalizeLump = ana (go . unFix)
+  where
+    go (Ns n l) = case unFix l of
+        Ns n' l' -> go $ Ns (n+n') l'
+        _        -> Ns n l
+
+    go (Eqs1 n l) = case unFix l of
+        Eqs1 n' l' -> go $ Eqs1 (n+n') l'
+        _          -> Eqs1 n l
+
+    go (Eqs2 n l) = case unFix l of
+        Eqs2 n' l' -> go $ Eqs2 (n+n') l'
+        _          -> Eqs2 n l
+
+    go (Del1 n l) = case unFix l of
+        Del1 n' l' -> go $ Del1 (n+n') l'
+        _          -> Del1 n l
+
+    go (Del2 n l) = case unFix l of
+        Del2 n' l' -> go $ Del2 (n+n') l'
+        _          -> Del2 n l
+
+    go (DelH n l) = case unFix l of
+        DelH n' l' -> go $ DelH (n+n') l'
+        _          -> DelH n l
+
+    go (Ins1 n l) = case unFix l of
+        Ins1 n' l' -> go $ Ins1 (n U.++ n') l'
+        _          -> Ins1 n l
+
+    go (Ins2 n l) = case unFix l of
+        Ins2 n' l' -> go $ Ins2 (n U.++ n') l'
+        _          -> Ins2 n l
+
+    go (InsH n l) = case unFix l of
+        InsH n' l' -> go $ InsH (n U.++ n') l'
+        _          -> InsH n l
+
+    go lump = lump
+
 
 encodeLump :: Fix Lump -> Builder
 encodeLump = cata encode1
@@ -250,18 +297,9 @@ decodeLump = ana decode1
 -- (trans-complement)
 
 
--- A variant call.  Has a genomic position, ref and alt alleles, and a
--- bunch of calls.
-data Variant = Variant { v_chr :: !Int                  -- chromosome number
-                       , v_pos :: !Int                  -- 0-based
-                       , v_alt :: !Word8                -- [0..3] for "IOPX"
-                       , v_calls :: !(U.Vector Word8) } -- XXX
-  deriving Show
-
 -- | Merging without access to a reference sequence.  This code doesn't
 -- believe in Indels and skips over them.
 --
--- 'nosplit':  don't split multiallelic variants.  XXX Necessary?
 -- 'noutgroups':  number of outgroups
 
 merge_lumps :: Int -> V.Vector (Fix Lump) -> [[Variant]]
@@ -360,12 +398,13 @@ merge_lumps !noutgroups = filter (not . null) . go 0 0
     -- split them.  Misfitting alleles are not counted.
     mkVar :: Int -> Int -> V.Vector (Fix Lump) -> [[Variant]] -> [[Variant]]
     mkVar ix pos ss = (:)
-            [ Variant ix pos alt calls
+            [ Variant ix pos ref_indet (V2b alt) calls
             | (alt, ct) <- zip [1..3] [ct_trans, ct_compl, ct_tcompl]
             , let calls = V.convert $ V.map (ct . unFix) ss
             -- it's only a variant if at least one alt called
             , U.any (\c -> c .&. 0xC /= 0) (U.drop noutgroups calls) ]
 
+    ref_indet = N2b 255
 
     -- Variant codes:  #ref + 4 * #alt
     ct_trans :: Lump a -> Word8
@@ -415,4 +454,69 @@ instance Monad S where
     return = S
     {-# INLINE (>>=) #-}
     S !a >>= k = k a
+
+
+-- | Converts old style 'Stretch' to new style 'Lump'.  Unfortunately,
+-- this needs a reference, but at least we can use a new style
+-- 'NewRefSeq', too.
+stretchToLump :: NewRefSeqs -> Stretch -> Fix Lump
+stretchToLump = (.) normalizeLump . go1
+  where
+    go1 [             ] _ = Fix Done
+    go1 ((_,_,r0) : rs) l = go r0 l
+      where
+        go r (S.Chrs (NucCode a) (NucCode b) k) = call a (call b (flip go k)) r
+        go r (S.Ns   c k) = Fix $ Ns   (fromIntegral $ c+c) $ go (dropNRS (fromIntegral $ c+c) r) k
+        go r (S.Eqs  c k) = Fix $ Eqs2 (fromIntegral $ c+c) $ go (dropNRS (fromIntegral $ c+c) r) k
+        go r (S.Eqs1 c k) = Fix $ Eqs1 (fromIntegral $ c+c) $ go (dropNRS (fromIntegral $ c+c) r) k
+        go _ (S.Break  k) = Fix $ Break                     $ go1 rs k
+        go _  S.Done      = Fix   Done
+
+    call b k r = case unconsNRS r of
+        Nothing         -> Fix Done
+        Just (N2b a,r') -> Fix . enc a (fromIntegral b) $ k r'
+
+    n = Ns 1
+    eq1 = Eqs1 1
+    eq2 = Eqs2 1
+
+    enc 0 b = t_to_x V.! b
+    enc 1 b = c_to_x V.! b
+    enc 2 b = a_to_x V.! b
+    enc 3 b = g_to_x V.! b
+    enc _ _ = n
+
+    a_to_x, c_to_x, g_to_x, t_to_x :: V.Vector (Fix Lump -> Lump (Fix Lump))
+
+    a_to_x = V.fromList [ n, eq2, TCompl2, Trans2, Compl2
+                        , RefTCompl, RefTrans, RefCompl, n, n, n
+                        , eq1, TCompl1, Trans1, Compl1, n ]
+
+    c_to_x = V.fromList [ n, TCompl2, eq2, Compl2, Trans2
+                        , RefTCompl, n, n, RefCompl, RefTrans, n
+                        , TCompl1, eq1, Compl1, Trans1, n ]
+
+    g_to_x = V.fromList [ n, Trans2, Compl2, eq2, TCompl2
+                        , n, RefTrans, n, RefCompl, n, RefTCompl
+                        , Trans1, Compl1, eq1, TCompl1, n ]
+
+    t_to_x = V.fromList [ n, Compl2, Trans2, TCompl2, eq2
+                        , n, n, RefCompl, n, RefTrans, RefTCompl
+                        , Compl1, Trans1, TCompl1, eq1, n ]
+
+
+    -- iupac_chars = "NACGTMRWSYKacgtN"
+
+-- | Main decoder.  Switches behavior based on header.  "HEF\0",
+-- "HEF\1", "HEF\2" are the old format and go through conversion;
+-- "HEF\3" is read directly.
+decode :: NewRefSeqs -> L.ByteString -> Fix Lump
+decode rs str | "HEF\0" `L.isPrefixOf` str = stretchToLump rs $ decode_dip (L.drop 4 str)
+              | "HEF\1" `L.isPrefixOf` str = stretchToLump rs $ decode_hap (L.drop 4 str)
+              -- | "HEF\2" `L.isPrefixOf` str = stretchToLump rs $ decode_mix (L.drop 4 str)
+              | "HEF\3" `L.isPrefixOf` str = decodeLump (L.drop 4 str)
+              | otherwise                  = stretchToLump rs $ decode_dip (L.drop 4 str) -- error "Format not recognixed."
+
+encode :: Fix Lump -> Builder
+encode s = byteString "HEF\3" <> encodeLump s
 

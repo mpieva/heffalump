@@ -168,3 +168,28 @@ instance Monad S where
     {-# INLINE (>>=) #-}
     S a >>= k = k a
 
+-- | Discards variants hitting CpG sites.
+-- We need to look ahead one base in the reference (easy), but we also
+-- need to look *back*, and that stinks.  So, we pad the reference at
+-- the beginning, and then (ref !! 0) is to the left, (ref !! 1) is
+-- current and (ref !! 2) is to the right.
+filterCpG :: Reference -> [Variant] -> [Variant]
+filterCpG (Reference rs) = go (map (L.cons 'N') rs) 0 0
+  where
+    go :: [L.ByteString] -> Int -> Int -> [Variant] -> [Variant]
+    go [] _ _ _ = []
+    go _ _ _ [] = []
+    go (r:rs) c p (v:vs)
+        | c /= v_chr v = go rs (c+1) 0 (v:vs)
+        | p < v_pos v = go (L.drop (fromIntegral $ v_pos v - p) r : rs) c (v_pos v) (v:vs)
+        | p == v_pos v && isCpG r   = k           -- we're at the G
+        | p == v_pos v && isXpCpG r = k           -- we're at the C
+        | p == v_pos v              = v : k
+        | otherwise = error $ "WTF? " ++ show (c, p, v_pos v)
+        -- otherwise shouldn't happen
+      where
+        k = go (r : rs) c p vs
+
+    isCpG   r = L.take 2           r  == "CG"
+    isXpCpG r = L.take 2 (L.drop 1 r) == "CG"
+

@@ -1,33 +1,35 @@
 module Stretch (
-    NucCode(..),
-    Stretch(..),
-    debugStretch,
-    catStretches,
-    encode_v0,
-    encode_dip,
-    encode_hap,
-    encode_mix,
-    decode,
-    diff,
-    diff2,
-    Frag(..),
-    patch,
-    code,
-    tr,
-    iupac_chars
+        NucCode(..),
+        Stretch(..),
+        debugStretch,
+        catStretches,
+        encode_v0,
+        encode_dip,
+        encode_hap,
+        decode_dip,
+        decode_hap,
+        decode,
+        diff,
+        diff2,
+        Frag(..),
+        patch,
+        code,
+        tr,
+        iupac_chars
     ) where
 
 import BasePrelude
 import Data.ByteString.Builder          ( word8, Builder, byteString )
 
+import qualified Data.ByteString                as BB
 import qualified Data.ByteString.Char8          as B
 import qualified Data.ByteString.Internal       as B
 import qualified Data.ByteString.Lazy.Char8     as L
 import qualified Data.ByteString.Lazy           as LB
 import qualified Data.ByteString.Unsafe         as B
 
-import Util ( low )
 import NewRef
+import Util ( low )
 
 -- ^ A genome is encoded by taking the difference to the reference and
 -- run-length coding the result.
@@ -35,21 +37,6 @@ import NewRef
 newtype NucCode = NucCode Word8 deriving Eq
 instance Show NucCode where show = (:[]) . tr
 
-data Patch = NewNs   !Int64 Patch
-           | NewEqs  !Int64 Patch
-           | NewEqs1 !Int64 Patch
-           | Call  !NucCode Patch
-           | NewBreak       Patch
-           | NewDone
-    deriving Show
-
-stretchToPatch :: Stretch -> Patch
-stretchToPatch (Ns     n k) = NewNs   n $ stretchToPatch k
-stretchToPatch (Eqs    n k) = NewEqs  n $ stretchToPatch k
-stretchToPatch (Eqs1   n k) = NewEqs1 n $ stretchToPatch k
-stretchToPatch (Chrs a b k) = Call a $ Call b $ stretchToPatch k
-stretchToPatch (Break    k) = NewBreak $ stretchToPatch k
-stretchToPatch  Done        = NewDone
 
 -- All stretch lengths are even, so we pre-divide them by two.
 data Stretch = Ns   !Int64            Stretch
@@ -64,7 +51,7 @@ debugStretch :: Stretch -> IO ()
 debugStretch = debugStretch' 0 0
 
 debugStretch' :: Int -> Int64 -> Stretch -> IO ()
-debugStretch' c i  Done        = return () --    putStrLn $ shows (c,i) "\tDone"
+debugStretch' _ _  Done        = return ()
 debugStretch' c i (Break    s) = do putStrLn $ shows (c,i) "\tBreak" ;                    debugStretch' (c+1) 0 s
 debugStretch' c i (Ns     n s) = do putStrLn $ shows (c,i) "\tNs   " ++ show n ;          debugStretch' c (i+2*n) s
 debugStretch' c i (Eqs    n s) = do putStrLn $ shows (c,i) "\tEqs  " ++ show n ;          debugStretch' c (i+2*n) s
@@ -79,7 +66,7 @@ catStretches = foldr (\a b -> a $ Break b) Done
 decode :: L.ByteString -> Stretch
 decode str | "HEF\0" `L.isPrefixOf` str = decode_dip (L.drop 4 str)
            | "HEF\1" `L.isPrefixOf` str = decode_hap (L.drop 4 str)
-           | "HEF\2" `L.isPrefixOf` str = decode_mix (L.drop 4 str)
+           -- | "HEF\2" `L.isPrefixOf` str = decode_mix (L.drop 4 str)
            | otherwise                  = decode_dip (L.drop 4 str) -- error "Format not recognixed."
 
 encode_dip :: Stretch -> Builder
@@ -202,8 +189,8 @@ encode_v0 (Break k) = word8 0x80 <> encode_v0 k
 encode_v0 Done      = mempty
 
 
-decode_mix :: L.ByteString -> Stretch
-decode_mix = undefined -- XXX
+{- decode_mix :: L.ByteString -> Stretch
+decode_mix = undefined -- XXX -}
 
 -- | Version 2 encoding.  Deals with haploid or diploid calls, stretches of no call,
 -- stretches of matches, stretches matching only one base.
@@ -223,7 +210,7 @@ decode_mix = undefined -- XXX
 -- 0xFF     Break
 -- 0xXY     Two chars, Y and X
 
-encode_mix :: Stretch -> Builder
+{- encode_mix :: Stretch -> Builder
 encode_mix s = byteString "HEF\2" <> go s
   where
     go (Chrs (NucCode x) (NucCode y) k)
@@ -282,7 +269,7 @@ encode_mix s = byteString "HEF\2" <> go s
                   | otherwise       = error $ "WTF?! (too many Ns: " ++ show (2*x) ++ ")"
 
     go (Break k) = word8 0xFF <> go k
-    go Done      = mempty
+    go Done      = mempty -}
 
 -- | We store diploid calls.  For this we need 11 codes:  no call(1),
 -- the bases(4), heterozygotes(6).  If we also want to support haploid
@@ -309,8 +296,8 @@ tr (NucCode w) = B.w2c . B.unsafeIndex iupac_chars . fromIntegral $ w
 diff2 :: NewRefSeq -> L.ByteString -> Stretch -> Stretch
 diff2 r0 s0 done = generic r0 s0
   where
-    isN  c = c == 'N' || c == 'n' || c == '-'
-    eq a b = b == 'Q' || b == 'q' || low (B.c2w a) == low (B.c2w b)
+    isN        c = c == 'N' || c == 'n' || c == '-'
+    eq (N2b a) b = b == 'Q' || b == 'q' || "tcag" `BB.index` fromIntegral a == low (B.c2w b)
 
     -- Scan generic strings
     generic ref smp

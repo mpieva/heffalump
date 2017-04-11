@@ -3,6 +3,7 @@ module Eigenstrat where
 import BasePrelude
 
 import qualified Data.Foldable                  as F
+import qualified Data.ByteString.Char8          as B
 import qualified Data.ByteString.Lazy           as LB
 import qualified Data.ByteString.Lazy.Char8     as L
 
@@ -40,7 +41,18 @@ nick_hasharr :: F.Foldable v => v L.ByteString -> Int32
 nick_hasharr = F.foldl (\h s -> 17 * h `xor` nick_hashit s) 0
 
 mkname :: Int -> Int -> Char -> String
-mkname x y z = let (n1,x1) = hash (x `shiftL` 38 .|. y `shiftL` 8 .|. ord z) `divMod` 18
+mkname x y z | B.length chars == 32 = enc (4*y + numOf z) [ B.index chars x ]
+  where
+    numOf 'A' = 0 ; numOf 'C' = 1 ; numOf 'G' = 2 ; numOf 'T' = 3
+    numOf 'a' = 0 ; numOf 'c' = 1 ; numOf 'g' = 2 ; numOf  _  = 3
+
+    chars = "0123456789ABCDEFGHKLMNPQRSTUWXYZ"
+
+    enc 0 = id
+    enc x = (:) (B.index chars (x .&. 31)) . enc (x `shiftR` 5)
+
+
+{- mkname x y z = let (n1,x1) = hash (x `shiftL` 38 .|. y `shiftL` 8 .|. ord z) `divMod` 18
                    (n2,x2) = n1 `divMod` 17
                    (n3,y1) = n2 `divMod` 23
                    (n4,y2) = n3 `divMod` 22
@@ -65,6 +77,5 @@ mkname x y z = let (n1,x1) = hash (x `shiftL` 38 .|. y `shiftL` 8 .|. ord z) `di
 
     -- 18 snaffis
     snaffi_syl = [ "sni", "sna", "fer", "fi", "fir", "por", "per", "snu",
-        "al", "an", "erl", "lep", "fru", "fri", "ig", "eg", "thi", "tha" ]
-
+        "al", "an", "erl", "lep", "fru", "fri", "ig", "eg", "thi", "tha" ] -}
 

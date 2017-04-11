@@ -34,13 +34,13 @@ module NewRef where
 --   VCF:  clearly requires the reference
 
 import qualified Data.ByteString as B
-import qualified Data.ByteString.Char8 as S
 import qualified Data.ByteString.Unsafe as B
 import System.IO.Posix.MMap
 import System.IO.Unsafe ( unsafeDupablePerformIO )
 import BasePrelude
 import Foreign.Storable ( peekByteOff )
 
+import qualified Data.Vector.Unboxed            as U
 
 -- | This is a reference sequence.  It consists of stretches of Ns and
 -- sequence.
@@ -63,6 +63,7 @@ readTwoBit fp = parseTwopBit <$> unsafeMMapFile fp
 
 parseTwopBit :: B.ByteString -> NewRefSeqs
 parseTwopBit raw = case (getW32 0, getW32 4) of (0x1A412743, 0) -> parseEachSeq 16 0
+                                                _ -> error "This does not look like a 2bit file."
   where
     getW32 :: Int -> Word32
     getW32 o | o + 4 >= B.length raw = error "out of bounds access"
@@ -91,8 +92,8 @@ parseTwopBit raw = case (getW32 0, getW32 4) of (0x1A412743, 0) -> parseEachSeq 
         the_seq = unfoldSeq dnasize n_blocks 0 (packedDnaOff*4)
 
 
-    unfoldSeq dnasize  _ chroff fileoff | chroff >= dnasize = NewRefEnd
-    unfoldSeq dnasize [] chroff fileoff = SomeSeq (PrimBases raw fileoff (dnasize-chroff)) NewRefEnd
+    unfoldSeq dnasize  _ chroff _fileoff | chroff >= dnasize = NewRefEnd
+    unfoldSeq dnasize [] chroff  fileoff = SomeSeq (PrimBases raw fileoff (dnasize-chroff)) NewRefEnd
 
     unfoldSeq dnasize ((nstart,nlen):ns) chroff fileoff
 
@@ -136,15 +137,60 @@ dropNRS n (SomeSeq (PrimBases r o l) s) | n+o > l   = dropNRS (n-l) s
                                         | n+o < l   = SomeSeq (PrimBases r (o+n) l) s
                                         | otherwise = s
 
+-- | Nucleotide in 2bit encoding: "TCAG" == [0..3], N == 255.
+newtype Nuc2b = N2b Word8
+
+-- | Variant in 2bit encoding: [0..3] for "IOPX"
+newtype Var2b = V2b Word8
+
+instance Show Nuc2b where
+    show (N2b 0) = "T"
+    show (N2b 1) = "C"
+    show (N2b 2) = "A"
+    show (N2b 3) = "G"
+    show      _  = "N"
+
+instance Show Var2b where
+    show (V2b 0) = "I"
+    show (V2b 1) = "O"
+    show (V2b 2) = "P"
+    show (V2b 3) = "X"
+    show      _  = "?"
 
 {-# INLINE unconsNRS #-}
-unconsNRS :: NewRefSeq -> Maybe ( Char, NewRefSeq )
+unconsNRS :: NewRefSeq -> Maybe ( Nuc2b, NewRefSeq )
 unconsNRS NewRefEnd = Nothing
-unconsNRS (ManyNs 1 s) = Just ('N', s)
-unconsNRS (ManyNs l s) = Just ('N', ManyNs (l-1) s)
+unconsNRS (ManyNs 1 s) = Just (N2b 255, s)
+unconsNRS (ManyNs l s) = Just (N2b 255, ManyNs (l-1) s)
 unconsNRS (SomeSeq (PrimBases raw off len) s) = Just (c, s')
   where
-    c = "TCAG" `S.index` fromIntegral ((B.index raw (off `shiftR` 2) `shiftR` (6 - 2 * (off .&. 3))) .&. 3)
+    c  = N2b . fromIntegral $ (B.index raw (off `shiftR` 2) `shiftR` (6 - 2 * (off .&. 3))) .&. 3
     s' = if off+1 == len then s else SomeSeq (PrimBases raw (off+1) len) s
+
+
+-- A variant call.  Has a genomic position, ref and alt alleles, and a
+-- bunch of calls.
+data Variant = Variant { v_chr   :: !Int                -- chromosome number
+                       , v_pos   :: !Int                -- 0-based
+                       , v_ref   :: !Nuc2b
+                       , v_alt   :: !Var2b
+                       , v_calls :: !(U.Vector Word8) } -- Variant codes:  #ref + 4 * #alt
+  deriving Show
+
+addRef :: NewRefSeqs -> [Variant] -> [Variant]
+addRef = go 0
+  where
+    go _ [           ] = const []
+    go c ((_,_,r0):rs) = go1 r0 0
+      where
+        go1 _ _ [    ] = []
+        go1 r p (v:vs)
+            | c /= v_chr v = go (c+1) rs (v:vs)
+            | p == v_pos v = case unconsNRS r of
+                Just (c',_) -> v { v_ref = c' } : go1 r p vs
+                Nothing     ->                    go1 r p vs
+            | p < v_pos v  = go1 (dropNRS (v_pos v - p) r) (v_pos v) (v:vs)
+            | otherwise    = error "expected sorted variants!"
+
 
 

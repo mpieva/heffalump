@@ -26,13 +26,13 @@ data Config = Config {
     conf_blocksize  :: Int,
     conf_noutgroups :: Int,
     conf_nrefpanel  :: Int,
-    conf_filter     :: [Variant] -> [Variant],
+    conf_filter     :: Reference -> [Variant] -> [Variant],
     conf_msg        :: String,
     conf_nafricans  :: Int,
     conf_reference  :: FilePath }
 
 defaultConfig :: Config
-defaultConfig = Config 5000000 1 1 id ""
+defaultConfig = Config 5000000 1 1 (const id) ""
                        (error "size of reference panel not known")
                        (error "no reference file specified")
 
@@ -248,7 +248,7 @@ opts_kiv =
     set_ref    a c = return $ c { conf_reference = a }
     set_ngood  a c = readIO a >>= \n -> return $ c { conf_noutgroups = n }
     set_jack   a c = readNumIO a >>= \n -> return $ c { conf_blocksize = n }
-    set_tvonly   c = return $ c { conf_filter = transversions }
+    set_tvonly   c = return $ c { conf_filter = const transversions }
 
 main_kayvergence :: [String] -> IO ()
 main_kayvergence args = do
@@ -259,7 +259,7 @@ main_kayvergence args = do
     let labels = kaylabels conf_noutgroups (map takeBaseName hefs)
         stats  = uncurry gen_stats
                  $ accum_stats conf_blocksize (kayvergence conf_noutgroups)
-                 $ conf_filter $ merge_hefs False 0 ref inps
+                 $ conf_filter ref $ merge_hefs False 0 ref inps
 
         fmt1 (rn,sn,cn) (SillyStats k n r v _) =
                 [ Left $ "Kiv( " ++ rn ++ "; "
@@ -327,14 +327,16 @@ opts_dstat =
     , Option "k" ["numrefpanel"]  (ReqArg set_nref "NUM") "The next NUM inputs are the reference panel"
     , Option "J" ["blocksize"]    (ReqArg set_jack "NUM") "Set blocksize for Jackknife to NUM bases (5M)"
     , Option "t" ["transversions"]     (NoArg set_tvonly) "Restrict to transversion sites"
+    , Option [ ] ["ignore-cpg"]        (NoArg set_no_cpg) "Ignore GpG sites (according to reference)"
     , Option [ ] ["custom"]    (ReqArg set_custom "VARS") "Set custom filter" ]
   where
-    set_ref  a c = return $ c { conf_reference = a }
-    set_nout a c = readIO a >>= \n -> return $ c { conf_noutgroups = n }
-    set_nref a c = readIO a >>= \n -> return $ c { conf_nrefpanel = n }
-    set_jack a c = readNumIO a >>= \n -> return $ c { conf_blocksize = n }
-    set_tvonly c = return $ c { conf_filter = transversions }
-    set_custom a c = return $ c { conf_filter = custom a, conf_msg = a ++ " " }
+    set_ref    a c = return $ c { conf_reference = a }
+    set_nout   a c = readIO a >>= \n -> return $ c { conf_noutgroups = n }
+    set_nref   a c = readIO a >>= \n -> return $ c { conf_nrefpanel = n }
+    set_jack   a c = readNumIO a >>= \n -> return $ c { conf_blocksize = n }
+    set_tvonly   c = return $ c { conf_filter = const transversions }
+    set_custom a c = return $ c { conf_filter = const $ custom a, conf_msg = a ++ " " }
+    set_no_cpg   c = return $ c { conf_filter = filterCpG }
 
 main_patterson :: [String] -> IO ()
 main_patterson args = do
@@ -345,7 +347,7 @@ main_patterson args = do
     let labels = pattersonlbls conf_noutgroups conf_nrefpanel (map takeBaseName hefs)
         stats  = uncurry gen_stats
                  $ accum_stats conf_blocksize (pattersons abbacounts conf_noutgroups conf_nrefpanel)
-                 $ conf_filter $ merge_hefs False conf_noutgroups ref inps
+                 $ conf_filter ref $ merge_hefs False conf_noutgroups ref inps
 
         fmt1 (sn,cn,r1,r2) (SillyStats k n r v p) =
                 [ Left conf_msg
@@ -448,7 +450,7 @@ opts_yadda =
     set_nref a c = readIO a >>= \n -> return $ c { conf_nrefpanel = n }
     set_nafr a c = readIO a >>= \n -> return $ c { conf_nafricans = n }
     set_jack a c = readNumIO a >>= \n -> return $ c { conf_blocksize = n }
-    set_tvonly c = return $ c { conf_filter = transversions }
+    set_tvonly c = return $ c { conf_filter = const transversions }
 
 main_yaddayadda :: [String] -> IO ()
 main_yaddayadda args = do
@@ -460,7 +462,7 @@ main_yaddayadda args = do
     let labels = yaddalbls conf_noutgroups conf_nafricans conf_nrefpanel (map takeBaseName hefs)
         stats  = uncurry gen_stats
                  $ accum_stats conf_blocksize (yaddayadda conf_noutgroups conf_nafricans conf_nrefpanel)
-                 $ conf_filter $ merge_hefs False (conf_noutgroups+conf_nafricans) ref inps
+                 $ conf_filter ref $ merge_hefs False (conf_noutgroups+conf_nafricans) ref inps
 
         fmt1 (cn,an,n1,n2,sn) (SillyStats k n r v p) =
                 [ Left "Y( "
@@ -544,7 +546,7 @@ main_patterson_corr args = do
                  $ (S.map   corrected_abba_abba *** V.map (S.map   corrected_abba_abba)) &&&
                    (S.map uncorrected_abba_abba *** V.map (S.map uncorrected_abba_abba))
                  $ accum_stats conf_blocksize (pattersons blablacounts conf_noutgroups conf_nrefpanel)
-                 $ conf_filter $ merge_hefs False conf_noutgroups ref inps
+                 $ conf_filter ref $ merge_hefs False conf_noutgroups ref inps
 
         fmt1 (sn,cn,r1,r2) (SillyStats k n r v p) =
                 [ Left conf_msg
@@ -559,24 +561,6 @@ main_patterson_corr args = do
                 , Right $ showFFloat (Just 2) (100 * r) "% ± "
                 , Right $ showFFloat (Just 2) (100 * sqrt v) "%, p = "
                 , Right $ showPValue p [] ]
-
-        {- fmt1 (sn,cn,r1,r2) (ManyD vv) =
-            let z:a:b:c:d:u:v:w:_ = U.toList vv
-            in  [ Left conf_msg
-                , Left "D( "
-                , Left $ r1 ++ ", "
-                , Left $ r2 ++ "; "
-                , Left $ sn ++ ", "
-                , Left $ cn
-                , Left " ) = "
-                , Right $ showFFloat (Just 0) z " "
-                , Right $ showFFloat (Just 0) a " "
-                , Right $ showFFloat (Just 0) b " "
-                , Right $ showFFloat (Just 0) c " "
-                , Right $ showFFloat (Just 0) d " "
-                , Right $ showFFloat (Just 0) u " "
-                , Right $ showFFloat (Just 0) v " "
-                , Right $ showFFloat (Just 0) w " " ] -}
 
     print_table $ zipWith fmt1 labels $ fst stats
     print_table $ zipWith fmt1 labels $ snd stats

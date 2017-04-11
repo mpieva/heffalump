@@ -26,7 +26,8 @@ import Eigenstrat
 import Emf
 import qualified Lump
 import Merge
-import NewRef
+import NewRef ( Nuc2b(..), Var2b(..), addRef, readTwoBit )
+import qualified NewRef
 import SillyStats
 import Stretch
 import Treemix
@@ -51,7 +52,8 @@ main = do
 
     mains = let z a b c = (a,(b,c)) in
         [ z "eigenstrat"  main_eigenstrat         "Merge heffalumps into Eigenstrat format"
-        , z "vcfexport"   main_vcfout             "Merge heffalumps into VCF"
+        , z "vcfexport"   main_vcfout             "Merge heffalumps into VCF (Stretch)"
+        , z "vcflexport"  main_vcfout_2           "Merge heffalumps into VCF (Lump)"
         , z "hetfa"       main_hetfa              "Import hetfa file"
         , z "bamin"       main_bam                "Import BAM file"
         , z "maf"         main_maf                "Import two-species maf"
@@ -247,6 +249,61 @@ main_vcfout args = do
     is_transversion 'G' 'A' = False
     is_transversion 'A' 'G' = False
     is_transversion  _   _  = True
+
+    gts :: V.Vector B.ByteString
+    gts = V.fromList [ "\t./."      -- 0, N
+                     , "\t0"        -- 1, 1xref
+                     , "\t0/0"      -- 2, 2xref
+                     , "\t0/0"      -- 3, 3xref (whatever)
+                     , "\t1"        -- 4, 1xalt
+                     , "\t0/1"      -- 5, ref+alt
+                     , "\t0/1"      -- 6, 2xref+alt (whatever)
+                     , "\t0/1"      -- 7, 3xref+alt (whatever)
+                     , "\t1/1"      -- 8, 2xalt
+                     , "\t0/1"      -- 9, ref+2xalt (whatever)
+                     , "\t0/1"      -- 10, 2xref+2xalt (whatever)
+                     , "\t0/1"      -- 11, 3xref+2xalt (whatever)
+                     , "\t1/1"      -- 12, 3xalt (whatever)
+                     , "\t0/1"      -- 13, ref+3xalt (whatever)
+                     , "\t0/1"      -- 14, 2xref+3xalt (whatever)
+                     , "\t0/1" ]    -- 15, 3xref+3xalt (whatever)
+
+
+
+-- VCF output, this time going through 'Lump' instead of 'Stretch'
+main_vcfout_2 :: [String] -> IO ()
+main_vcfout_2 args = do
+    ( hefs, ConfGen{..} ) <- parseOpts True defaultConfGen { conf_noutgroups = 0 }
+                                            (mk_opts "vcfexport" "[hef-file...]" (tail opts_eigen)) args
+    refs <- readTwoBit conf_reference
+    let chrs = V.fromList [ c | (c,_,_) <- refs ]
+    inps <- V.fromList <$> mapM (fmap (Lump.decode refs . decomp) . L.readFile) hefs
+
+    B.putStr $ "##fileformat=VCFv4.1\n" <>
+               "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n" <>
+               "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT" <>
+               mconcat [ '\t' `B.cons` B.pack (takeBaseName f) | f <- hefs ] <>
+               B.singleton '\n'
+
+    let the_vars = addRef refs $ concat $ Lump.merge_lumps conf_noutgroups inps
+
+    forM_ the_vars $ \NewRef.Variant{..} ->
+        -- samples (not outgroups) must show alt allele at least once
+        let ve    = U.foldl' (.|.) 0 $ U.drop conf_noutgroups v_calls
+            is_ti = conf_all || is_transversion v_alt in
+        when (ve .&. 12 /= 0 && is_ti) $ do
+            B.hPutBuilder stdout $
+                B.byteString (chrs V.! v_chr) <> B.char8 '\t' <>
+                B.intDec (v_pos+1) <> B.string8 "\t.\t" <>
+                B.char8 (toRefCode v_ref) <> B.char8 '\t' <>
+                B.char8 (toAltCode v_alt v_ref) <> B.string8 "\t.\t.\t.\tGT" <>
+                U.foldr ((<>) . B.byteString . (V.!) gts . fromIntegral) mempty v_calls <>
+                B.char8 '\n'
+  where
+    toAltCode (V2b v) (N2b r) = B.index "TCAGXPOI" $ fromIntegral (xor r v)
+    toRefCode = toAltCode (V2b 0)
+
+    is_transversion (V2b v) = testBit v 1
 
     gts :: V.Vector B.ByteString
     gts = V.fromList [ "\t./."      -- 0, N
