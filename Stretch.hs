@@ -283,7 +283,7 @@ code a = NucCode $ maybe 0 fromIntegral $ B.elemIndex a iupac_chars
 
 {-# INLINE tr #-}
 tr :: NucCode -> Char
-tr (NucCode w) = B.w2c . B.unsafeIndex iupac_chars . fromIntegral $ w
+tr (NucCode w) = B.w2c . BB.index {-unsafeIndex-} iupac_chars . fromIntegral $ w
 
 -- We operate on two characters at a time, to maintain alignment.  The
 -- output length is that of the reference rounded up to a multiple of

@@ -26,7 +26,7 @@ import Eigenstrat
 import Emf
 import qualified Lump
 import Merge
-import NewRef ( Nuc2b(..), Var2b(..), addRef, readTwoBit )
+import NewRef ( Nuc2b(..), Var2b(..), addRef, readTwoBit, NewRefSeqs(..) )
 import qualified NewRef
 import SillyStats
 import Stretch
@@ -71,6 +71,7 @@ main = do
         , z "debhetfa"    main_debhetfa           "(debugging aid)"
         , z "debmaf"      main_debmaf             "(debugging aid)"
         , z "dumppatch"   main_dumppatch          "(debugging aid)"
+        , z "dumplump"    main_dumplump           "(debugging aid)"
         , z "test"        main_test               "(test)" ]
 
 
@@ -109,7 +110,7 @@ main_hetfa :: [String] -> IO ()
 main_hetfa args = do
     ( _, ConfGen{..} ) <- parseOpts False defaultConfGen (mk_opts "hetfa" [] opts_hetfa) args
     -- (_, Reference ref) <- readReference conf_reference
-    refs <- map (\(_,_,s) -> s) <$> readTwoBit conf_reference
+    refs <- nrss_seqs <$> readTwoBit conf_reference
     smp <- readSampleFa conf_sample
 
     withFile conf_output WriteMode $ \hdl ->
@@ -168,6 +169,10 @@ main_dumppatch :: [String] -> IO ()
 main_dumppatch [inf] = debugStretch . decode . decomp =<< L.readFile inf
 main_dumppatch     _ = hPutStrLn stderr "Usage: dumppatch [foo.hef]"
 
+main_dumplump :: [String] -> IO ()
+main_dumplump [ref,inf] = do rs <- readTwoBit ref
+                             Lump.debugLump . Lump.decode rs . decomp =<< L.readFile inf
+main_dumplump     _ = hPutStrLn stderr "Usage: dumplump [foo.hef]"
 
 opts_eigen :: [ OptDescr (ConfGen -> IO ConfGen) ]
 opts_eigen =
@@ -276,7 +281,7 @@ main_vcfout_2 args = do
     ( hefs, ConfGen{..} ) <- parseOpts True defaultConfGen { conf_noutgroups = 0 }
                                             (mk_opts "vcfexport" "[hef-file...]" (tail opts_eigen)) args
     refs <- readTwoBit conf_reference
-    let chrs = V.fromList [ c | (c,_,_) <- refs ]
+    let chrs = V.fromList $ nrss_chroms refs
     inps <- V.fromList <$> mapM (fmap (Lump.decode refs . decomp) . L.readFile) hefs
 
     B.putStr $ "##fileformat=VCFv4.1\n" <>
@@ -285,7 +290,7 @@ main_vcfout_2 args = do
                mconcat [ '\t' `B.cons` B.pack (takeBaseName f) | f <- hefs ] <>
                B.singleton '\n'
 
-    let the_vars = addRef refs $ concat $ Lump.merge_lumps conf_noutgroups inps
+    let the_vars = addRef refs $ concat $ Lump.mergeLumps conf_noutgroups inps
 
     forM_ the_vars $ \NewRef.Variant{..} ->
         -- samples (not outgroups) must show alt allele at least once
@@ -300,7 +305,7 @@ main_vcfout_2 args = do
                 U.foldr ((<>) . B.byteString . (V.!) gts . fromIntegral) mempty v_calls <>
                 B.char8 '\n'
   where
-    toAltCode (V2b v) (N2b r) = B.index "TCAGXPOI" $ fromIntegral (xor r v)
+    toAltCode (V2b v) (N2b r) = B.index "TCAGXPOI" $ fromIntegral (xor r v .&. 7)
     toRefCode = toAltCode (V2b 0)
 
     is_transversion (V2b v) = testBit v 1

@@ -63,6 +63,41 @@ data Lump a
 
 type Seq1 = U.Vector Word8
 
+debugLump :: Fix Lump -> IO ()
+debugLump = debugLump' 0 0
+
+debugLump' :: Int -> Int -> Fix Lump -> IO ()
+debugLump' c i fl = case unFix fl of
+    Done          -> return ()
+    Break       l -> do putStrLn $ shows (c,i) "\tBreak" ;           debugLump' (c+1) 0 l
+    Ns        n l -> do putStrLn $ shows (c,i) "\tNs   " ++ show n ; debugLump' c (i+n) l
+    Eqs1      n l -> do putStrLn $ shows (c,i) "\tEqs1 " ++ show n ; debugLump' c (i+n) l
+    Eqs2      n l -> do putStrLn $ shows (c,i) "\tEqs2 " ++ show n ; debugLump' c (i+n) l
+
+    Trans1      l -> do putStrLn $ shows (c,i) "\tTrans1 " ;      debugLump' c (i+1) l
+    Compl1      l -> do putStrLn $ shows (c,i) "\tCompl1 " ;      debugLump' c (i+1) l
+    TCompl1     l -> do putStrLn $ shows (c,i) "\tTCompl1 " ;     debugLump' c (i+1) l
+
+    RefTrans    l -> do putStrLn $ shows (c,i) "\tRefTrans " ;    debugLump' c (i+1) l
+    Trans2      l -> do putStrLn $ shows (c,i) "\tTrans2 " ;      debugLump' c (i+1) l
+    RefCompl    l -> do putStrLn $ shows (c,i) "\tRefCompl " ;    debugLump' c (i+1) l
+    TransCompl  l -> do putStrLn $ shows (c,i) "\tTransCompl " ;  debugLump' c (i+1) l
+    Compl2      l -> do putStrLn $ shows (c,i) "\tCompl2 " ;      debugLump' c (i+1) l
+    RefTCompl   l -> do putStrLn $ shows (c,i) "\tRefTCompl " ;   debugLump' c (i+1) l
+    TransTCompl l -> do putStrLn $ shows (c,i) "\tTransTCompl " ; debugLump' c (i+1) l
+    ComplTCompl l -> do putStrLn $ shows (c,i) "\tComplTCompl " ; debugLump' c (i+1) l
+    TCompl2     l -> do putStrLn $ shows (c,i) "\tTCompl2 " ;     debugLump' c (i+1) l
+
+    Del1      n l -> do putStrLn $ shows (c,i) "\tDel1 " ; debugLump' c i l
+    Del2      n l -> do putStrLn $ shows (c,i) "\tDel2 " ; debugLump' c i l
+    DelH      n l -> do putStrLn $ shows (c,i) "\tDelH " ; debugLump' c i l
+
+    Ins1      s l -> do putStrLn $ shows (c,i) "\tIns1 " ; debugLump' c i l
+    Ins2      s l -> do putStrLn $ shows (c,i) "\tIns2 " ; debugLump' c i l
+    InsH      s l -> do putStrLn $ shows (c,i) "\tInsH " ; debugLump' c i l
+
+
+
 normalizeLump :: Fix Lump -> Fix Lump
 normalizeLump = ana (go . unFix)
   where
@@ -302,8 +337,8 @@ decodeLump = ana decode1
 --
 -- 'noutgroups':  number of outgroups
 
-merge_lumps :: Int -> V.Vector (Fix Lump) -> [[Variant]]
-merge_lumps !noutgroups = filter (not . null) . go 0 0
+mergeLumps :: Int -> V.Vector (Fix Lump) -> [[Variant]]
+mergeLumps !noutgroups = filter (not . null) . go 0 0
     -- Merging stretches.  We define a 'Variant' as anything that is
     -- different from the reference.  Therefore, 'Eqs' ('Eqs1') and 'Ns'
     -- never create a 'Variant' and we can skip forwards.  A 'Done' is
@@ -460,10 +495,10 @@ instance Monad S where
 -- this needs a reference, but at least we can use a new style
 -- 'NewRefSeq', too.
 stretchToLump :: NewRefSeqs -> Stretch -> Fix Lump
-stretchToLump = (.) normalizeLump . go1
+stretchToLump (NewRefSeqs _ _ ss) = normalizeLump . go1 ss
   where
-    go1 [             ] _ = Fix Done
-    go1 ((_,_,r0) : rs) l = go r0 l
+    go1 [     ] _ = Fix Done
+    go1 (r0:rs) l = go r0 l
       where
         go r (S.Chrs (NucCode a) (NucCode b) k) = call a (call b (flip go k)) r
         go r (S.Ns   c k) = Fix $ Ns   (fromIntegral $ c+c) $ go (dropNRS (fromIntegral $ c+c) r) k
@@ -487,6 +522,7 @@ stretchToLump = (.) normalizeLump . go1
     enc _ _ = n
 
     a_to_x, c_to_x, g_to_x, t_to_x :: V.Vector (Fix Lump -> Lump (Fix Lump))
+    -- iupac_chars = "NACGTMRWSYKacgtN"
 
     a_to_x = V.fromList [ n, eq2, TCompl2, Trans2, Compl2
                         , RefTCompl, RefTrans, RefCompl, n, n, n
@@ -505,7 +541,6 @@ stretchToLump = (.) normalizeLump . go1
                         , Compl1, Trans1, TCompl1, eq1, n ]
 
 
-    -- iupac_chars = "NACGTMRWSYKacgtN"
 
 -- | Main decoder.  Switches behavior based on header.  "HEF\0",
 -- "HEF\1", "HEF\2" are the old format and go through conversion;
