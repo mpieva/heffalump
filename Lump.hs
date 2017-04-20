@@ -2,16 +2,20 @@
 module Lump where
 
 import BasePrelude
-import Data.Fix
 import Data.ByteString.Builder
+import Data.Fix
+import Data.Hashable ( hash )
+import System.Directory ( doesFileExist )
 
 import qualified Data.ByteString.Lazy as L
+import qualified Data.ByteString.Lazy.Char8 as LC
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as U
 
 import Stretch ( Stretch, decode_dip, decode_hap, NucCode(..) )
 import qualified Stretch  as S ( Stretch(..) )
 import NewRef
+import Util ( decomp )
 
 -- | Improved diff representation and encoding.  Goals:
 --
@@ -88,51 +92,60 @@ debugLump' c i fl = case unFix fl of
     ComplTCompl l -> do putStrLn $ shows (c,i) "\tComplTCompl " ; debugLump' c (i+1) l
     TCompl2     l -> do putStrLn $ shows (c,i) "\tTCompl2 " ;     debugLump' c (i+1) l
 
-    Del1      n l -> do putStrLn $ shows (c,i) "\tDel1 " ; debugLump' c i l
-    Del2      n l -> do putStrLn $ shows (c,i) "\tDel2 " ; debugLump' c i l
-    DelH      n l -> do putStrLn $ shows (c,i) "\tDelH " ; debugLump' c i l
+    Del1      n l -> do putStrLn $ shows (c,i) "\tDel1 " ++ shows n " " ; debugLump' c i l
+    Del2      n l -> do putStrLn $ shows (c,i) "\tDel2 " ++ shows n " " ; debugLump' c i l
+    DelH      n l -> do putStrLn $ shows (c,i) "\tDelH " ++ shows n " " ; debugLump' c i l
 
-    Ins1      s l -> do putStrLn $ shows (c,i) "\tIns1 " ; debugLump' c i l
-    Ins2      s l -> do putStrLn $ shows (c,i) "\tIns2 " ; debugLump' c i l
-    InsH      s l -> do putStrLn $ shows (c,i) "\tInsH " ; debugLump' c i l
+    Ins1      s l -> do putStrLn $ shows (c,i) "\tIns1 " ++ shows s " " ; debugLump' c i l
+    Ins2      s l -> do putStrLn $ shows (c,i) "\tIns2 " ++ shows s " " ; debugLump' c i l
+    InsH      s l -> do putStrLn $ shows (c,i) "\tInsH " ++ shows s " " ; debugLump' c i l
 
 
 
 normalizeLump :: Fix Lump -> Fix Lump
 normalizeLump = ana (go . unFix)
   where
+    go (Ns 0 l) = unFix l
     go (Ns n l) = case unFix l of
         Ns n' l' -> go $ Ns (n+n') l'
         _        -> Ns n l
 
+    go (Eqs1 0 l) = unFix l
     go (Eqs1 n l) = case unFix l of
         Eqs1 n' l' -> go $ Eqs1 (n+n') l'
         _          -> Eqs1 n l
 
+    go (Eqs2 0 l) = unFix l
     go (Eqs2 n l) = case unFix l of
         Eqs2 n' l' -> go $ Eqs2 (n+n') l'
         _          -> Eqs2 n l
 
+    go (Del1 0 l) = unFix l
     go (Del1 n l) = case unFix l of
         Del1 n' l' -> go $ Del1 (n+n') l'
         _          -> Del1 n l
 
+    go (Del2 0 l) = unFix l
     go (Del2 n l) = case unFix l of
         Del2 n' l' -> go $ Del2 (n+n') l'
         _          -> Del2 n l
 
+    go (DelH 0 l) = unFix l
     go (DelH n l) = case unFix l of
         DelH n' l' -> go $ DelH (n+n') l'
         _          -> DelH n l
 
+    go (Ins1 n l) | U.null n = unFix l
     go (Ins1 n l) = case unFix l of
         Ins1 n' l' -> go $ Ins1 (n U.++ n') l'
         _          -> Ins1 n l
 
+    go (Ins2 n l) | U.null n = unFix l
     go (Ins2 n l) = case unFix l of
         Ins2 n' l' -> go $ Ins2 (n U.++ n') l'
         _          -> Ins2 n l
 
+    go (InsH n l) | U.null n = unFix l
     go (InsH n l) = case unFix l of
         InsH n' l' -> go $ InsH (n U.++ n') l'
         _          -> InsH n l
@@ -495,7 +508,7 @@ instance Monad S where
 -- this needs a reference, but at least we can use a new style
 -- 'NewRefSeq', too.
 stretchToLump :: NewRefSeqs -> Stretch -> Fix Lump
-stretchToLump (NewRefSeqs _ _ ss) = normalizeLump . go1 ss
+stretchToLump nrs = normalizeLump . go1 (nrss_seqs nrs)
   where
     go1 [     ] _ = Fix Done
     go1 (r0:rs) l = go r0 l
@@ -543,15 +556,50 @@ stretchToLump (NewRefSeqs _ _ ss) = normalizeLump . go1 ss
 
 
 -- | Main decoder.  Switches behavior based on header.  "HEF\0",
--- "HEF\1", "HEF\2" are the old format and go through conversion;
--- "HEF\3" is read directly.
-decode :: NewRefSeqs -> L.ByteString -> Fix Lump
-decode rs str | "HEF\0" `L.isPrefixOf` str = stretchToLump rs $ decode_dip (L.drop 4 str)
-              | "HEF\1" `L.isPrefixOf` str = stretchToLump rs $ decode_hap (L.drop 4 str)
-              -- | "HEF\2" `L.isPrefixOf` str = stretchToLump rs $ decode_mix (L.drop 4 str)
-              | "HEF\3" `L.isPrefixOf` str = decodeLump (L.drop 4 str)
-              | otherwise                  = stretchToLump rs $ decode_dip (L.drop 4 str) -- error "Format not recognixed."
+-- "HEF\1" are the old format and go through conversion;  For
+-- the old format, we need a reference, and we have to trust it's a
+-- compatible one.  "HEF\2" is the new format.  If a reference is given,
+-- we check if we can use it.
+decode :: Either String NewRefSeqs -> L.ByteString -> Fix Lump
+decode (Left err)  str | "HEF\2" `L.isPrefixOf` str = decodeLump (L.drop 4 str)
+                       | otherwise                  = error err
 
-encode :: Fix Lump -> Builder
-encode s = byteString "HEF\3" <> encodeLump s
+decode (Right  r) str | "HEF\0" `L.isPrefixOf` str = stretchToLump r $ decode_dip (L.drop 4 str)
+                      | "HEF\1" `L.isPrefixOf` str = stretchToLump r $ decode_hap (L.drop 4 str)
+                      | "HEF\2" `L.isPrefixOf` str = go (L.drop 4 str)
+                      | otherwise                  = stretchToLump r $ decode_dip (L.drop 4 str) -- error "Format not recognized?"
+  where
+    go s = let (hs,s') = L.splitAt 4 . L.drop 1 . L.dropWhile (/= 0) $ s
+               hv = L.foldr (\b a -> fromIntegral b .|. shiftL a 8) 0 hs
+           in if hv == 0xFFFFFF .&. hash (nrss_chroms r, nrss_lengths r)
+              then decodeLump s'
+              else error "Incompatible reference genome."
+
+getRefPath :: L.ByteString -> Maybe FilePath
+getRefPath str | "HEF\2" `L.isPrefixOf` str = Just . LC.unpack . L.takeWhile (/= 0) $ L.drop 4 str
+               | otherwise                  = Nothing
+
+decodeMany :: Maybe FilePath -> [FilePath] -> IO ( Either String NewRefSeqs, V.Vector (Fix Lump) )
+decodeMany mrs fs = do
+    raws <- mapM (fmap decomp . L.readFile) fs
+    rs <- case mrs of
+            Just fp -> Right <$> readTwoBit fp
+            Nothing -> do
+                fps <- filterM doesFileExist $ mapMaybe getRefPath raws
+                case fps of
+                    fp : _ -> Right <$> readTwoBit fp
+                    [    ] -> return . Left $ "No reference found.  Looked for it at "
+                                ++ intercalate ", " (mapMaybe getRefPath raws) ++ "."
+    return ( rs, V.fromList $ map (decode rs) raws )
+
+
+
+-- | Encode a 'Lump' and enough information about the 'NewRefSeqs' to be
+-- (1) able to find it again and (2) to make sure we got the right one
+-- when operating on a 'Lump'.
+encode :: NewRefSeqs -> Fix Lump -> Builder
+encode r s = byteString "HEF\3" <>
+             byteString (nrss_path r) <> word8 0 <>
+             int32LE (fromIntegral (hash (nrss_chroms r, nrss_lengths r))) <>
+             encodeLump s
 

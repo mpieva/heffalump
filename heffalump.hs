@@ -24,10 +24,9 @@ import Bamin
 import Bcf
 import Eigenstrat
 import Emf
+import Lump hiding ( Lump(..), decode )
 import qualified Lump
-import Merge
-import NewRef ( Nuc2b(..), Var2b(..), addRef, readTwoBit, NewRefSeqs(..) )
-import qualified NewRef
+import NewRef
 import SillyStats
 import Stretch
 import Treemix
@@ -52,8 +51,7 @@ main = do
 
     mains = let z a b c = (a,(b,c)) in
         [ z "eigenstrat"  main_eigenstrat         "Merge heffalumps into Eigenstrat format"
-        , z "vcfexport"   main_vcfout             "Merge heffalumps into VCF (Stretch)"
-        , z "vcflexport"  main_vcfout_2           "Merge heffalumps into VCF (Lump)"
+        , z "vcfexport"   main_vcfout             "Merge heffalumps into VCF"
         , z "hetfa"       main_hetfa              "Import hetfa file"
         , z "bamin"       main_bam                "Import BAM file"
         , z "maf"         main_maf                "Import two-species maf"
@@ -67,53 +65,60 @@ main = do
         , z "bcflc" (main_bcf "bcflc" encode_hap) "Import low coverage bcf (haploid)"
         , z "vcfhc" (main_vcf "vcfhc" encode_dip) "Import high coverage vcf (diploid)"
         , z "vcflc" (main_vcf "vcflc" encode_hap) "Import low coverage vcf (haploid)"
-        , z "cdstatistics" main_patterson_corr    "(failed experiment)"
         , z "debhetfa"    main_debhetfa           "(debugging aid)"
         , z "debmaf"      main_debmaf             "(debugging aid)"
         , z "dumppatch"   main_dumppatch          "(debugging aid)"
-        , z "dumplump"    main_dumplump           "(debugging aid)"
-        , z "test"        main_test               "(test)" ]
+        , z "dumplump"    main_dumplump           "(debugging aid)" ]
 
 
-data ConfGen = ConfGen {
+data ConfImportGen = ConfImportGen {
+    conf_imp_width      :: Int64,           -- only for FastA output
+    conf_imp_reference  :: FilePath,
+    conf_imp_output     :: FilePath,
+    conf_imp_sample     :: FilePath }
+  deriving Show
+
+defaultImportConf :: ConfImportGen
+defaultImportConf = ConfImportGen 50 (error "no reference specified")
+                                     (error "no output file specified")
+                                     (error "no sample file specified")
+
+
+data ConfMergeGen = ConfMergeGen {
     conf_noutgroups :: Int,
     conf_blocksize  :: Int,
-    conf_width      :: Int64,
     conf_all        :: Bool,
-    conf_nosplit    :: Bool,
+    conf_split      :: Bool,
+    conf_reference  :: Maybe FilePath,
     conf_nrefpanel  :: Int,
     conf_output     :: FilePath,
-    conf_reference  :: FilePath,
     conf_sample     :: FilePath }
   deriving Show
 
-defaultConfGen :: ConfGen
-defaultConfGen = ConfGen 1 5000000 50 True False
-                         (error "size of reference panel not known")
-                         (error "no output file specified")
-                         (error "no reference file specified")
-                         (error "no sample file specified")
+defaultMergeConf :: ConfMergeGen
+defaultMergeConf = ConfMergeGen 1 5000000 True True Nothing
+                                (error "size of reference panel not known")
+                                (error "no output file specified")
+                                (error "no sample file specified")
 
-
-opts_hetfa :: [ OptDescr (ConfGen -> IO ConfGen) ]
+opts_hetfa :: [ OptDescr (ConfImportGen -> IO ConfImportGen) ]
 opts_hetfa =
     [ Option "o" ["output"] (ReqArg set_output "FILE") "Write output to FILE (.hef)"
     , Option "r" ["reference"] (ReqArg set_ref "FILE") "Read reference from FILE (.fa)"
     , Option "s" ["sample"] (ReqArg set_sample "FILE") "Read sample from FILE (.hetfa)" ]
   where
-    set_output a c = return $ c { conf_output    = a }
-    set_ref    a c = return $ c { conf_reference = a }
-    set_sample a c = return $ c { conf_sample    = a }
+    set_output a c = return $ c { conf_imp_output    = a }
+    set_ref    a c = return $ c { conf_imp_reference = a }
+    set_sample a c = return $ c { conf_imp_sample    = a }
 
 
 main_hetfa :: [String] -> IO ()
 main_hetfa args = do
-    ( _, ConfGen{..} ) <- parseOpts False defaultConfGen (mk_opts "hetfa" [] opts_hetfa) args
-    -- (_, Reference ref) <- readReference conf_reference
-    refs <- nrss_seqs <$> readTwoBit conf_reference
-    smp <- readSampleFa conf_sample
+    ( _, ConfImportGen{..} ) <- parseOpts False defaultImportConf (mk_opts "hetfa" [] opts_hetfa) args
+    refs <- nrss_seqs <$> readTwoBit conf_imp_reference
+    smp <- readSampleFa conf_imp_sample
 
-    withFile conf_output WriteMode $ \hdl ->
+    withFile conf_imp_output WriteMode $ \hdl ->
         hPutBuilder hdl . encode_dip . catStretches $ zipWith diff2 refs smp
 
 
@@ -132,26 +137,26 @@ main_maf args = do
            mapM (\f -> parseMaf . decomp <$> L.readFile f) maffs
 
 
-opts_patch :: [ OptDescr (ConfGen -> IO ConfGen) ]
+opts_patch :: [ OptDescr (ConfImportGen -> IO ConfImportGen) ]
 opts_patch =
     [ Option "o" ["output"] (ReqArg set_output "FILE") "Write output to FILE (.hetfa)"
     , Option "r" ["reference"] (ReqArg set_ref "FILE") "Read reference from FILE (.fa)"
     , Option "s" ["sample"] (ReqArg set_sample "FILE") "Read sample from FILE (.hef)"
     , Option "w" ["width"]  (ReqArg  set_width  "NUM") "Set width of FastA to NUM (50)" ]
   where
-    set_output a c = return $ c { conf_output    = a }
-    set_ref    a c = return $ c { conf_reference = a }
-    set_sample a c = return $ c { conf_sample    = a }
-    set_width  a c = (\n   -> c { conf_width     = n }) <$> readIO a
+    set_output a c = return $ c { conf_imp_output    = a }
+    set_ref    a c = return $ c { conf_imp_reference = a }
+    set_sample a c = return $ c { conf_imp_sample    = a }
+    set_width  a c = (\n   -> c { conf_imp_width     = n }) <$> readIO a
 
 main_patch :: [String] -> IO ()
 main_patch args = do
-    ( _, ConfGen{..} ) <- parseOpts False defaultConfGen (mk_opts "patch" [] opts_patch) args
-    (_,ref) <- readReference conf_reference
-    pat <- decode . decomp <$> L.readFile conf_sample
+    ( _, ConfImportGen{..} ) <- parseOpts False defaultImportConf (mk_opts "patch" [] opts_patch) args
+    (_,ref) <- readReference conf_imp_reference
+    pat <- decode . decomp <$> L.readFile conf_imp_sample
 
-    withFile conf_output WriteMode $ \hdl ->
-            patchFasta hdl conf_width chroms ref pat
+    withFile conf_imp_output WriteMode $ \hdl ->
+            patchFasta hdl conf_imp_width chroms ref pat
 
 
 main_debmaf :: [String] -> IO ()
@@ -171,10 +176,11 @@ main_dumppatch     _ = hPutStrLn stderr "Usage: dumppatch [foo.hef]"
 
 main_dumplump :: [String] -> IO ()
 main_dumplump [ref,inf] = do rs <- readTwoBit ref
-                             Lump.debugLump . Lump.decode rs . decomp =<< L.readFile inf
-main_dumplump     _ = hPutStrLn stderr "Usage: dumplump [foo.hef]"
+                             debugLump . Lump.decode (Right rs) . decomp =<< L.readFile inf
+main_dumplump [  inf  ] =    debugLump . Lump.decode (Left "no reference given") . decomp =<< L.readFile inf
+main_dumplump     _     =    hPutStrLn stderr "Usage: dumplump [foo.hef]"
 
-opts_eigen :: [ OptDescr (ConfGen -> IO ConfGen) ]
+opts_eigen :: [ OptDescr (ConfMergeGen -> IO ConfMergeGen) ]
 opts_eigen =
     [ Option "o" ["output"]     (ReqArg set_output "FILE") "Write output to FILE.geno and FILE.snp"
     , Option "r" ["reference"]     (ReqArg set_ref "FILE") "Read reference from FILE (.fa)"
@@ -182,30 +188,32 @@ opts_eigen =
     , Option "t" ["only-transversions"] (NoArg set_no_all) "Output only transversion sites"
     , Option "b" ["only-biallelic"]   (NoArg set_no_split) "Discard, don't split, polyallelic sites" ]
   where
-    set_output a c = return $ c { conf_output    = a }
-    set_ref    a c = return $ c { conf_reference = a }
-    set_nout   a c = readIO a >>= \n -> return $ c { conf_noutgroups = n }
-    set_no_all   c = return $ c { conf_all = False }
-    set_no_split c = return $ c { conf_nosplit = True }
+    set_output a c = return $ c { conf_output     =      a }
+    set_ref    a c = return $ c { conf_reference  = Just a }
+    set_nout   a c = (\n ->   c { conf_noutgroups =      n }) <$> readIO a
+    set_no_all   c = return $ c { conf_all        =  False }
+    set_no_split c = return $ c { conf_split      =  False }
 
 -- merge multiple files with the reference, write Eigenstrat format (geno & snp files)
 main_eigenstrat :: [String] -> IO ()
 main_eigenstrat args = do
-    ( hefs, ConfGen{..} ) <- parseOpts True defaultConfGen (mk_opts "eigenstrat" "[hef-file...]" opts_eigen) args
-    (_,ref) <- readReference conf_reference
-    inps <- mapM (fmap (decode . decomp) . L.readFile) hefs
+    ( hefs, ConfMergeGen{..} ) <- parseOpts True defaultMergeConf (mk_opts "eigenstrat" "[hef-file...]" opts_eigen) args
+    (refs, inps) <- decodeMany conf_reference hefs
 
     withFile (conf_output ++ ".snp") WriteMode $ \hsnp ->
-        withFile (conf_output ++ ".geno") WriteMode $ \hgeno ->
-            forM_ (merge_hefs conf_nosplit conf_noutgroups ref inps) $ \Variant{..} ->
+        withFile (conf_output ++ ".geno") WriteMode $ \hgeno -> do
+            let vars = either (const id) addRef refs $
+                       bool singles_only concat conf_split $
+                       mergeLumps conf_noutgroups inps
+            forM_ vars $ \Variant{..} ->
                 -- samples (not outgroups) must show ref and alt allele at least once
                 let ve = U.foldl' (.|.) 0 $ U.drop conf_noutgroups v_calls
-                    is_ti = conf_all || is_transversion (toUpper v_ref) (toUpper v_alt) in
+                    is_ti = conf_all || isTransversion v_alt in
                 when (ve .&. 3 /= 0 && ve .&. 12 /= 0 && is_ti) $ do
                     hPutStrLn hgeno $ map (B.index "9222011101110111" . fromIntegral) $ U.toList v_calls
                     hPutStrLn hsnp $ intercalate "\t"
                         -- 1st column is SNP name
-                        [ mkname v_chr v_pos v_alt
+                        [ mkname v_chr v_pos (toAltCode v_alt v_ref)
                         -- "2nd column is chromosome.  X chromosome is encoded as 23.
                         -- Also, Y is encoded as 24, mtDNA is encoded as 90, ..."
                         , show $ if v_chr == 24 then 90 else v_chr + 1
@@ -215,74 +223,18 @@ main_eigenstrat args = do
                         -- "4th column is physical position (in bases)"
                         , show (v_pos+1)
                         -- "Optional 5th and 6th columns are reference and variant alleles"
-                        , [toUpper v_ref], [toUpper v_alt] ]
+                        , [toRefCode v_ref], [toAltCode v_alt v_ref] ]
   where
-    is_transversion 'C' 'T' = False
-    is_transversion 'T' 'C' = False
-    is_transversion 'G' 'A' = False
-    is_transversion 'A' 'G' = False
-    is_transversion  _   _  = True
-
-main_vcfout :: [String] -> IO ()
-main_vcfout args = do
-    ( hefs, ConfGen{..} ) <- parseOpts True defaultConfGen { conf_noutgroups = 0 }
-                                            (mk_opts "vcfexport" "[hef-file...]" (tail opts_eigen)) args
-    (chrs,ref) <- readReference conf_reference
-    inps <- mapM (fmap (decode . decomp) . L.readFile) hefs
-
-    B.putStr $ "##fileformat=VCFv4.1\n" <>
-               "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n" <>
-               "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT" <>
-               mconcat [ '\t' `B.cons` B.pack (takeBaseName f) | f <- hefs ] <>
-               B.singleton '\n'
-
-    forM_ (merge_hefs False conf_noutgroups ref inps) $ \Variant{..} ->
-        -- samples (not outgroups) must show alt allele at least once
-        let ve    = U.foldl' (.|.) 0 $ U.drop conf_noutgroups v_calls
-            is_ti = conf_all || is_transversion (toUpper v_ref) (toUpper v_alt) in
-        when (ve .&. 12 /= 0 && is_ti) $ do
-            B.hPutBuilder stdout $
-                B.byteString (chrs !! v_chr) <> B.char8 '\t' <>
-                B.intDec (v_pos+1) <> B.string8 "\t.\t" <>
-                B.char8 (toUpper v_ref) <> B.char8 '\t' <>
-                B.char8 (toUpper v_alt) <> B.string8 "\t.\t.\t.\tGT" <>
-                U.foldr ((<>) . B.byteString . (V.!) gts . fromIntegral) mempty v_calls <>
-                B.char8 '\n'
-  where
-    is_transversion 'C' 'T' = False
-    is_transversion 'T' 'C' = False
-    is_transversion 'G' 'A' = False
-    is_transversion 'A' 'G' = False
-    is_transversion  _   _  = True
-
-    gts :: V.Vector B.ByteString
-    gts = V.fromList [ "\t./."      -- 0, N
-                     , "\t0"        -- 1, 1xref
-                     , "\t0/0"      -- 2, 2xref
-                     , "\t0/0"      -- 3, 3xref (whatever)
-                     , "\t1"        -- 4, 1xalt
-                     , "\t0/1"      -- 5, ref+alt
-                     , "\t0/1"      -- 6, 2xref+alt (whatever)
-                     , "\t0/1"      -- 7, 3xref+alt (whatever)
-                     , "\t1/1"      -- 8, 2xalt
-                     , "\t0/1"      -- 9, ref+2xalt (whatever)
-                     , "\t0/1"      -- 10, 2xref+2xalt (whatever)
-                     , "\t0/1"      -- 11, 3xref+2xalt (whatever)
-                     , "\t1/1"      -- 12, 3xalt (whatever)
-                     , "\t0/1"      -- 13, ref+3xalt (whatever)
-                     , "\t0/1"      -- 14, 2xref+3xalt (whatever)
-                     , "\t0/1" ]    -- 15, 3xref+3xalt (whatever)
-
+    singles_only = foldr (\xs xss -> case xs of [x] -> x : xss ; _ -> xss) []
 
 
 -- VCF output, this time going through 'Lump' instead of 'Stretch'
-main_vcfout_2 :: [String] -> IO ()
-main_vcfout_2 args = do
-    ( hefs, ConfGen{..} ) <- parseOpts True defaultConfGen { conf_noutgroups = 0 }
+main_vcfout :: [String] -> IO ()
+main_vcfout args = do
+    ( hefs, ConfMergeGen{..} ) <- parseOpts True defaultMergeConf { conf_noutgroups = 0 }
                                             (mk_opts "vcfexport" "[hef-file...]" (tail opts_eigen)) args
-    refs <- readTwoBit conf_reference
-    let chrs = V.fromList $ nrss_chroms refs
-    inps <- V.fromList <$> mapM (fmap (Lump.decode refs . decomp) . L.readFile) hefs
+    (refs, inps) <- decodeMany conf_reference hefs
+    let chrs = either error (V.fromList . nrss_chroms) refs
 
     B.putStr $ "##fileformat=VCFv4.1\n" <>
                "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n" <>
@@ -290,12 +242,12 @@ main_vcfout_2 args = do
                mconcat [ '\t' `B.cons` B.pack (takeBaseName f) | f <- hefs ] <>
                B.singleton '\n'
 
-    let the_vars = addRef refs $ concat $ Lump.mergeLumps conf_noutgroups inps
+    let the_vars = addRef (either error id refs) $ concat $ mergeLumps conf_noutgroups inps
 
-    forM_ the_vars $ \NewRef.Variant{..} ->
+    forM_ the_vars $ \Variant{..} ->
         -- samples (not outgroups) must show alt allele at least once
         let ve    = U.foldl' (.|.) 0 $ U.drop conf_noutgroups v_calls
-            is_ti = conf_all || is_transversion v_alt in
+            is_ti = conf_all || isTransversion v_alt in
         when (ve .&. 12 /= 0 && is_ti) $ do
             B.hPutBuilder stdout $
                 B.byteString (chrs V.! v_chr) <> B.char8 '\t' <>
@@ -305,11 +257,6 @@ main_vcfout_2 args = do
                 U.foldr ((<>) . B.byteString . (V.!) gts . fromIntegral) mempty v_calls <>
                 B.char8 '\n'
   where
-    toAltCode (V2b v) (N2b r) = B.index "TCAGXPOI" $ fromIntegral (xor r v .&. 7)
-    toRefCode = toAltCode (V2b 0)
-
-    is_transversion (V2b v) = testBit v 1
-
     gts :: V.Vector B.ByteString
     gts = V.fromList [ "\t./."      -- 0, N
                      , "\t0"        -- 1, 1xref
@@ -501,6 +448,7 @@ readVcf fp = do
             Nothing -> return []
             Just  v -> (:) v <$> self
 
+{-  XXX What was thid good for?  No need for a repair?  Easy repair?
 main_test :: [String] -> IO ()
 main_test hefs = do
     (chrs,ref) <- readReference "/var/tmp/ref.fa"
@@ -558,5 +506,5 @@ main_test hefs = do
                      , "\t0/1"      -- 13, ref+3xalt (whatever)
                      , "\t0/1"      -- 14, 2xref+3xalt (whatever)
                      , "\t0/1" ]    -- 15, 3xref+3xalt (whatever)
-
+-}
 

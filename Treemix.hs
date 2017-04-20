@@ -11,23 +11,22 @@ import qualified Data.ByteString.Lazy.Char8      as L
 import qualified Data.HashMap.Strict             as H
 import qualified Data.Vector.Unboxed             as U
 
-import Merge
-import Stretch
+import Lump
+import NewRef
 import Util
 
 data ConfTmx = ConfTmx {
     conf_noutgroups :: Int,
     conf_indivs     :: Maybe FilePath,
+    conf_reference  :: Maybe FilePath,
     conf_transv     :: Bool,
     conf_chroms     :: (Int,Int),
-    conf_output     :: FilePath,
-    conf_reference  :: FilePath }
+    conf_output     :: FilePath }
   deriving Show
 
 defaultConfTmx :: ConfTmx
-defaultConfTmx = ConfTmx 1 Nothing False (0,21)
+defaultConfTmx = ConfTmx 1 Nothing Nothing False (0,21)
                          (error "no output file specified")
-                         (error "no reference file specified")
 
 opts_treemix :: [ OptDescr (ConfTmx -> IO ConfTmx) ]
 opts_treemix =
@@ -39,7 +38,7 @@ opts_treemix =
     , Option "x" ["x-chromosome"]  (NoArg  set_xchrom       ) "Analyze X chromsome, not autosomes" ]
   where
     set_output a c =                    return $ c { conf_output     =      a }
-    set_ref    a c =                    return $ c { conf_reference  =      a }
+    set_ref    a c =                    return $ c { conf_reference  = Just a }
     set_indiv  a c =                    return $ c { conf_indivs     = Just a }
     set_nout   a c = readIO a >>= \n -> return $ c { conf_noutgroups =      n }
     set_transv   c =                    return $ c { conf_transv     =   True }
@@ -58,14 +57,13 @@ main_treemix args = do
                       return . toSymtab $ map (lookupHef popmap) hefs
         Nothing -> return (map (B.pack . takeBaseName) hefs, length hefs, U.enumFromN 0 (length hefs))
 
-    (_,ref) <- readReference conf_reference
-    inps <- mapM (fmap (decode . decomp) . L.readFile) hefs
+    (_ref,inps) <- decodeMany conf_reference hefs
 
     L.writeFile conf_output $ compress $ toLazyByteString $
         foldr (\a k -> byteString a <> char7 ' ' <> k) (char7 '\n') pops <>
         foldMap
             (\Variant{..} -> let ve = U.foldl' (.|.) 0 $ U.drop conf_noutgroups v_calls
-                                 is_ti = not conf_transv || is_transversion (toUpper v_ref) (toUpper v_alt)
+                                 is_ti = not conf_transv || isTransversion v_alt
 
                                  refcounts = U.accumulate (+) (U.replicate npops 0) $
                                              U.zip popixs $ U.map (fromIntegral . (3 .&.)) v_calls
@@ -77,13 +75,7 @@ main_treemix args = do
                              in if inRange conf_chroms v_chr && ve .&. 3 /= 0 && ve .&. 12 /= 0 && is_ti
                                then U.foldr show1 (char7 '\n') $ U.zip refcounts altcounts
                                else mempty)
-            (merge_hefs False conf_noutgroups ref inps)
-  where
-    is_transversion 'C' 'T' = False
-    is_transversion 'T' 'C' = False
-    is_transversion 'G' 'A' = False
-    is_transversion 'A' 'G' = False
-    is_transversion  _   _  = True
+            (concat $ mergeLumps conf_noutgroups inps)
 
 
 -- | Reads an individual file.  Returns a map from individual to pop

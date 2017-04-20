@@ -26,7 +26,6 @@ import qualified Data.ByteString.Char8          as B
 import qualified Data.ByteString.Internal       as B
 import qualified Data.ByteString.Lazy.Char8     as L
 import qualified Data.ByteString.Lazy           as LB
-import qualified Data.ByteString.Unsafe         as B
 
 import NewRef
 import Util ( low )
@@ -63,15 +62,18 @@ catStretches = foldr (\a b -> a $ Break b) Done
 
 
 -- | Main decoder.  Switches behavior based on header.
+{-# DEPRECATED decode "Switch to Lumps" #-}
 decode :: L.ByteString -> Stretch
 decode str | "HEF\0" `L.isPrefixOf` str = decode_dip (L.drop 4 str)
            | "HEF\1" `L.isPrefixOf` str = decode_hap (L.drop 4 str)
            -- | "HEF\2" `L.isPrefixOf` str = decode_mix (L.drop 4 str)
            | otherwise                  = decode_dip (L.drop 4 str) -- error "Format not recognixed."
 
+{-# DEPRECATED encode_dip "Switch to Lumps" #-}
 encode_dip :: Stretch -> Builder
 encode_dip s = byteString "HEF\0" <> encode_v0 s
 
+{-# DEPRECATED encode_hap "Switch to Lumps" #-}
 encode_hap :: Stretch -> Builder
 encode_hap s = byteString "HEF\1" <> encode_v0 s
 
@@ -114,6 +116,7 @@ decode_hap = decode_v0 nc Eqs1
 -- | Decode for original format, parameterized so it can be used for
 -- haploid and diploid individuals (aka "high coverage" and "low
 -- coverage" input).
+{-# DEPRECATED decode_v0 "Switch to Lumps" #-}
 decode_v0 :: (Word8 -> NucCode) -> (Int64 -> Stretch -> Stretch) -> L.ByteString -> Stretch
 decode_v0 nucCode eqs = go
   where
@@ -150,6 +153,7 @@ decode_v0 nucCode eqs = go
 
 -- | Version 0 encoding.  Deals with diploid calls, stretches of no call,
 -- stretches of matches.
+{-# DEPRECATED encode_v0 "Switch to Lumps" #-}
 encode_v0 :: Stretch -> Builder
 encode_v0 (Chrs (NucCode x) (NucCode y) k)
     | 0 <= x && x < 15 && 0 <= y && y < 15 = let x' = if x >= 11 then x-10 else x
@@ -188,88 +192,6 @@ encode_v0 (Eqs1 x k) = encode_v0 $ Eqs x k
 encode_v0 (Break k) = word8 0x80 <> encode_v0 k
 encode_v0 Done      = mempty
 
-
-{- decode_mix :: L.ByteString -> Stretch
-decode_mix = undefined -- XXX -}
-
--- | Version 2 encoding.  Deals with haploid or diploid calls, stretches of no call,
--- stretches of matches, stretches matching only one base.
---
--- 0xF0     Ns, one length byte follows
--- 0xF1     Ns, two length bytes follow
--- 0xF2     Ns, three length bytes follow
--- 0xF3     Ns, four length bytes follow
--- 0xF4     Eqs, one length byte follows
--- 0xF5     Eqs, two length bytes follow
--- 0xF6     Eqs, three length bytes follow
--- 0xF7     Eqs, four length bytes follow
--- 0xF8     Eqs1, one length byte follows
--- 0xF9     Eqs1, two length bytes follow
--- 0xFA     Eqs1, three length bytes follow
--- 0xFB     Eqs1, four length bytes follow
--- 0xFF     Break
--- 0xXY     Two chars, Y and X
-
-{- encode_mix :: Stretch -> Builder
-encode_mix s = byteString "HEF\2" <> go s
-  where
-    go (Chrs (NucCode x) (NucCode y) k)
-        | 0 <= x && x < 15 && 0 <= y && y < 15 = word8 (fromIntegral $ x + 16 * y) <> go k
-        | otherwise = error $ "shouldn't happen: Chrs " ++ show x ++ " " ++ show y
-
-    go (Ns x k) | x <= 0 = error $ "WTF?  Backwards stretch?! " ++ show x
-                | x < 0x100       = word8 0xF0
-                                 <> word8 (fromIntegral x) <> go k
-                | x < 0x10000     = word8 0xF1
-                                 <> word8 (fromIntegral (x `shiftR` 0))
-                                 <> word8 (fromIntegral (x `shiftR` 8)) <> go k
-                | x < 0x1000000   = word8 0xF2
-                                 <> word8 (fromIntegral (x `shiftR` 0))
-                                 <> word8 (fromIntegral (x `shiftR` 8))
-                                 <> word8 (fromIntegral (x `shiftR` 16)) <> go k
-                | x < 0x100000000 = word8 0xF3
-                                 <> word8 (fromIntegral (x `shiftR` 0))
-                                 <> word8 (fromIntegral (x `shiftR` 8))
-                                 <> word8 (fromIntegral (x `shiftR` 16))
-                                 <> word8 (fromIntegral (x `shiftR` 24)) <> go k
-                | otherwise       = error $ "WTF?! (too many Ns: " ++ show (2*x) ++ ")"
-
-    go (Eqs x k) | x <= 0 = error $ "WTF?  Backwards stretch?! " ++ show x
-                 | x < 0x100       = word8 0xF4
-                                  <> word8 (fromIntegral x) <> go k
-                 | x < 0x10000     = word8 0xF5
-                                  <> word8 (fromIntegral (x `shiftR` 0))
-                                  <> word8 (fromIntegral (x `shiftR` 8)) <> go k
-                 | x < 0x1000000   = word8 0xF6
-                                  <> word8 (fromIntegral (x `shiftR` 0))
-                                  <> word8 (fromIntegral (x `shiftR` 8))
-                                  <> word8 (fromIntegral (x `shiftR` 16)) <> go k
-                 | x < 0x100000000 = word8 0xF7
-                                  <> word8 (fromIntegral (x `shiftR` 0))
-                                  <> word8 (fromIntegral (x `shiftR` 8))
-                                  <> word8 (fromIntegral (x `shiftR` 16))
-                                  <> word8 (fromIntegral (x `shiftR` 24)) <> go k
-                 | otherwise       = error $ "WTF?! (too many Ns: " ++ show (2*x) ++ ")"
-
-    go (Eqs1 x k) | x <= 0 = error $ "WTF?  Backwards stretch?! " ++ show x
-                  | x < 0x100       = word8 0xF8
-                                   <> word8 (fromIntegral x) <> go k
-                  | x < 0x10000     = word8 0xF9
-                                   <> word8 (fromIntegral (x `shiftR` 0))
-                                   <> word8 (fromIntegral (x `shiftR` 8)) <> go k
-                  | x < 0x1000000   = word8 0xFA
-                                   <> word8 (fromIntegral (x `shiftR` 0))
-                                   <> word8 (fromIntegral (x `shiftR` 8))
-                                   <> word8 (fromIntegral (x `shiftR` 16)) <> go k
-                  | x < 0x100000000 = word8 0xFB
-                                   <> word8 (fromIntegral (x `shiftR` 0))
-                                   <> word8 (fromIntegral (x `shiftR` 8))
-                                   <> word8 (fromIntegral (x `shiftR` 16))
-                                   <> word8 (fromIntegral (x `shiftR` 24)) <> go k
-                  | otherwise       = error $ "WTF?! (too many Ns: " ++ show (2*x) ++ ")"
-
-    go (Break k) = word8 0xFF <> go k
-    go Done      = mempty -}
 
 -- | We store diploid calls.  For this we need 11 codes:  no call(1),
 -- the bases(4), heterozygotes(6).  If we also want to support haploid

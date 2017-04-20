@@ -16,7 +16,6 @@ executable heffalump
                        Eigenstrat,
                        Emf,
                        Lump,
-                       Merge,
                        NewRef,
                        Pileup, 
                        SillyStats,
@@ -33,6 +32,7 @@ executable heffalump
                        data-fix,
                        directory,
                        filepath,
+                       hashable == 1.2.*,
                        math-functions,
                        primitive,
                        random,
@@ -53,7 +53,7 @@ executable heffalump
                        RecordWildCards,
                        TypeFamilies
 
-  ghc-options:         -Wall -auto-all -optl-static -optl-pthread
+  ghc-options:         -Wall -auto-all
   cc-options:          -O3 -std=c99 -fPIC -ggdb -Wall
   c-sources:           vcf-scan.c mini-pileup.c
   include-dirs:        .

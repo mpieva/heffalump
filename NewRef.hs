@@ -33,13 +33,15 @@ module NewRef where
 --
 --   VCF:  clearly requires the reference
 
-import qualified Data.ByteString as B
-import qualified Data.ByteString.Unsafe as B
-import System.IO.Posix.MMap
-import System.IO.Unsafe ( unsafeDupablePerformIO )
-import BasePrelude
-import Foreign.Storable ( peekByteOff )
 
+import BasePrelude
+import Foreign.Storable                     ( peekByteOff )
+import System.IO.Posix.MMap                 ( unsafeMMapFile )
+import System.IO.Unsafe                     ( unsafeDupablePerformIO )
+
+import qualified Data.ByteString                as B
+import qualified Data.ByteString.Char8          as C
+import qualified Data.ByteString.Unsafe         as B
 import qualified Data.Vector.Unboxed            as U
 
 -- | This is a reference sequence.  It consists of stretches of Ns and
@@ -60,14 +62,15 @@ instance Show NewRefSeq where
 
 data NewRefSeqs = NewRefSeqs { nrss_chroms  :: [ B.ByteString ]
                              , nrss_lengths :: [ Int ]
-                             , nrss_seqs    :: [ NewRefSeq ] }
+                             , nrss_seqs    :: [ NewRefSeq ]
+                             , nrss_path    :: !B.ByteString }
 
 readTwoBit :: FilePath -> IO NewRefSeqs
-readTwoBit fp = parseTwopBit <$> unsafeMMapFile fp
+readTwoBit fp = parseTwopBit fp <$> unsafeMMapFile fp
 
-parseTwopBit :: B.ByteString -> NewRefSeqs
-parseTwopBit raw = case (getW32 0, getW32 4) of (0x1A412743, 0) -> parseEachSeq 16 0
-                                                _ -> error "This does not look like a 2bit file."
+parseTwopBit :: FilePath -> B.ByteString -> NewRefSeqs
+parseTwopBit fp0 raw = case (getW32 0, getW32 4) of (0x1A412743, 0) -> parseEachSeq 16 0
+                                                    _ -> error "This does not look like a 2bit file."
   where
     getW32 :: Int -> Word32
     getW32 o | o + 4 >= B.length raw = error $ "out of bounds access: " ++ show (o, B.length raw)
@@ -75,10 +78,10 @@ parseTwopBit raw = case (getW32 0, getW32 4) of (0x1A412743, 0) -> parseEachSeq 
 
     num_seq    = getW32 8
 
-    parseEachSeq  _  n | num_seq == n = NewRefSeqs [] [] []
+    parseEachSeq  _  n | num_seq == n = NewRefSeqs [] [] [] (fromString fp0)
     parseEachSeq off n = case parseEachSeq (off+5+nmsize) (n+1) of
-                            NewRefSeqs cs ls ss ->
-                                NewRefSeqs (name:cs) (dnasize:ls) (the_seq:ss)
+                            NewRefSeqs cs ls ss fp ->
+                                NewRefSeqs (name:cs) (dnasize:ls) (the_seq:ss) fp
       where
         !nmsize  = fromIntegral $ B.index raw off
         !name    = B.take nmsize $ B.drop (1+off) raw
@@ -152,10 +155,20 @@ takeNRS n (SomeSeq r o l s) | n <= l    = SomeSeq r o n NewRefEnd
                             | otherwise = SomeSeq r o l $ takeNRS (n-l) s
 
 -- | Nucleotide in 2bit encoding: "TCAG" == [0..3], N == 255.
-newtype Nuc2b = N2b Word8
+newtype Nuc2b = N2b Word8 deriving Eq
 
 -- | Variant in 2bit encoding: [0..3] for "IOPX"
-newtype Var2b = V2b Word8
+newtype Var2b = V2b Word8 deriving Eq
+
+isTransversion :: Var2b -> Bool
+isTransversion (V2b v) = testBit v 1
+
+toAltCode :: Var2b -> Nuc2b -> Char
+toAltCode (V2b v) (N2b r) = C.index "TCAGXPOI" $ fromIntegral (xor r v .&. 7)
+
+toRefCode :: Nuc2b -> Char
+toRefCode = toAltCode (V2b 0)
+
 
 instance Show Nuc2b where
     show (N2b 0) = "T"
@@ -192,7 +205,7 @@ data Variant = Variant { v_chr   :: !Int                -- chromosome number
   deriving Show
 
 addRef :: NewRefSeqs -> [Variant] -> [Variant]
-addRef (NewRefSeqs _ _ ss) = go 0 ss
+addRef ref = go 0 (nrss_seqs ref)
   where
     go _ [     ] = const []
     go c (r0:rs) = go1 r0 0
