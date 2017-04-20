@@ -276,12 +276,12 @@ opts_dstat =
     , Option "t" ["transversions"]     (NoArg set_tvonly) "Restrict to transversion sites"
     , Option [ ] ["ignore-cpg"]        (NoArg set_no_cpg) "Ignore GpG sites (according to reference)" ]
   where
-    set_ref    a c = return $ c { conf_reference = Just a }
-    set_nout   a c = readIO a >>= \n -> return $ c { conf_noutgroups = n }
-    set_nref   a c = readIO a >>= \n -> return $ c { conf_nrefpanel = n }
-    set_jack   a c = readNumIO a >>= \n -> return $ c { conf_blocksize = n }
+    set_ref    a c =                       return $ c { conf_reference  = Just a }
+    set_nout   a c = readIO a    >>= \n -> return $ c { conf_noutgroups =      n }
+    set_nref   a c = readIO a    >>= \n -> return $ c { conf_nrefpanel  =      n }
+    set_jack   a c = readNumIO a >>= \n -> return $ c { conf_blocksize  =      n }
+    set_no_cpg   c =                       return $ c { conf_filter  = filterCpG }
     set_tvonly   c = return $ c { conf_filter = const (filter (isTransversion . v_alt)) }
-    set_no_cpg   c = return $ c { conf_filter = filterCpG }
 
 filterCpG = undefined -- XXX
 

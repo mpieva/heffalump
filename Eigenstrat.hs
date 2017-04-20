@@ -41,7 +41,7 @@ nick_hasharr :: F.Foldable v => v L.ByteString -> Int32
 nick_hasharr = F.foldl (\h s -> 17 * h `xor` nick_hashit s) 0
 
 mkname :: Int -> Int -> Char -> String
-mkname x y z | B.length chars == 32 = enc (4*y + numOf z) [ B.index chars x ]
+mkname x y z = enc (4*y + numOf z) [ B.index chars x ]
   where
     numOf 'A' = 0 ; numOf 'C' = 1 ; numOf 'G' = 2 ; numOf 'T' = 3
     numOf 'a' = 0 ; numOf 'c' = 1 ; numOf 'g' = 2 ; numOf  _  = 3
@@ -49,33 +49,5 @@ mkname x y z | B.length chars == 32 = enc (4*y + numOf z) [ B.index chars x ]
     chars = "0123456789ABCDEFGHKLMNPQRSTUWXYZ"
 
     enc 0 = id
-    enc x = (:) (B.index chars (x .&. 31)) . enc (x `shiftR` 5)
-
-
-{- mkname x y z = let (n1,x1) = hash (x `shiftL` 38 .|. y `shiftL` 8 .|. ord z) `divMod` 18
-                   (n2,x2) = n1 `divMod` 17
-                   (n3,y1) = n2 `divMod` 23
-                   (n4,y2) = n3 `divMod` 22
-                   y3      = n4 `mod` 22
-               in uc1 (snaffi_syl !! x1) ++ snaffi_syl !! (if x2 >= x1 then x2+1 else x2) ++ "_" ++
-                  uc1 (kuruk_syl  !! y1) ++ kuruk_syl  !! (if y2 >= y1 then y2+1 else y2) ++
-                                            kuruk_syl  !! (if y3 >= y2 then y3+1 else y3)
-  where
-    uc1 [    ] = []
-    uc1 (c:cs) = toUpper c : cs
-
-    hash = hash1 (1::Int) (0::Int) (8::Int)
-    hash1 s1 s2 0 _ = s2 * 65521 .|. s1
-    hash1 s1 s2 n i = let s1' = s1 + (i .&. 0xff) `mod` 65521
-                          s2' = (s2 + s1') `mod` 65521
-                      in hash1 s1' s2' (n-1) (i `shiftR` 8)
-
-    -- 23 kuruks
-    kuruk_syl = [ "kur", "ak", "ral", "ki", "rel", "uk", "kor", "kul",
-        "kas", "lok", "luk", "las", "mak", "mok", "mas", "mos", "ga", "tha",
-        "gul", "lug", "mag", "mog", "ug" ]
-
-    -- 18 snaffis
-    snaffi_syl = [ "sni", "sna", "fer", "fi", "fir", "por", "per", "snu",
-        "al", "an", "erl", "lep", "fru", "fri", "ig", "eg", "thi", "tha" ] -}
+    enc u = (:) (B.index chars (u .&. 31)) . enc (u `shiftR` 5)
 

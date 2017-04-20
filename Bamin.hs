@@ -6,7 +6,7 @@ module Bamin where
 
 import BasePrelude
 import Data.ByteString.Builder      ( hPutBuilder )
-import Data.ByteString.Internal     ( c2w )
+import Data.Fix
 import Foreign.C
 import Foreign.Ptr                  ( Ptr, plusPtr )
 import Foreign.Marshal.Array        ( allocaArray )
@@ -17,12 +17,11 @@ import System.Console.GetOpt
 import System.IO
 import System.Random                ( StdGen, newStdGen, next )
 
-import qualified Data.ByteString.Unsafe as B
-import qualified Data.ByteString.Lazy as L
-import qualified Data.Vector.Unboxed as U
-import qualified Data.Vector.Unboxed.Mutable as U ( IOVector, new, read, write )
+import qualified Data.Vector.Unboxed            as U
+import qualified Data.Vector.Unboxed.Mutable    as U ( IOVector, new, read, write )
 
-import Stretch
+import Lump
+import NewRef
 import Util
 
 data Pick = Ostrich | Ignore_T | Ignore_A | Ignore_C | Ignore_G
@@ -80,110 +79,88 @@ opts_bam =
 main_bam :: [String] -> IO ()
 main_bam args = do
     ( bams, cfg@ConfBam{..} ) <- parseOpts True conf_bam0 (mk_opts "bamin" "[bam-file...]" opts_bam) args
-    (_,ref) <- readReference conf_bam_reference
+    ref <- readTwoBit conf_bam_reference
 
     rnd_gen <- newStdGen
     withFile (conf_bam_output ++ "~") WriteMode        $ \hdl ->
-        hPutBuilder hdl . encode_hap . importPile ref
+        hPutBuilder hdl . encode ref . importPile
                 . sample_piles rnd_gen conf_deaminate conf_pick ref
-                . progress conf_bam_output . concat
+                . progressBam conf_bam_output . concat
                 =<< mapM (htsPileup cfg) bams
     renameFile (conf_bam_output ++ "~") conf_bam_output
 
-progress :: String -> [Var0] -> [Var0]
-progress fp = go 0 0
+
+progressBam :: String -> [Var0] -> [Var0]
+progressBam fp = go 0 0
   where
     go  _  _ [    ] = []
     go rs po (v:vs)
-        | rs /= unRefseq (v_refseq v) || po + 10000000 <= v_pos v
+        | rs /= unRefseq (v_refseq v) || po + 10000000 <= v_loc v
             = unsafePerformIO $ do
-                hPutStrLn stderr $ fp ++ "@" ++ show (unRefseq (v_refseq v)) ++ ":" ++ show (v_pos v)
-                return $ v : go (unRefseq (v_refseq v)) (v_pos v) vs
+                hPutStrLn stderr $ fp ++ "@" ++ show (unRefseq (v_refseq v)) ++ ":" ++ show (v_loc v)
+                return $ v : go (unRefseq (v_refseq v)) (v_loc v) vs
         | otherwise =  v : go rs po vs
 
--- Our varcall: position, base, and counters for the rnd. sampling
+-- Our varcall: position, base, and either the counters for the random
+-- sampling or the variant code
 data Var a = Var { v_refseq  :: !Refseq
-                 , v_pos     :: !Int
+                 , v_loc     :: !Int
                  , v_call    :: a }
     deriving Show
 
 type Var0 = Var (U.Vector Int)
-type Var1 = Var NucCode
+type Var1 = Var Var2b
 
-sample_piles :: StdGen -> Bool -> Pick -> Reference -> [ Var0 ] -> [ Var1 ]
-sample_piles g0 deam pick (Reference cs0) = nextChrom g0 cs0 (Refseq 0)
+sample_piles :: StdGen -> Bool -> Pick -> NewRefSeqs -> [ Var0 ] -> [ Var1 ]
+sample_piles g0 deam pick cs0 = nextChrom g0 (nrss_seqs cs0) (Refseq 0)
   where
     nextChrom _ [    ]  _ = const []
     nextChrom g (c:cs) rs = generic g cs c rs 0
 
     generic _  _ _ !_     _ [          ]     = []
     generic g cs c !rs !pos (var1:mvars)
-        | rs /= v_refseq var1 = nextChrom g cs (succ rs) (var1:mvars)
-        | L.null c' =                        generic g   cs c' rs (v_pos var1) mvars
-        | otherwise = var1 { v_call = nc } : generic g'' cs c' rs (v_pos var1) mvars
-      where
-        c' = L.drop (fromIntegral $ v_pos var1 - pos) c
-        (vv, g')  = if deam then deaminate (v_call var1) g else (v_call var1, g)
-        cc        = post_collect (L.head c') pick vv
-        (nc, g'') = sample_from cc g'
+        | rs /= v_refseq var1
+            = nextChrom g cs (succ rs) (var1:mvars)
+
+        | Just (N2b rb,c') <- unconsNRS $ dropNRS (fromIntegral $ v_loc var1 - pos) c
+            = let (vv, g')      = if deam then deaminate (v_call var1) g else (v_call var1, g)
+                  cc            = post_collect (N2b rb) pick vv
+                  (N2b nc, g'') = sample_from cc g'
+              in var1 { v_call = V2b (xor rb nc) } :
+                 generic g'' cs c' rs (v_loc var1 + 1) mvars
+
+        | otherwise
+            = generic g   cs NewRefEnd rs (v_loc var1 + 1) mvars
 
 
-
-importPile :: Reference -> [ Var1 ] -> Stretch
-importPile (Reference cs0) = nextChrom cs0 (Refseq 0)
+importPile :: [ Var1 ] -> Fix Lump
+importPile = generic (Refseq 0) 0
   where
-    nextChrom [    ]  _ = const $ Break Done
-    nextChrom (c:cs) rs = generic cs c rs 0
+    generic !_     _ [          ] = Fix (Break (Fix Done))
+    generic !rs !pos (var1:mvars)
+        -- switch to next chromosome
+        | rs /= v_refseq var1 =
+            Fix $ Break $ generic (succ rs) 0 (var1:mvars)
 
-    generic  _ _ !_     _ [    ]     = Break Done
-    generic cs c !rs !pos (var1:mvars)
-        | rs /= v_refseq var1 = Break $ nextChrom cs (succ rs) (var1:mvars)
+        -- gap, creates Ns
+        | v_loc var1 >= pos =
+            Fix $ Ns (fromIntegral $ v_loc var1 - pos) $
+            Fix $ encvar (v_call var1) $
+            generic rs (v_loc var1 + 1) mvars
 
-        -- long gap, creates Ns
-        | v_pos var1 >= pos + 2 = let l  = (v_pos var1 - pos) `div` 2
-                                      c' = L.drop (fromIntegral $ 2*l) c
-                                  in Ns (fromIntegral l) $ generic cs c' rs (pos + 2*l) (var1:mvars)
-
-        -- small gap, have to emit codes
-        | v_pos var1 == pos + 1 = Chrs (NucCode 0) (v_call var1) $ generic cs (L.drop 2 c) rs (pos+2) mvars
-
-        -- positions must match now
-        | v_pos var1 == pos = case mvars of
-                -- two variant calls next to each other
-                -- if both are reference, we can try and build a stretch
-                var2:vars | v_refseq var2 == rs && v_pos var2 == pos+1 ->
-                    if isVar c var1 || isVar (L.drop 1 c) var2
-                      then Chrs (v_call var1) (v_call var2) $ generic cs (L.drop 2 c) rs (pos+2) vars
-                      else matches cs (L.drop 2 c) rs 1 (pos+2) vars
-
-                -- one followed by gap, will become an N
-                _ -> do Chrs (v_call var1) (NucCode 0) $ generic cs (L.drop 2 c) rs (pos+2) mvars
-
-        | otherwise = error $ "Got variant position " ++ show (v_refseq var1, v_pos var1)
+        | otherwise = error $ "Got variant position " ++ show (v_refseq var1, v_loc var1)
                            ++ " when expecting " ++ show pos ++ " or higher."
 
-    -- To extend a stretch of matches, we need
-    -- two non-vars at the next two positions
-    matches cs c !rs !num !pos (var1:var2:vars)
-        | v_refseq var1 == rs && v_pos var1 == pos &&
-          v_refseq var2 == rs && v_pos var2 == pos+1 &&
-          not (isVar c var1) && not (isVar (L.drop 1 c) var2)
-            = matches cs (L.drop 2 c) rs (num+1) (pos+2) vars
-
-    -- anything else, we dump the stretch out and pass the buck
-    matches cs c rs num pos vars = Eqs1 num $ generic cs c rs pos vars
-
-    isVar c v | L.null  c = False
-              | low (L.head c) == 110 = False
-              | otherwise = low (tr1 (v_call v)) /= low (L.head c)
-
-    tr1 (NucCode w) = B.unsafeIndex iupac_chars . fromIntegral $ w
+    encvar (V2b 0) = Eqs1 1     -- ref equals alt, could both be N
+    encvar (V2b 1) = Trans1     -- transition
+    encvar (V2b 2) = Compl1     -- complement
+    encvar (V2b 3) = TCompl1    -- trans-complement
+    encvar (V2b _) = Ns 1       -- ref is N, or alt is N
 
 
 
-data Buf = Buf { buf_ptr :: Ptr Word8
-               -- , buf_used :: Int -- will cheat here :(
-               , buf_size :: Int
+data Buf = Buf { buf_ptr   :: !(Ptr Word8)
+               , buf_size  :: !Int
                , buf_flush :: Ptr Word8 -> Int -> IO () }
 
 withBuf :: (Ptr Word8 -> Int -> IO ()) -> (Buf -> IO a) -> IO a
@@ -288,9 +265,9 @@ deaminate vv gen0 = ( vv', gen2 )
 
 
 
--- | We receive modified bases here and only modify the way we count.
--- No randomness involved here.
-post_collect :: Word8 -> Pick -> U.Vector Int -> U.Vector Int
+-- | We receive modified (i.e. deaminated) bases here and only vary
+-- the way we count.  No randomness involved here.
+post_collect :: Nuc2b -> Pick -> U.Vector Int -> U.Vector Int
 post_collect ref pp vv = U.fromListN 5 $ go pp
   where
     -- Most of the time, u acts like t and u' like a'.
@@ -333,28 +310,31 @@ post_collect ref pp vv = U.fromListN 5 $ go pp
                | isG       = [ a,       c+c', g+g', t+t'+u, 0 ]
                | otherwise = [ a+a'+u', c+c', g+g', t+t'+u, 0 ]
 
-    isC = ref == c2w 'C' || ref == c2w 'c'
-    isG = ref == c2w 'G' || ref == c2w 'g'
+    isC = ref == N2b 1
+    isG = ref == N2b 3
 
 
 -- | Takes a random sample from prepared counts.
-sample_from :: U.Vector Int -> StdGen -> (NucCode, StdGen)
-sample_from vec gen | U.length vec == 5 || U.length vec == 6 = do
+sample_from :: U.Vector Int -> StdGen -> (Nuc2b, StdGen)
+sample_from vec _gen | U.length vec < 5 || U.length vec > 6
+    = error "internal error: expected 5 or 6 frequencies"
+
+sample_from vec  gen = do
     let s = U.unsafeIndex vec 0 + U.unsafeIndex vec 1 + U.unsafeIndex vec 2
                 + U.unsafeIndex vec 3 + U.unsafeIndex vec 4
     if s == 0
-        then (NucCode 0, gen)
+        then (N2b 255, gen)
         else let (ii, gen') = next gen
                  i = ii `mod` s
                  nn = case () of
-                        _ | i < U.unsafeIndex vec 0                        -> 11
-                          | i < U.unsafeIndex vec 0 + U.unsafeIndex vec 1  -> 12
+                        _ | i < U.unsafeIndex vec 0                       -> 2     -- A
+                          | i < U.unsafeIndex vec 0 + U.unsafeIndex vec 1 -> 1     -- C
                           | i < U.unsafeIndex vec 0 + U.unsafeIndex vec 1
-                              + U.unsafeIndex vec 2                        -> 13
+                              + U.unsafeIndex vec 2                       -> 3     -- G
                           | i < U.unsafeIndex vec 0 + U.unsafeIndex vec 1
-                              + U.unsafeIndex vec 2 + U.unsafeIndex vec 3  -> 14
-                          | otherwise                                      ->  0
-             in (NucCode nn, gen')
+                              + U.unsafeIndex vec 2 + U.unsafeIndex vec 3 -> 0     -- T
+                          | otherwise                                   -> 255     -- N
+             in (N2b nn, gen')
 
 data PlpAux
 
