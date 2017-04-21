@@ -3,14 +3,17 @@ module Lump where
 
 import BasePrelude
 import Data.ByteString.Builder
+import Data.ByteString.Internal             ( c2w )
 import Data.Fix
 import Data.Hashable ( hash )
 import System.Directory ( doesFileExist )
 
-import qualified Data.ByteString.Lazy as L
-import qualified Data.ByteString.Lazy.Char8 as LC
-import qualified Data.Vector as V
-import qualified Data.Vector.Unboxed as U
+import qualified Data.ByteString            as B
+import qualified Data.ByteString.Char8      as BC
+import qualified Data.ByteString.Lazy       as L
+import qualified Data.ByteString.Lazy.Char8 as C
+import qualified Data.Vector                as V
+import qualified Data.Vector.Unboxed        as U
 
 import Stretch ( Stretch, decode_dip, decode_hap, NucCode(..) )
 import qualified Stretch  as S ( Stretch(..) )
@@ -576,7 +579,7 @@ decode (Right  r) str | "HEF\0" `L.isPrefixOf` str = stretchToLump r $ decode_di
               else error "Incompatible reference genome."
 
 getRefPath :: L.ByteString -> Maybe FilePath
-getRefPath str | "HEF\2" `L.isPrefixOf` str = Just . LC.unpack . L.takeWhile (/= 0) $ L.drop 4 str
+getRefPath str | "HEF\2" `L.isPrefixOf` str = Just . C.unpack . L.takeWhile (/= 0) $ L.drop 4 str
                | otherwise                  = Nothing
 
 decodeMany :: Maybe FilePath -> [FilePath] -> IO ( Either String NewRefSeqs, V.Vector (Fix Lump) )
@@ -603,3 +606,93 @@ encode r s = byteString "HEF\3" <>
              int32LE (fromIntegral (hash (nrss_chroms r, nrss_lengths r))) <>
              encodeLump s
 
+diff2 :: NewRefSeq -> L.ByteString -> Fix Lump -> Fix Lump
+diff2 r0 s0 done = generic r0 s0
+  where
+    isN        c = c == c2w 'N' || c == c2w 'n' || c == c2w '-'
+    eq (N2b a) b = b == c2w 'Q' || b == c2w 'q' ||
+                   "TCAG" `B.index` fromIntegral a == b ||
+                   "tcag" `B.index` fromIntegral a == b
+
+    generic (ManyNs l ref) smp = Fix $ Ns l $ generic ref (L.drop (fromIntegral l) smp)
+    generic ref smp =
+        case (L.uncons smp, unconsNRS ref) of
+            (Nothing, _)    -> Fix $ Break done
+            (_, Nothing)    -> Fix $ Break done
+            (Just (x, smp'), Just (u, ref'))
+                | isN  x    -> Fix $ Ns       1 $ generic ref' smp'
+                | eq u x    -> Fix $ Eqs2     1 $ generic ref' smp'
+                | otherwise -> Fix $ encvar u x $ generic ref' smp'
+
+    encvar :: Nuc2b -> Word8 -> Fix Lump -> Lump (Fix Lump)
+    encvar = undefined
+
+
+data Frag = Short !Char Frag | Long !L.ByteString Frag | Term (Fix Lump)
+
+patch :: NewRefSeq -> Fix Lump -> Frag
+patch ref (Fix l) = case unconsNRS ref of
+    Just (N2b hd,tl) -> case l of
+        Break    s -> Long (unpackNRS ref) $ Term s
+        Done       -> Long (unpackNRS ref) $ Term $ Fix Done
+
+        Eqs2   n s -> Long        (unpackNRS $ takeNRS n ref) $ patch (dropNRS n ref) s
+        Eqs1   n s -> Long        (unpackNRS $ takeNRS n ref) $ patch (dropNRS n ref) s
+        Ns     n s -> Long (C.replicate (fromIntegral n) 'N') $ patch (dropNRS n ref) s
+
+        Del1   n s -> Long (C.replicate (fromIntegral n) '-') $ patch (dropNRS n ref) s
+        Del2   n s -> Long (C.replicate (fromIntegral n) '-') $ patch (dropNRS n ref) s
+        DelH   n s -> Long        (unpackNRS $ takeNRS n ref) $ patch (dropNRS n ref) s
+
+        Ins1   _ s -> patch ref s
+        Ins2   _ s -> patch ref s
+        InsH   _ s -> patch ref s
+
+        Trans1      s -> step "CTGA" s
+        Trans2      s -> step "CTGA" s
+        Compl1      s -> step "AGTC" s
+        Compl2      s -> step "AGTC" s
+        TCompl1     s -> step "GACT" s
+        TCompl2     s -> step "GACT" s
+
+        RefTrans    s -> step "YYRR" s
+        RefCompl    s -> step "WSWS" s
+        TransCompl  s -> step "MKKM" s
+        RefTCompl   s -> step "KMMK" s
+        TransTCompl s -> step "SWSW" s
+        ComplTCompl s -> step "RRYY" s
+      where
+        step cs s = Short (if hd > 3 then 'N' else BC.index cs (fromIntegral hd)) (patch tl s)
+
+    Nothing      -> clear (Fix l)
+      where
+        clear :: Fix Lump -> Frag
+        clear (Fix m) = case m of
+            Ns        _ a -> clear a
+            Eqs1      _ a -> clear a
+            Eqs2      _ a -> clear a
+
+            Trans1      a -> clear a
+            Compl1      a -> clear a
+            TCompl1     a -> clear a
+
+            RefTrans    a -> clear a
+            Trans2      a -> clear a
+            RefCompl    a -> clear a
+            TransCompl  a -> clear a
+            Compl2      a -> clear a
+            RefTCompl   a -> clear a
+            TransTCompl a -> clear a
+            ComplTCompl a -> clear a
+            TCompl2     a -> clear a
+
+            Del1      _ a -> clear a
+            Del2      _ a -> clear a
+            DelH      _ a -> clear a
+
+            Ins1      _ a -> clear a
+            Ins2      _ a -> clear a
+            InsH      _ a -> clear a
+
+            Break       a -> Term a
+            Done          -> Term (Fix Done)

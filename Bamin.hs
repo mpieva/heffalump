@@ -134,7 +134,7 @@ sample_piles g0 deam pick cs0 = nextChrom g0 (nrss_seqs cs0) (Refseq 0)
 
 
 importPile :: [ Var1 ] -> Fix Lump
-importPile = generic (Refseq 0) 0
+importPile = normalizeLump . generic (Refseq 0) 0
   where
     generic !_     _ [          ] = Fix (Break (Fix Done))
     generic !rs !pos (var1:mvars)

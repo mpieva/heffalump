@@ -1,6 +1,5 @@
 - replace Stretch with Lump, improve the whole logic, and use the new
   binary format
-  - Hetfa import, patch
   - VCF import
   - restore the CpG filter in SillyStats.hs
 
@@ -9,24 +8,26 @@
     sequences in the Bam file are silently ignored, extra sequences in
     the reference elicit a warning, no common sequences would be an
     error)
- 
+
+- Hetfa patch needs testing (looked weird, but could be due to the SGDP)
+
+- more flexible Hetfa import so genomes with missing chromosomes (Ust-Ishim)
+  work
+
 - fix the EMF importer (needs Lumps to stay in reasonable memory bounds)
 
 - fix the MAF importer (needs Lumps to stay in reasonable memory bounds
   in the general case)
 
+- BED file as filter (for the merging part, not for import).  Cannot
+  assume BED is sorted correctly.
+
+- D-statistics with population definitions (multiple individuals for one
+  population, with estimates of allele frequencies)
+
+- C-library for reading and merging
+
 - Maybe allow Bamin with multiple sampling schemes in parallel?  The
   streaming package may come in handy.  It's only interesting for silly
   tests, though.
 
-- C-library for reading and merging
-
-- BED file as filter (for the merging part, not for import)
-
-- more flexible Hetfa import so genomes with missing chromosomes (Ust-Ishim)
-  work
-
-- more compact and faster representation of the reference.  2bit?
-
-- D-statistics with population definitions (multiple individuals for one
-  population, with estimates of allele frequencies)

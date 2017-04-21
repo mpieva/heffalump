@@ -10,6 +10,7 @@
 
 import BasePrelude
 import Data.ByteString.Builder          ( hPutBuilder, Builder )
+import Data.Fix
 import System.Console.GetOpt
 import System.FilePath                  ( takeBaseName )
 import System.IO
@@ -115,11 +116,12 @@ opts_hetfa =
 main_hetfa :: [String] -> IO ()
 main_hetfa args = do
     ( _, ConfImportGen{..} ) <- parseOpts False defaultImportConf (mk_opts "hetfa" [] opts_hetfa) args
-    refs <- nrss_seqs <$> readTwoBit conf_imp_reference
-    smp <- readSampleFa conf_imp_sample
+    refs <- readTwoBit conf_imp_reference
+    smp  <- readSampleFa conf_imp_sample
 
     withFile conf_imp_output WriteMode $ \hdl ->
-        hPutBuilder hdl . encode_dip . catStretches $ zipWith diff2 refs smp
+        hPutBuilder hdl . encode refs . foldr ($) (Fix Lump.Done) $
+        zipWith diff2 (nrss_seqs refs) smp
 
 
 opts_maf :: [ OptDescr ( FilePath -> IO FilePath ) ]
@@ -152,11 +154,11 @@ opts_patch =
 main_patch :: [String] -> IO ()
 main_patch args = do
     ( _, ConfImportGen{..} ) <- parseOpts False defaultImportConf (mk_opts "patch" [] opts_patch) args
-    (_,ref) <- readReference conf_imp_reference
-    pat <- decode . decomp <$> L.readFile conf_imp_sample
+    ref <- readTwoBit conf_imp_reference
+    pat <- Lump.decode (Right ref) . decomp <$> L.readFile conf_imp_sample
 
     withFile conf_imp_output WriteMode $ \hdl ->
-            patchFasta hdl conf_imp_width chroms ref pat
+        patchFasta hdl conf_imp_width (nrss_chroms ref) (nrss_seqs ref) pat
 
 
 main_debmaf :: [String] -> IO ()
@@ -304,17 +306,16 @@ main_xcf ext reader key enc args = do
             | otherwise =  v : go rs po vs
 
 
-patchFasta :: Handle -> Int64 -> [L.ByteString] -> Reference -> Stretch -> IO ()
+patchFasta :: Handle -> Int64 -> [B.ByteString] -> [NewRefSeq] -> Fix Lump.Lump -> IO ()
 patchFasta hdl wd = p1
   where
-    p1 :: [L.ByteString] -> Reference -> Stretch -> IO ()
-    p1 [    ]                 _  _ = return ()
-    p1      _ (Reference [    ]) _ = return ()
-    p1 (c:cs) (Reference (r:rs)) p = do
-        hPutStrLn hdl $ '>' : L.unpack c
-        p2 (p1 cs (Reference rs)) 0 (patch r p)
+    p1 :: [B.ByteString] -> [NewRefSeq] -> Fix Lump.Lump -> IO ()
+    p1 [    ]     _  _ = return ()
+    p1      _ [    ] _ = return ()
+    p1 (c:cs) (r:rs) p = do hPutStrLn hdl $ '>' : B.unpack c
+                            p2 (p1 cs rs) 0 (patch r p)
 
-    p2 :: (Stretch -> IO ()) -> Int64 -> Frag -> IO ()
+    p2 :: (Fix Lump.Lump -> IO ()) -> Int64 -> Frag -> IO ()
     p2 k l f | l == wd = L.hPutStrLn hdl L.empty >> p2 k 0 f
     p2 k l (Term p)    = when (l>0) (L.hPutStrLn hdl L.empty) >> k p
     p2 k l (Short c f) = hPutChar hdl c >> p2 k (succ l) f

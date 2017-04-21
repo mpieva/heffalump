@@ -41,11 +41,13 @@ import System.IO.Unsafe                     ( unsafeDupablePerformIO )
 
 import qualified Data.ByteString                as B
 import qualified Data.ByteString.Char8          as C
+import qualified Data.ByteString.Lazy.Char8     as L
 import qualified Data.ByteString.Unsafe         as B
 import qualified Data.Vector.Unboxed            as U
 
 -- | This is a reference sequence.  It consists of stretches of Ns and
--- sequence.
+-- sequence.  Invariant:  the lengths for 'ManyNs' and 'SomeSeq' are
+-- always strictly greater than zero.
 
 data NewRefSeq = ManyNs !Int NewRefSeq
                  -- Primitive bases in 2bit encoding:  [0..3] = TCAG
@@ -93,9 +95,10 @@ parseTwopBit fp0 raw = case (getW32 0, getW32 4) of (0x1A412743, 0) -> parseEach
         !packedDnaOff = offset + 16 + 8 * (nBlockCount+maskBlockCount)
 
         -- We will need to decode the N blocks, we ignore the m blocks.
-        n_blocks = [ ( fromIntegral . getW32 $ offset+8 + 4*i
-                     , fromIntegral . getW32 $ offset+8 + 4*(i+nBlockCount) )
-                   | i <- [ 0 .. nBlockCount-1 ] ]
+        n_blocks = [ (u,v) | i <- [ 0 .. nBlockCount-1 ]
+                           , let u = fromIntegral . getW32 $ offset+8 + 4*i
+                                 v = fromIntegral . getW32 $ offset+8 + 4*(i+nBlockCount)
+                           , u < v ]
 
         the_seq = unfoldSeq dnasize n_blocks 0 (packedDnaOff*4)
 
@@ -153,6 +156,15 @@ takeNRS n (ManyNs l s) | n >= l    = ManyNs l $ takeNRS (n-l) s
                        | otherwise = ManyNs n NewRefEnd
 takeNRS n (SomeSeq r o l s) | n <= l    = SomeSeq r o n NewRefEnd
                             | otherwise = SomeSeq r o l $ takeNRS (n-l) s
+
+unpackNRS :: NewRefSeq -> L.ByteString
+unpackNRS = L.unfoldr $ fmap (first toCode) . unconsNRS
+  where
+    toCode (N2b 0) = 'T'
+    toCode (N2b 1) = 'C'
+    toCode (N2b 2) = 'A'
+    toCode (N2b 3) = 'G'
+    toCode      _  = 'N'
 
 -- | Nucleotide in 2bit encoding: "TCAG" == [0..3], N == 255.
 newtype Nuc2b = N2b Word8 deriving Eq

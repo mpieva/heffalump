@@ -10,9 +10,6 @@ module Stretch (
         decode_hap,
         decode,
         diff,
-        diff2,
-        Frag(..),
-        patch,
         code,
         tr,
         iupac_chars
@@ -27,7 +24,6 @@ import qualified Data.ByteString.Internal       as B
 import qualified Data.ByteString.Lazy.Char8     as L
 import qualified Data.ByteString.Lazy           as LB
 
-import NewRef
 import Util ( low )
 
 -- ^ A genome is encoded by taking the difference to the reference and
@@ -215,7 +211,7 @@ tr (NucCode w) = B.w2c . BB.index {-unsafeIndex-} iupac_chars . fromIntegral $ w
 -- a meaningful difference in hetfa files.  Note that correct parsing of
 -- MAF files depends on this behavior!  Also, "Q" means a match to the
 -- reference.
-diff2 :: NewRefSeq -> L.ByteString -> Stretch -> Stretch
+{-diff2 :: NewRefSeq -> L.ByteString -> Stretch -> Stretch
 diff2 r0 s0 done = generic r0 s0
   where
     isN        c = c == 'N' || c == 'n' || c == '-'
@@ -284,7 +280,7 @@ diff2 r0 s0 done = generic r0 s0
         x = L.head smp
         y = L.head (L.tail smp)
         Just (u,_) = unconsNRS ref
-        Just (v,_) = unconsNRS (dropNRS 1 ref)
+        Just (v,_) = unconsNRS (dropNRS 1 ref)-}
 
 diff :: L.ByteString -> L.ByteString -> Stretch -> Stretch
 diff r0 s0 done = generic r0 s0
@@ -353,34 +349,4 @@ diff r0 s0 done = generic r0 s0
         y = L.head (L.tail smp)
         u = L.head ref
         v = L.head (L.tail ref)
-
-data Frag = Short !Char Frag | Long !L.ByteString Frag | Term Stretch
-
--- | Applies a 'Stretch' to a sequence.  Returns fragments of the
--- modified sequence (this should restore the sample) and finally the
--- remaining 'Stretch'.  The 'Break' is consumed if present.
-patch :: L.ByteString -> Stretch -> Frag
-patch ref (Break s) = Long ref $ Term s
-patch ref s@Done    = Long ref $ Term s
-
-patch ref s | L.null ref = clear s
-
-patch ref (Ns     1 s) | L.null (L.tail ref) = Short 'N'          (clear s)
-patch ref (Eqs    1 s) | L.null (L.tail ref) = Short (L.head ref) (clear s)
-patch ref (Eqs1   1 s) | L.null (L.tail ref) = Short (L.head ref) (clear s)
-patch ref (Chrs x _ s) | L.null (L.tail ref) = Short (tr x)       (clear s)
-
-patch ref (Chrs x y s) = Short (tr x) $ Short (tr y) $ patch (L.drop  2    ref) s
-patch ref (Eqs    n s) = Long     (L.take (2*n) ref) $ patch (L.drop (2*n) ref) s
-patch ref (Eqs1   n s) = Long     (L.take (2*n) ref) $ patch (L.drop (2*n) ref) s
-patch ref (Ns     n s) = Long   (L.replicate n' 'N') $ patch (L.drop (2*n) ref) s
-  where n' = L.length $ L.take (2*n) ref
-
-clear :: Stretch -> Frag
-clear (Ns     _ s) = clear s
-clear (Eqs    _ s) = clear s
-clear (Eqs1   _ s) = clear s
-clear (Chrs _ _ s) = clear s
-clear (Break    s) = Term  s
-clear Done         = Term Done
 
