@@ -1,15 +1,5 @@
--- TODO:
--- - switch everything to the 'Lump' representation (and acknowledge
---   that the 'Stretch' was a bad choice)
--- - allow arbitrary reference genomes (use 2bit everywhere)
--- - import from multi-MAF (either create multiple heffalumps or allow
---   selection of one species)
--- - allow import from unsorted MAF or EMF (make 'Lump's from each block
---   in the file, reorder them in memory)
-
-
 import BasePrelude
-import Data.ByteString.Builder          ( hPutBuilder, Builder )
+import Data.ByteString.Builder          ( hPutBuilder )
 import Data.Fix
 import System.Console.GetOpt
 import System.FilePath                  ( takeBaseName )
@@ -25,11 +15,11 @@ import Bamin
 import Bcf
 import Eigenstrat
 import Emf
-import Lump hiding ( Lump(..), decode )
-import qualified Lump
+import Lump
 import NewRef
 import SillyStats
-import Stretch
+import Stretch ( main_dumppatch, encode_hap, catStretches, debugStretch )
+import qualified Stretch
 import Treemix
 import Util
 import VcfScan
@@ -62,10 +52,10 @@ main = do
         , z "kayvergence" main_kayvergence        "Compute Kayvergence ratios"
         , z "dstatistics" main_patterson          "Compute Patterson's D"
         , z "yaddayadda"  main_yaddayadda         "Compute Yadda-yadda-counts"
-        , z "bcfhc" (main_bcf "bcfhc" encode_dip) "Import high coverage bcf (diploid)"
-        , z "bcflc" (main_bcf "bcflc" encode_hap) "Import low coverage bcf (haploid)"
-        , z "vcfhc" (main_vcf "vcfhc" encode_dip) "Import high coverage vcf (diploid)"
-        , z "vcflc" (main_vcf "vcflc" encode_hap) "Import low coverage vcf (haploid)"
+        , z "bcfhc"   (main_bcf "bcfhc" id)       "Import high coverage bcf (diploid)"
+        , z "bcflc"   (main_bcf "bcflc" make_hap) "Import low coverage bcf (haploid)"
+        , z "vcfhc"   (main_vcf "vcfhc" id)       "Import high coverage vcf (diploid)"
+        , z "vcflc"   (main_vcf "vcflc" make_hap) "Import low coverage vcf (haploid)"
         , z "debhetfa"    main_debhetfa           "(debugging aid)"
         , z "debmaf"      main_debmaf             "(debugging aid)"
         , z "dumppatch"   main_dumppatch          "(debugging aid)"
@@ -120,7 +110,7 @@ main_hetfa args = do
     smp  <- readSampleFa conf_imp_sample
 
     withFile conf_imp_output WriteMode $ \hdl ->
-        hPutBuilder hdl . encode refs . foldr ($) (Fix Lump.Done) $
+        hPutBuilder hdl . encode refs . foldr ($) (Fix Done) $
         zipWith diff2 (nrss_seqs refs) smp
 
 
@@ -155,31 +145,27 @@ main_patch :: [String] -> IO ()
 main_patch args = do
     ( _, ConfImportGen{..} ) <- parseOpts False defaultImportConf (mk_opts "patch" [] opts_patch) args
     ref <- readTwoBit conf_imp_reference
-    pat <- Lump.decode (Right ref) . decomp <$> L.readFile conf_imp_sample
+    pat <- decode (Right ref) . decomp <$> L.readFile conf_imp_sample
 
     withFile conf_imp_output WriteMode $ \hdl ->
         patchFasta hdl conf_imp_width (nrss_chroms ref) (nrss_seqs ref) pat
 
 
 main_debmaf :: [String] -> IO ()
-main_debmaf [maff] = debugStretch . ($ Done) . parseMaf . decomp =<< L.readFile maff
+main_debmaf [maff] = debugStretch . ($ Stretch.Done) . parseMaf . decomp =<< L.readFile maff
 main_debmaf _ =  hPutStrLn stderr $ "Usage: debmaf [ref.fa] [smp.hetfa]"
 
 main_debhetfa :: [String] -> IO ()
 main_debhetfa [reff, smpf] = do
-    (_,Reference ref) <- readReference reff
+    ref <- nrss_seqs <$> readTwoBit reff
     smp <- readSampleFa smpf
-    debugStretch . ($ Done) . head $ zipWith diff ref smp
+    debugLump . ($ Fix Done) . head $ zipWith diff2 ref smp
 main_debhetfa _ = hPutStrLn stderr $ "Usage: debhetfa [ref.fa] [smp.hetfa]"
-
-main_dumppatch :: [String] -> IO ()
-main_dumppatch [inf] = debugStretch . decode . decomp =<< L.readFile inf
-main_dumppatch     _ = hPutStrLn stderr "Usage: dumppatch [foo.hef]"
 
 main_dumplump :: [String] -> IO ()
 main_dumplump [ref,inf] = do rs <- readTwoBit ref
-                             debugLump . Lump.decode (Right rs) . decomp =<< L.readFile inf
-main_dumplump [  inf  ] =    debugLump . Lump.decode (Left "no reference given") . decomp =<< L.readFile inf
+                             debugLump . decode (Right rs) . decomp =<< L.readFile inf
+main_dumplump [  inf  ] =    debugLump . decode (Left "no reference given") . decomp =<< L.readFile inf
 main_dumplump     _     =    hPutStrLn stderr "Usage: dumplump [foo.hef]"
 
 opts_eigen :: [ OptDescr (ConfMergeGen -> IO ConfMergeGen) ]
@@ -278,21 +264,22 @@ main_vcfout args = do
                      , "\t0/1" ]    -- 15, 3xref+3xalt (whatever)
 
 
-main_vcf :: String -> (Stretch -> Builder) -> [String] -> IO ()
+main_vcf :: String -> (Fix Lump -> Fix Lump) -> [String] -> IO ()
 main_vcf = main_xcf "vcf" readVcf
 
-main_bcf :: String -> (Stretch -> Builder) -> [String] -> IO ()
+main_bcf :: String -> (Fix Lump -> Fix Lump) -> [String] -> IO ()
 main_bcf = main_xcf "bcf" readBcf
 
-main_xcf :: String -> (FilePath -> IO [RawVariant]) -> String
-         -> (Stretch -> Builder) -> [String] -> IO ()
-main_xcf ext reader key enc args = do
+main_xcf :: String -> (FilePath -> IO [RawVariant]) -> String -> (Fix Lump -> Fix Lump) -> [String] -> IO ()
+main_xcf ext reader key trans args = do
     ( vcfs, conf_output ) <- parseOpts True (error "no output file specified")
                                             (mk_opts key ("["++ext++"-file...]") opts_maf) args
+    ref <- readTwoBit undefined -- XXX
     withFile conf_output WriteMode $ \hdl ->
-        hPutBuilder hdl . enc .
-            importVcf chroms . progress conf_output . dedupVcf . cleanVcf . concat
-                =<< mapM reader vcfs
+        hPutBuilder hdl . encode ref
+        . trans . importVcf (nrss_chroms ref)
+        . progress conf_output . dedupVcf . cleanVcf
+        . concat =<< mapM reader vcfs
   where
     progress :: String -> [RawVariant] -> [RawVariant]
     progress fp = go 0 0
@@ -305,17 +292,20 @@ main_xcf ext reader key enc args = do
                     return $ v : go (rv_chrom v) (rv_pos v) vs
             | otherwise =  v : go rs po vs
 
+-- Lowers all calls to haploid.
+make_hap :: Fix Lump -> Fix Lump
+make_hap = id
 
-patchFasta :: Handle -> Int64 -> [B.ByteString] -> [NewRefSeq] -> Fix Lump.Lump -> IO ()
+patchFasta :: Handle -> Int64 -> [B.ByteString] -> [NewRefSeq] -> Fix Lump -> IO ()
 patchFasta hdl wd = p1
   where
-    p1 :: [B.ByteString] -> [NewRefSeq] -> Fix Lump.Lump -> IO ()
+    p1 :: [B.ByteString] -> [NewRefSeq] -> Fix Lump -> IO ()
     p1 [    ]     _  _ = return ()
     p1      _ [    ] _ = return ()
     p1 (c:cs) (r:rs) p = do hPutStrLn hdl $ '>' : B.unpack c
                             p2 (p1 cs rs) 0 (patch r p)
 
-    p2 :: (Fix Lump.Lump -> IO ()) -> Int64 -> Frag -> IO ()
+    p2 :: (Fix Lump -> IO ()) -> Int64 -> Frag -> IO ()
     p2 k l f | l == wd = L.hPutStrLn hdl L.empty >> p2 k 0 f
     p2 k l (Term p)    = when (l>0) (L.hPutStrLn hdl L.empty) >> k p
     p2 k l (Short c f) = hPutChar hdl c >> p2 k (succ l) f
@@ -339,13 +329,6 @@ patchFasta hdl wd = p1
 -- sequences.  Saves us from dealing with them later.
 
 
--- Reads and parses a VCF.  We assume one VCF per chromosome, so we go
--- ahead and ignore the chromosome completely.  The rest has to be
--- turned into a 'Stretch'.
---
--- Two options...  either convert to two sequences and pass to diff, or
--- scan the list of variants and produce the stretch directly.
---
 -- We also have two use cases:  dense files (more important), where
 -- missing parts are considered "no call", and sparse files (less
 -- important), where missing parts are considered "matches".
@@ -353,69 +336,68 @@ patchFasta hdl wd = p1
 -- We start the coordinate at one(!), for VCF is one-based.
 -- Pseudo-variants of the "no call" type must be filtered beforehand,
 -- see 'cleanVcf'.
-importVcf :: [ L.ByteString ] -> [ RawVariant ] -> Stretch
-importVcf [    ] = const $ Break Done
-importVcf (c:cs) = generic (hashChrom $ B.concat $ L.toChunks c) 1
+importVcf :: [ B.ByteString ] -> [ RawVariant ] -> Fix Lump
+importVcf = (.) normalizeLump . go
   where
-    generic !_    _ [         ] = Break Done
-    generic !hs pos (var1:vars)
-        | hs /= rv_chrom var1 = Break $ importVcf cs (var1:vars)
+    go [    ] = const $ Fix $ Break $ Fix Done
+    go (c:cs) = generic (hashChrom c) 1
+      where
+        generic !_    _ [         ] = Fix $ Break $ Fix $ Done
+        generic !hs pos (var1:vars)
+            | hs /= rv_chrom var1   = Fix $ Break $ go cs (var1:vars)
 
-        -- long gap, creates Ns
-        | rv_pos var1 >= pos + 2 = let l = (rv_pos var1 - pos) `div` 2
-                                   in Ns (fromIntegral l) $ generic hs (pos + 2*l) (var1:vars)
+            -- long gap, creates Ns
+            | rv_pos var1 > pos     = Fix $ Ns (rv_pos var1 - pos) $ generic hs (rv_pos var1) (var1:vars)
 
-        -- small gap, have to emit codes
-        | rv_pos var1 == pos + 1 = Chrs (NucCode 0) (get_nuc_code var1) $ generic hs (pos+2) vars
+            -- positions must match now
+            | rv_pos var1 == pos =
+                        if isVar var1
+                          then Fix $ get_var_code var1 $ generic hs (succ pos) vars
+                          else Fix $ Eqs2 1 $ generic hs (succ pos) vars
 
-        -- positions must match now
-        | rv_pos var1 == pos = case vars of
-                -- two variant calls next to each other
-                -- if both are reference, we can try and build a stretch
-                var2:vars'' | rv_pos var2 == pos+1 ->
-                    if isVar var1 || isVar var2
-                      then Chrs (get_nuc_code var1) (get_nuc_code var2) $ generic hs (pos+2) vars''
-                      else matches hs 1 (pos+2) vars''
-
-                -- one followed by gap, will become an N
-                _ -> Chrs (get_nuc_code var1) (NucCode 0) $ generic hs (pos+2) vars
-
-        | otherwise = error $ "Got variant position " ++ show (rv_pos var1)
-                           ++ " when expecting " ++ show pos ++ " or higher."
-
-    -- To extend a stretch of matches, we need
-    -- two non-vars at the next two positions
-    matches hs num pos (var1:var2:vars)
-        | rv_pos var1 == pos && rv_pos var2 == pos+1 && not (isVar var1) && not (isVar var2)
-            = matches hs (num+1) (pos+2) vars
-
-    -- anything else, we dump the stretch out and pass the buck
-    matches hs num pos vars = Eqs num $ generic hs pos vars
+            | otherwise = error $ "Got variant position " ++ show (rv_pos var1)
+                               ++ " when expecting " ++ show pos ++ " or higher."
 
     -- *sigh*  Have to turn a numeric genotype into a 'NucCode'.  We
     -- have characters for the variants, and we need to map a pair of
     -- them to a code.
-    get_nuc_code RawVariant{..}
+    get_var_code RawVariant{..}
+        | B.any (== 'N') rv_vars || B.null rv_vars = Ns 1
+
         -- haploid call or one allele missing
-        | rv_gt .&. 0xFF00 == 0xFF00 || rv_gt .&. 0xFF00 == 0x0000
-            = let z = toUpper $ safeIndex "z" rv_vars ( fromIntegral (rv_gt .&. 0x00FE - 2) )
-              in NucCode $ maybe (error $ "What's a " ++ shows z "?") fromIntegral
-                         $ B.elemIndex z nuc_chars
-        | otherwise                         -- diploid
-            = let c1 = toUpper $ safeIndex "c1" rv_vars ( fromIntegral (rv_gt            .&. 0x00FE - 2) )
-                  c2 = toUpper $ safeIndex ("c2 "++shows rv_pos " " ++ showHex rv_gt " ") rv_vars ( fromIntegral (rv_gt `shiftR` 8 .&. 0x00FE - 2) )
+        | rv_gt .&. 0xFF00 == 0xFF00 || rv_gt .&. 0xFF00 == 0x0000 =
+                fromMaybe (Ns 1) (hap_vars V.!? (char_to_2b c1 `xor` char_to_2b n0))
 
-                  n1 = maybe (error $ "What's a " ++ shows c1 "?") id $ B.elemIndex c1 nuc_chars
-                  n2 = maybe (error $ "What's a " ++ shows c2 "?") id $ B.elemIndex c2 nuc_chars
-              in NucCode $ two_to_code U.! (n1+5*n2)
+        -- diploid call; one called allele must be the reference
+        | otherwise =
+                let vv = (char_to_2b c1 `xor` char_to_2b n0)
+                       + (char_to_2b c2 `xor` char_to_2b n0) * 4
+                in fromMaybe (Ns 1) (dip_vars V.!? vv)
 
-    two_to_code = U.fromList [0,1,2,3,4,1,1,5,6,7,2,5,2,8,9,3,6,8,3,10,4,7,9,10,4]
+        -- diploid call, but unrepresentable
+        | otherwise = Ns 1
+      where
+        v1 = fromIntegral $ rv_gt            .&. 0x00FE - 2
+        v2 = fromIntegral $ rv_gt `shiftR` 8 .&. 0x00FE - 2
+
+        n0 = toUpper $ B.head rv_vars
+        c1 = toUpper $ safeIndex "c1" rv_vars v1
+        c2 = toUpper $ safeIndex ("c2 "++shows rv_pos " " ++ showHex rv_gt " ") rv_vars v2
+
+    hap_vars = V.fromList [ Eqs2 1, Trans2, Compl2, TCompl2 ]
+    dip_vars = V.fromList [ Eqs2 1,    RefTrans,    RefCompl,    RefTCompl
+                          , RefTrans,  Trans2,      TransCompl,  TransTCompl
+                          , RefCompl,  TransCompl,  Compl2,      ComplTCompl
+                          , RefTCompl, TransTCompl, ComplTCompl, TCompl2 ]
 
     safeIndex m s i | B.length s > i = B.index s i
                     | otherwise = error $ "Attempted to index " ++ shows i " in " ++ shows s " (" ++ m ++ ")."
 
-    nuc_chars :: B.ByteString
-    nuc_chars = "NACGT"
+    char_to_2b 'T' =  0
+    char_to_2b 'A' =  1
+    char_to_2b 'C' =  2
+    char_to_2b 'G' =  3
+    char_to_2b  c  = error $ "What's a " ++ shows c "?"
 
     isVar RawVariant{..} | rv_gt == 0xFF02            = False     -- "0"
                          | rv_gt .&. 0xFCFE == 0x0002 = False     -- "0|.", "0/.", "0|0", "0/0"
@@ -448,64 +430,4 @@ readVcf fp = do
         case mv of
             Nothing -> return []
             Just  v -> (:) v <$> self
-
-{-  XXX What was thid good for?  No need for a repair?  Easy repair?
-main_test :: [String] -> IO ()
-main_test hefs = do
-    (chrs,ref) <- readReference "/var/tmp/ref.fa"
-    inps <- mapM (fmap (decode . decomp) . L.readFile) hefs
-    forM_ (merge_hefs' False 0 ref inps) $ \vs ->
-        -- We need an ABBA+ pattern.  So all samples except the second
-        -- and third must be alt alleles only while the second and third
-        -- are ref only, or the other way around.  Any of the set of
-        -- variants is fine, we print all.
-        when (any is_good vs) $
-            forM_ vs $ \Variant{..} ->
-                B.hPutBuilder stdout $
-                    B.byteString (chrs !! v_chr) <> B.char8 '\t' <>
-                    B.intDec (v_pos+1) <> B.string8 "\t.\t" <>
-                    B.char8 (toUpper v_ref) <> B.char8 '\t' <>
-                    B.char8 (toUpper v_alt) <> B.string8 "\t.\t.\t.\tGT" <>
-                    U.foldr ((<>) . B.byteString . (V.!) gts . fromIntegral) mempty v_calls <>
-                    B.char8 '\n'
-  where
-    is_good Variant{..} = is_ti && defnd && (adda || daad)
-      where
-        c1    = v_calls U.! 0
-        c2    = v_calls U.! 1
-        c3    = v_calls U.! 2
-        cs    = U.drop 3 v_calls
-        is_ti = is_transversion (toUpper v_ref) (toUpper v_alt)
-
-        adda  = U.all (not . isRef) cs && isRef c2 && isRef c3 && isAlt c1
-        daad  = U.all (not . isAlt) cs && isAlt c2 && isAlt c3 && isRef c1
-        defnd = U.length (U.filter (== 0) cs) <= 3
-
-    is_transversion 'C' 'T' = False
-    is_transversion 'T' 'C' = False
-    is_transversion 'G' 'A' = False
-    is_transversion 'A' 'G' = False
-    is_transversion  _   _  = True
-
-    isRef v = v /= 0 && v .&. 12 == 0
-    isAlt v = v /= 0 && v .&.  3 == 0
-
-    gts :: V.Vector B.ByteString
-    gts = V.fromList [ "\t./."      -- 0, N
-                     , "\t0"        -- 1, 1xref
-                     , "\t0/0"      -- 2, 2xref
-                     , "\t0/0"      -- 3, 3xref (whatever)
-                     , "\t1"        -- 4, 1xalt
-                     , "\t0/1"      -- 5, ref+alt
-                     , "\t0/1"      -- 6, 2xref+alt (whatever)
-                     , "\t0/1"      -- 7, 3xref+alt (whatever)
-                     , "\t1/1"      -- 8, 2xalt
-                     , "\t0/1"      -- 9, ref+2xalt (whatever)
-                     , "\t0/1"      -- 10, 2xref+2xalt (whatever)
-                     , "\t0/1"      -- 11, 3xref+2xalt (whatever)
-                     , "\t1/1"      -- 12, 3xalt (whatever)
-                     , "\t0/1"      -- 13, ref+3xalt (whatever)
-                     , "\t0/1"      -- 14, 2xref+3xalt (whatever)
-                     , "\t0/1" ]    -- 15, 3xref+3xalt (whatever)
--}
 

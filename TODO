@@ -1,7 +1,6 @@
 - replace Stretch with Lump, improve the whole logic, and use the new
   binary format
-  - VCF import
-  - restore the CpG filter in SillyStats.hs
+  - MAF import
 
 - replace 'Reference' with 'NewRefSeqs'
   - Bamin should check compatibility of reference (extra reference
@@ -9,7 +8,14 @@
     the reference elicit a warning, no common sequences would be an
     error)
 
-- Hetfa patch needs testing (looked weird, but could be due to the SGDP)
+- Oops:  two Alts *are* actually representable.  Fucked that up in a
+  couple places :(
+
+- restore the CpG filter in SillyStats.hs
+
+- Lump.encode/Lump.decode needs testing
+
+- Hetfa patch, import needs testing (looked weird, but could be due to the SGDP)
 
 - more flexible Hetfa import so genomes with missing chromosomes (Ust-Ishim)
   work
@@ -18,6 +24,9 @@
 
 - fix the MAF importer (needs Lumps to stay in reasonable memory bounds
   in the general case)
+
+- import from multi-MAF (either create multiple heffalumps or allow
+  selection of one species)
 
 - BED file as filter (for the merging part, not for import).  Cannot
   assume BED is sorted correctly.
