@@ -168,8 +168,7 @@ pileup cons nil iter = do buf <- liftIO $ newBuf 256
 
     mPile !rs !po !nbuf !buf out = do
         !pile <- lift $ pile_loop nbuf buf 0 (nil rs po)
-        -- pile <- lift $ V.foldM (\a -> maybe (return a) (cons a) . baseFromBamIter) (nil rs po) buf -- XXX
-        !nbuf' <- liftIO $ step_loop nbuf buf 0 0 -- undefined -- V.concatMap (maybe V.empty V.singleton . stepBamIter) buf -- XXX
+        !nbuf' <- liftIO $ step_loop nbuf buf 0 0
         eneeCheckIfDone (mSkip rs (succ po) nbuf' buf) . out $ Chunk [pile]
 
     pile_loop !nbuf !buf !i !acc

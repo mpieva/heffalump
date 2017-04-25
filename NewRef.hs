@@ -94,7 +94,7 @@ parseTwopBit fp0 raw = case (getW32 0, getW32 4) of (0x1A412743, 0) -> parseEach
         !maskBlockCount = fromIntegral . getW32 $ offset + 8 + 8*nBlockCount
         !packedDnaOff = offset + 16 + 8 * (nBlockCount+maskBlockCount)
 
-        -- We will need to decode the N blocks, we ignore the m blocks.
+        -- We will need to decode the N blocks, but we ignore the M blocks.
         n_blocks = [ (u,v) | i <- [ 0 .. nBlockCount-1 ]
                            , let u = fromIntegral . getW32 $ offset+8 + 4*i
                                  v = fromIntegral . getW32 $ offset+8 + 4*(i+nBlockCount)

@@ -11,7 +11,6 @@ import qualified Data.ByteString.Lazy.Char8     as L
 -- generation of names and hash functions.
 
 
-
 -- We wrote Eigenstrat in the first iteration.  Eigenstrat is one
 -- character per genotype.  Alternatively, we could write packed
 -- Ancestrymap, then it's one char per four genotypes.  It starts with a

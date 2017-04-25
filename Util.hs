@@ -37,14 +37,6 @@ parseOpts fileargs def ods args = do
     (,) files <$> foldl (>>=) (return def) opts
 
 
-{-# DEPRECATED Reference "Use NewRefSeqs instead" #-}
-newtype Reference = Reference [L.ByteString]
-
--- Reference is FastA format, treated as haploid.
-{-# DEPRECATED readReference "Use NewRefSeqs instead" #-}
-readReference :: FilePath -> IO ([S.ByteString], Reference)
-readReference fp = (id *** Reference) . unzip . parseFasta chroms . L.lines . decomp <$> L.readFile fp
-
 -- Samples in FastA format are treated as diploid.
 readSampleFa :: FilePath -> IO [L.ByteString]
 readSampleFa fp = map snd . parseFasta chroms . L.lines . decomp <$> L.readFile fp
@@ -74,9 +66,9 @@ up :: Word8 -> Word8
 up !x = x .&. complement 32
 
 -- | Our expected chromosomes.
+{-# DEPRECATED chroms "Use proper reference." #-}
 chroms :: [L.ByteString]
 chroms = L.words "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 X Y"
--- chroms = L.words "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 X Y MT"
 
 readNumIO :: String -> IO Int
 readNumIO s = case reads s of

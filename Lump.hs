@@ -516,46 +516,22 @@ stretchToLump nrs = normalizeLump . go1 (nrss_seqs nrs)
     go1 [     ] _ = Fix Done
     go1 (r0:rs) l = go r0 l
       where
-        go r (S.Chrs (NucCode a) (NucCode b) k) = call a (call b (flip go k)) r
-        go r (S.Ns   c k) = Fix $ Ns   (fromIntegral $ c+c) $ go (dropNRS (fromIntegral $ c+c) r) k
-        go r (S.Eqs  c k) = Fix $ Eqs2 (fromIntegral $ c+c) $ go (dropNRS (fromIntegral $ c+c) r) k
-        go r (S.Eqs1 c k) = Fix $ Eqs1 (fromIntegral $ c+c) $ go (dropNRS (fromIntegral $ c+c) r) k
-        go _ (S.Break  k) = Fix $ Break                     $ go1 rs k
-        go _  S.Done      = Fix   Done
+        go r (S.Chrs a b k) = call a (call b (flip go k)) r
+        go r (S.Ns     c k) = Fix $ Ns   (fromIntegral $ c+c) $ go (dropNRS (fromIntegral $ c+c) r) k
+        go r (S.Eqs    c k) = Fix $ Eqs2 (fromIntegral $ c+c) $ go (dropNRS (fromIntegral $ c+c) r) k
+        go r (S.Eqs1   c k) = Fix $ Eqs1 (fromIntegral $ c+c) $ go (dropNRS (fromIntegral $ c+c) r) k
+        go _ (S.Break    k) = Fix $ Break                     $ go1 rs k
+        go _  S.Done        = Fix   Done
 
-    call b k r = case unconsNRS r of
-        Nothing         -> Fix Done
-        Just (N2b a,r') -> Fix . enc a (fromIntegral b) $ k r'
+    call :: NucCode -> (NewRefSeq -> Fix Lump) -> NewRefSeq -> Fix Lump
+    call (NucCode b) k r = case unconsNRS r of
+        Nothing     -> Fix Done
+        Just (a,r') -> Fix . encTwoNucs a (nc2vs U.! fromIntegral b) $ k r'
 
-    n = Ns 1
-    eq1 = Eqs1 1
-    eq2 = Eqs2 1
-
-    enc 0 b = t_to_x V.! b
-    enc 1 b = c_to_x V.! b
-    enc 2 b = a_to_x V.! b
-    enc 3 b = g_to_x V.! b
-    enc _ _ = n
-
-    a_to_x, c_to_x, g_to_x, t_to_x :: V.Vector (Fix Lump -> Lump (Fix Lump))
-    -- iupac_chars = "NACGTMRWSYKacgtN"
-
-    a_to_x = V.fromList [ n, eq2, TCompl2, Trans2, Compl2
-                        , RefTCompl, RefTrans, RefCompl, n, n, n
-                        , eq1, TCompl1, Trans1, Compl1, n ]
-
-    c_to_x = V.fromList [ n, TCompl2, eq2, Compl2, Trans2
-                        , RefTCompl, n, n, RefCompl, RefTrans, n
-                        , TCompl1, eq1, Compl1, Trans1, n ]
-
-    g_to_x = V.fromList [ n, Trans2, Compl2, eq2, TCompl2
-                        , n, RefTrans, n, RefCompl, n, RefTCompl
-                        , Trans1, Compl1, eq1, TCompl1, n ]
-
-    t_to_x = V.fromList [ n, Compl2, Trans2, TCompl2, eq2
-                        , n, n, RefCompl, n, RefTrans, RefTCompl
-                        , Compl1, Trans1, TCompl1, eq1, n ]
-
+    nc2vs :: U.Vector Word8
+    !nc2vs = [ 255,  5, 10, 15, 0,        -- NACGT
+                 6,  7,  1, 11, 2, 3,     -- MRWSYK
+                17, 18, 19, 16, 255 ]     -- acgtN
 
 
 -- | Main decoder.  Switches behavior based on header.  "HEF\0",
@@ -606,6 +582,8 @@ encode r s = byteString "HEF\3" <>
              int32LE (fromIntegral (hash (nrss_chroms r, nrss_lengths r))) <>
              encodeLump s
 
+-- | Diff between a reference and a sample in string format.  The sample
+-- is treated as diploid.
 gendiff :: (a -> RefSeqView a) -> a -> L.ByteString -> Fix Lump -> Fix Lump
 gendiff view r0 s0 done = generic r0 s0
   where
@@ -624,26 +602,52 @@ gendiff view r0 s0 done = generic r0 s0
                 | eq u x    -> Fix $ Eqs2     1 $ generic ref' smp'
                 | otherwise -> Fix $ encvar u x $ generic ref' smp'
 
+    fromAmbCode :: Word8 -> Word8       -- two alleles in bits 0,1 and 2,3
+    fromAmbCode c | c == c2w 't' = 0
+                  | c == c2w 'a' = 5
+                  | c == c2w 'c' = 10
+                  | c == c2w 'g' = 15
+
+                  | c == c2w 's' = 11
+                  | c == c2w 'w' = 1
+                  | c == c2w 'm' = 6
+                  | c == c2w 'k' = 3
+                  | c == c2w 'r' = 7
+                  | c == c2w 'y' = 2
+
     encvar :: Nuc2b -> Word8 -> Fix Lump -> Lump (Fix Lump)
-    encvar = undefined  -- XXX
+    encvar r c = encTwoNucs r $ fromAmbCode (c .|. 32)
+
+encTwoNucs :: Nuc2b -> Word8 ->  Fix Lump -> Lump (Fix Lump)
+encTwoNucs (N2b r) ns = encTwoVars $ xor ns (r .|. shiftL r 2)
+
+encTwoVars :: Word8 -> Fix Lump -> Lump (Fix Lump)
+encTwoVars vs = fromMaybe (Ns 1) $ vv V.!? fromIntegral vs
+  where
+    !vv = [ Eqs2 1,    RefTrans,    RefCompl,    RefTCompl
+          , RefTrans,  Trans2,      TransCompl,  TransTCompl
+          , RefCompl,  TransCompl,  Compl2,      ComplTCompl
+          , RefTCompl, TransTCompl, ComplTCompl, TCompl2
+
+          , Eqs1 1, Trans1, Compl1, TCompl1
+          , Eqs1 1, Trans1, Compl1, TCompl1
+          , Eqs1 1, Trans1, Compl1, TCompl1
+          , Eqs1 1, Trans1, Compl1, TCompl1 ]
+
 
 diff2 :: NewRefSeq -> L.ByteString -> Fix Lump -> Fix Lump
 diff2 = gendiff viewNRS
 
-diff3 :: L.ByteString -> L.ByteString -> Fix Lump -> Fix Lump
-diff3 = gendiff viewLBS
+diff :: L.ByteString -> L.ByteString -> Fix Lump -> Fix Lump
+diff = gendiff viewLBS
   where
-    viewLBS = maybe NilRef (\(a,b) -> fromCode a :> b) . L.uncons
+    viewLBS = maybe NilRef (\(a,b) -> fromCode (a .|. 32) :> b) . L.uncons
 
-    fromCode  84 = N2b 0
-    fromCode  67 = N2b 1
-    fromCode  65 = N2b 2
-    fromCode  71 = N2b 3
-    fromCode 116 = N2b 0
-    fromCode  99 = N2b 1
-    fromCode  97 = N2b 2
-    fromCode 103 = N2b 3
-    fromCode _ = N2b 255
+    fromCode c | c == c2w 't' = N2b 0
+               | c == c2w 'a' = N2b 1
+               | c == c2w 'c' = N2b 2
+               | c == c2w 'g' = N2b 3
+               | otherwise =  N2b 255
 
 
 data Frag = Short !Char Frag | Long !L.ByteString Frag | Term (Fix Lump)

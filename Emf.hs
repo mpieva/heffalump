@@ -16,10 +16,9 @@ module Emf where
 -- all these columns agree.
 
 
--- XXX  If our 'Stretch' data type could encode strings of odd length,
+-- XXX  Since our 'Lump' data type can now encode strings of odd length,
 -- we could simplify the whole strategy in here:  We could scan the
--- input in its given order, build small streatches, the sort them.  As
--- is, this is awkward.  *sigh*  Maybe in version 2.
+-- input in its given order, build small 'Lump's, then sort them.
 
 import BasePrelude
 import Codec.Compression.GZip
@@ -99,10 +98,10 @@ normMaf done = norm
 
     norm (Aln r1 s1 (Skip n2 ms))
         | n2 == 0    = norm $ Aln r1 s1 ms
-        | otherwise  = diff3 r1 s1 (norm $ Skip n2 ms)
+        | otherwise  = diff r1 s1 (norm $ Skip n2 ms)
 
     -- anything else runs into the end
-    norm (Aln r1 s1 MafDone) = diff3 r1 s1 done
+    norm (Aln r1 s1 MafDone) = diff r1 s1 done
     norm (Skip n1   MafDone) = Fix $ Ns (fromIntegral n1) done
     norm            MafDone  = done
 
@@ -143,9 +142,10 @@ scanOneBlock inp = ( EmfBlock tree seqs, drop 1 remainder )
             <*> (A.char ']' *> A.char ':' *> A.double)
 
 
-data Range    = Range { r_seq    :: {-# UNPACK #-} !ShortByteString
-                      , r_pos    :: {-# UNPACK #-} !Int
-                      , r_length :: {-# UNPACK #-} !Int } deriving (Show, Eq, Ord)
+data Range = Range { r_seq    :: {-# UNPACK #-} !ShortByteString
+                   , r_pos    :: {-# UNPACK #-} !Int
+                   , r_length :: {-# UNPACK #-} !Int }
+    deriving (Show, Eq, Ord)
 
 reverseRange :: Range -> Range
 reverseRange (Range sq pos len) = Range sq (-pos-len) len

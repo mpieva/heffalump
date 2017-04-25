@@ -1,18 +1,8 @@
 module Stretch (
         NucCode(..),
         Stretch(..),
-        debugStretch,
-        catStretches,
-        encode_v0,
-        encode_dip,
-        encode_hap,
         decode_dip,
         decode_hap,
-        decode,
-        diff,
-        code,
-        tr,
-        iupac_chars,
         main_dumppatch
     ) where
 
@@ -20,11 +10,11 @@ import BasePrelude
 import Data.ByteString.Builder          ( word8, Builder, byteString )
 import System.IO                        ( stderr )
 
-import qualified Data.ByteString                as BB
 import qualified Data.ByteString.Char8          as B
 import qualified Data.ByteString.Internal       as B
 import qualified Data.ByteString.Lazy.Char8     as L
 import qualified Data.ByteString.Lazy           as LB
+import qualified Data.ByteString.Unsafe         as BB
 
 import Util ( low, decomp )
 
@@ -55,16 +45,11 @@ debugStretch' c i (Eqs    n s) = do putStrLn $ shows (c,i) "\tEqs  " ++ show n ;
 debugStretch' c i (Eqs1   n s) = do putStrLn $ shows (c,i) "\tEqs1 " ++ show n ;          debugStretch' c (i+2*n) s
 debugStretch' c i (Chrs x y s) = do putStrLn $ shows (c,i) "\tChrs " ++ [tr x,' ',tr y] ; debugStretch' c (i+2) s
 
-catStretches :: [Stretch -> Stretch] -> Stretch
-catStretches = foldr (\a b -> a $ Break b) Done
-
-
 -- | Main decoder.  Switches behavior based on header.
 {-# DEPRECATED decode "Switch to Lumps" #-}
 decode :: L.ByteString -> Stretch
 decode str | "HEF\0" `L.isPrefixOf` str = decode_dip (L.drop 4 str)
            | "HEF\1" `L.isPrefixOf` str = decode_hap (L.drop 4 str)
-           -- | "HEF\2" `L.isPrefixOf` str = decode_mix (L.drop 4 str)
            | otherwise                  = decode_dip (L.drop 4 str) -- error "Format not recognixed."
 
 {-# DEPRECATED encode_dip "Switch to Lumps" #-}
@@ -203,7 +188,7 @@ code a = NucCode $ maybe 0 fromIntegral $ B.elemIndex a iupac_chars
 
 {-# INLINE tr #-}
 tr :: NucCode -> Char
-tr (NucCode w) = B.w2c . BB.index {-unsafeIndex-} iupac_chars . fromIntegral $ w
+tr (NucCode w) = B.w2c . BB.unsafeIndex iupac_chars . fromIntegral $ w .&. 0xF
 
 -- We operate on two characters at a time, to maintain alignment.  The
 -- output length is that of the reference rounded up to a multiple of

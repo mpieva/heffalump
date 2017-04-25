@@ -71,6 +71,7 @@ main_treemix args = do
                                              U.zip popixs $ U.map (fromIntegral . (`shiftR` 2)) v_calls
 
                                  show1 (a,b) k = intDec a <> char7 ',' <> intDec b <> char7 ' ' <> k
+
                              -- samples (not outgroups) must show ref and alt allele at least once
                              in if inRange conf_chroms v_chr && ve .&. 3 /= 0 && ve .&. 12 /= 0 && is_ti
                                then U.foldr show1 (char7 '\n') $ U.zip refcounts altcounts
@@ -80,7 +81,6 @@ main_treemix args = do
 
 -- | Reads an individual file.  Returns a map from individual to pop
 -- population number.
--- into the population list, and the population list.
 readIndFile :: B.ByteString -> [(B.ByteString, B.ByteString)]
 readIndFile = mapMaybe get1 . map B.words . filter (not . B.isPrefixOf "#") . B.lines
   where

@@ -1,4 +1,3 @@
-{-# LANGUAGE TemplateHaskell #-}
 module SillyStats (
     main_kayvergence,
     main_patterson,
@@ -444,22 +443,5 @@ accum_stats blk_size cfn vs0 = (full_counts, blockstats)
 
     near v v' = v_chr v == v_chr v' && v_pos v + blk_size > v_pos v'
 
-    foldBlock = foldl' (\acc -> S.zipWith mappend acc . cfn') . cfn'
-
-    cfn' Variant{..} = cfn {-(Vartype $ vartp (toUpper v_ref) (toUpper v_alt))-} v_calls
-      {- where
-        vartp 'A' 'C' = 0
-        vartp 'A' 'G' = 1
-        vartp 'A' 'T' = 2
-        vartp 'C' 'A' = 3
-        vartp 'C' 'G' = 4
-        vartp 'C' 'T' = 5
-        vartp 'G' 'A' = 6
-        vartp 'G' 'C' = 7
-        vartp 'G' 'T' = 8
-        vartp 'T' 'A' = 9
-        vartp 'T' 'C' = 10
-        vartp 'T' 'G' = 11
-        vartp  r   a  = error $ "Not really a variant: " ++ r : '/' : a : [] -}
-
+    foldBlock = foldl' (\acc -> S.zipWith mappend acc . cfn . v_calls) . cfn . v_calls
 

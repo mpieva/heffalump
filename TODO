@@ -1,8 +1,3 @@
-- Oops:  two Alts *are* actually representable.  Fucked that up in a
-  couple places :(
-
-- Oops:  encvar is still undefined
-
 - restore the CpG filter in SillyStats.hs
 
 - Lump.encode/Lump.decode needs testing
@@ -16,6 +11,9 @@
 
 - fix the MAF importer (needs Lumps to stay in reasonable memory bounds
   in the general case)
+
+- fix the VCF/BCF parser:  we have low-coverage vs high-coverage and
+  low-density vs high-density files
 
 - import from multi-MAF (either create multiple heffalumps or allow
   selection of one species)
@@ -35,4 +33,6 @@
 - Maybe allow Bamin with multiple sampling schemes in parallel?  The
   streaming package may come in handy.  It's only interesting for silly
   tests, though.
+
+
 

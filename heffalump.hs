@@ -317,6 +317,7 @@ patchFasta hdl wd = p1
             _ | L.null s -> p2 k l f
             (u,v)        -> L.hPutStr hdl u >> p2 k (l + L.length u) (Long v f)
 
+
 -- Our FastA files don't run exactly parallel (some samples are
 -- truncated, it appears).  Therefore, we have to parse the FastA input
 -- to some extent.  We shall also guard against messed up chromosome
@@ -331,7 +332,6 @@ patchFasta hdl wd = p1
 --
 -- Note that we turn small letters into capital letters in the
 -- sequences.  Saves us from dealing with them later.
-
 
 -- We also have two use cases:  dense files (more important), where
 -- missing parts are considered "no call", and sparse files (less
@@ -370,13 +370,11 @@ importVcf = (.) normalizeLump . go
 
         -- haploid call or one allele missing
         | rv_gt .&. 0xFF00 == 0xFF00 || rv_gt .&. 0xFF00 == 0x0000 =
-                fromMaybe (Ns 1) (hap_vars V.!? (char_to_2b c1 `xor` char_to_2b n0))
+                encTwoVars $ 16 + (char_to_2b c1 `xor` char_to_2b n0)
 
         -- diploid call; one called allele must be the reference
-        | otherwise =
-                let vv = (char_to_2b c1 `xor` char_to_2b n0)
-                       + (char_to_2b c2 `xor` char_to_2b n0) * 4
-                in fromMaybe (Ns 1) (dip_vars V.!? vv)
+        | otherwise = encTwoVars $ (char_to_2b c1 `xor` char_to_2b n0)
+                                 + (char_to_2b c2 `xor` char_to_2b n0) * 4
 
         -- diploid call, but unrepresentable
         | otherwise = Ns 1
@@ -387,12 +385,6 @@ importVcf = (.) normalizeLump . go
         n0 = toUpper $ B.head rv_vars
         c1 = toUpper $ safeIndex "c1" rv_vars v1
         c2 = toUpper $ safeIndex ("c2 "++shows rv_pos " " ++ showHex rv_gt " ") rv_vars v2
-
-    hap_vars = V.fromList [ Eqs2 1, Trans2, Compl2, TCompl2 ]
-    dip_vars = V.fromList [ Eqs2 1,    RefTrans,    RefCompl,    RefTCompl
-                          , RefTrans,  Trans2,      TransCompl,  TransTCompl
-                          , RefCompl,  TransCompl,  Compl2,      ComplTCompl
-                          , RefTCompl, TransTCompl, ComplTCompl, TCompl2 ]
 
     safeIndex m s i | B.length s > i = B.index s i
                     | otherwise = error $ "Attempted to index " ++ shows i " in " ++ shows s " (" ++ m ++ ")."
