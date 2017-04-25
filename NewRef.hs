@@ -206,6 +206,15 @@ unconsNRS (SomeSeq raw off len s) = Just (c, s')
     c  = N2b . fromIntegral $ (B.index raw (off `shiftR` 2) `shiftR` (6 - 2 * (off .&. 3))) .&. 3
     s' = if len == 1 then s else SomeSeq raw (off+1) (len-1) s
 
+data RefSeqView a = !Int :== a | !Nuc2b :>a | NilRef
+
+viewNRS :: NewRefSeq -> RefSeqView NewRefSeq
+viewNRS NewRefEnd = NilRef
+viewNRS (ManyNs l s) = l :== s
+viewNRS (SomeSeq raw off len s) = c :> s'
+  where
+    c  = N2b . fromIntegral $ (B.index raw (off `shiftR` 2) `shiftR` (6 - 2 * (off .&. 3))) .&. 3
+    s' = if len == 1 then s else SomeSeq raw (off+1) (len-1) s
 
 -- A variant call.  Has a genomic position, ref and alt alleles, and a
 -- bunch of calls.

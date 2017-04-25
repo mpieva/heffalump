@@ -1,15 +1,7 @@
-- replace Stretch with Lump, improve the whole logic, and use the new
-  binary format
-  - MAF import
-
-- replace 'Reference' with 'NewRefSeqs'
-  - Bamin should check compatibility of reference (extra reference
-    sequences in the Bam file are silently ignored, extra sequences in
-    the reference elicit a warning, no common sequences would be an
-    error)
-
 - Oops:  two Alts *are* actually representable.  Fucked that up in a
   couple places :(
+
+- Oops:  encvar is still undefined
 
 - restore the CpG filter in SillyStats.hs
 
@@ -27,6 +19,10 @@
 
 - import from multi-MAF (either create multiple heffalumps or allow
   selection of one species)
+
+- Bamin should check compatibility of reference (extra reference
+  sequences in the Bam file are silently ignored, extra sequences in the
+  reference elicit a warning, no common sequences would be an error)
 
 - BED file as filter (for the merging part, not for import).  Cannot
   assume BED is sorted correctly.

@@ -18,8 +18,7 @@ import Emf
 import Lump
 import NewRef
 import SillyStats
-import Stretch ( main_dumppatch, encode_hap, catStretches, debugStretch )
-import qualified Stretch
+import Stretch ( main_dumppatch )
 import Treemix
 import Util
 import VcfScan
@@ -95,7 +94,7 @@ defaultMergeConf = ConfMergeGen 1 5000000 True True Nothing
 opts_hetfa :: [ OptDescr (ConfImportGen -> IO ConfImportGen) ]
 opts_hetfa =
     [ Option "o" ["output"] (ReqArg set_output "FILE") "Write output to FILE (.hef)"
-    , Option "r" ["reference"] (ReqArg set_ref "FILE") "Read reference from FILE (.fa)"
+    , Option "r" ["reference"] (ReqArg set_ref "FILE") "Read reference from FILE (.2bit)"
     , Option "s" ["sample"] (ReqArg set_sample "FILE") "Read sample from FILE (.hetfa)" ]
   where
     set_output a c = return $ c { conf_imp_output    = a }
@@ -114,19 +113,25 @@ main_hetfa args = do
         zipWith diff2 (nrss_seqs refs) smp
 
 
-opts_maf :: [ OptDescr ( FilePath -> IO FilePath ) ]
+opts_maf :: [ OptDescr ( (FilePath,FilePath) -> IO (FilePath,FilePath) ) ]
 opts_maf =
-    [ Option "o" ["output"] (ReqArg set_output "FILE") "Write output to FILE (.hef)" ]
+    [ Option "o" ["output"] (ReqArg set_output "FILE") "Write output to FILE (.hef)"
+    , Option "r" ["reference"] (ReqArg set_ref "FILE") "Read reference from FILE (.2bit)" ]
   where
-    set_output a _ = return a
+    set_output a (_,b) = return (a,b)
+    set_ref    b (a,_) = return (a,b)
 
 main_maf :: [String] -> IO ()
 main_maf args = do
-    ( maffs, conf_output ) <- parseOpts True (error "no output file specified")
+    ( maffs, (conf_output, conf_ref) ) <- parseOpts True (error "no output file specified")
                                              (mk_opts "maf" "[maf-file...]" opts_maf) args
+    ref <- readTwoBit conf_ref
     withFile conf_output WriteMode $ \hdl ->
-        hPutBuilder hdl . encode_hap . catStretches =<<
+        hPutBuilder hdl . encode ref . catLumps =<<
            mapM (\f -> parseMaf . decomp <$> L.readFile f) maffs
+  where
+    catLumps = foldr (\a b -> a $ Fix $ Break b) (Fix Done)
+
 
 
 opts_patch :: [ OptDescr (ConfImportGen -> IO ConfImportGen) ]
@@ -152,14 +157,13 @@ main_patch args = do
 
 
 main_debmaf :: [String] -> IO ()
-main_debmaf [maff] = debugStretch . ($ Stretch.Done) . parseMaf . decomp =<< L.readFile maff
-main_debmaf _ =  hPutStrLn stderr $ "Usage: debmaf [ref.fa] [smp.hetfa]"
+main_debmaf [maff] = debugLump . ($ Fix Done) . parseMaf . decomp =<< L.readFile maff
+main_debmaf      _ = hPutStrLn stderr $ "Usage: debmaf [ref.fa] [smp.hetfa]"
 
 main_debhetfa :: [String] -> IO ()
-main_debhetfa [reff, smpf] = do
-    ref <- nrss_seqs <$> readTwoBit reff
-    smp <- readSampleFa smpf
-    debugLump . ($ Fix Done) . head $ zipWith diff2 ref smp
+main_debhetfa [reff, smpf] = do ref <- nrss_seqs <$> readTwoBit reff
+                                smp <- readSampleFa smpf
+                                debugLump . ($ Fix Done) . head $ zipWith diff2 ref smp
 main_debhetfa _ = hPutStrLn stderr $ "Usage: debhetfa [ref.fa] [smp.hetfa]"
 
 main_dumplump :: [String] -> IO ()
@@ -272,9 +276,9 @@ main_bcf = main_xcf "bcf" readBcf
 
 main_xcf :: String -> (FilePath -> IO [RawVariant]) -> String -> (Fix Lump -> Fix Lump) -> [String] -> IO ()
 main_xcf ext reader key trans args = do
-    ( vcfs, conf_output ) <- parseOpts True (error "no output file specified")
-                                            (mk_opts key ("["++ext++"-file...]") opts_maf) args
-    ref <- readTwoBit undefined -- XXX
+    ( vcfs, (conf_output, conf_ref) ) <- parseOpts True (error "no output file specified")
+                                                   (mk_opts key ("["++ext++"-file...]") opts_maf) args
+    ref <- readTwoBit conf_ref
     withFile conf_output WriteMode $ \hdl ->
         hPutBuilder hdl . encode ref
         . trans . importVcf (nrss_chroms ref)

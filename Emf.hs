@@ -25,6 +25,7 @@ import BasePrelude
 import Codec.Compression.GZip
 import Data.ByteString.Builder          ( hPutBuilder )
 import Data.ByteString.Short            ( ShortByteString )
+import Data.Fix
 import System.Console.GetOpt
 import System.Directory                 ( getDirectoryContents )
 import System.FilePath
@@ -40,7 +41,8 @@ import qualified Data.ByteString.Short              as BS
 import qualified Data.HashMap.Strict                as H
 import qualified Data.IntMap.Strict                 as I
 
-import Stretch
+import Lump
+import NewRef
 import Util
 
 -- Read MAF.  We discard the header lines starting with '#'.  The rest
@@ -56,7 +58,7 @@ import Util
 
 data MafStretch = Skip !Int MafStretch | Aln !L.ByteString !L.ByteString MafStretch | MafDone
 
-parseMaf :: L.ByteString -> Stretch -> Stretch
+parseMaf :: L.ByteString -> Fix Lump -> Fix Lump
 parseMaf inp done = normMaf done . parse1 0 $ L.lines inp
   where
     parse1 oldpos lns = case dropWhile (\l -> L.null l || L.all isSpace l || L.head l == '#') lns of
@@ -77,10 +79,12 @@ parseMaf inp done = normMaf done . parse1 0 $ L.lines inp
 
         ls -> error $ "WTF?! (" ++ show oldpos ++ ") near \n" ++ L.unpack (L.unlines $ take 3 ls)
 
--- remove degenerate stretches
-normMaf :: Stretch -> MafStretch -> Stretch
+-- XXX this is not borked anymore, but it is inefficient and needlessly
+-- brittle
+normMaf :: Fix Lump -> MafStretch -> Fix Lump
 normMaf done = norm
   where
+    -- remove degenerate stretches
     norm (Skip  0 ms)            = norm ms
     norm (Aln r _ ms) | L.null r = norm ms
 
@@ -91,19 +95,17 @@ normMaf done = norm
     -- emit 'Skip' or 'Aln', but transfer an N to make the length even
     norm (Skip n1 (Aln ref smp ms))
         | L.null ref = norm $ Skip n1 ms
-        | even n1    = Ns (fromIntegral $ n1 `div` 2) $ norm $ Aln             ref              smp  ms
-        | n1 == 1    =                                  norm $ Aln (L.cons 'X' ref) (L.cons 'N' smp) ms
-        | otherwise  = Ns (fromIntegral $ n1 `div` 2) $ norm $ Aln (L.cons 'X' ref) (L.cons 'N' smp) ms
+        | otherwise  = Fix $ Ns (fromIntegral n1) $ norm $ Aln ref smp ms
 
     norm (Aln r1 s1 (Skip n2 ms))
-        | n2 == 0            = norm $ Aln r1 s1 ms
-        | even (L.length r1) = diff         r1              s1      (norm $ Skip       n2  ms)
-        | otherwise          = diff (L.snoc r1 'X') (L.snoc s1 'N') (norm $ Skip (pred n2) ms)
+        | n2 == 0    = norm $ Aln r1 s1 ms
+        | otherwise  = diff3 r1 s1 (norm $ Skip n2 ms)
 
     -- anything else runs into the end
-    norm (Aln r1 s1 MafDone) = diff r1 s1 done
-    norm (Skip n1   MafDone) = Ns (fromIntegral $ succ n1 `div` 2) done
+    norm (Aln r1 s1 MafDone) = diff3 r1 s1 done
+    norm (Skip n1   MafDone) = Fix $ Ns (fromIntegral n1) done
     norm            MafDone  = done
+
 
 data EmfBlock = EmfBlock { emf_tree :: Tree Label
                          , emf_seqs :: [S.ByteString] }
@@ -308,23 +310,27 @@ smoke_test = mapM_ print .
 data OptsEmf = OptsEmf {
     emf_output :: FilePath,
     emf_input  :: FilePath,
+    emf_reference :: FilePath,
     emf_select :: Tree Label -> [(Label, [Label])] }
 
 opts_emf_default :: OptsEmf
 opts_emf_default = OptsEmf
     (error "no output specified")
     "/mnt/expressions/martin/sequence_db/epo/epo_6_primate_v66"
+    (error "no reference specified")
     (ancestor_to_species ("homo","sapiens") ("pan","troglodytes"))
 
 opts_emf :: [ OptDescr ( OptsEmf -> IO OptsEmf ) ]
 opts_emf =
     [ Option "o" ["output"] (ReqArg set_output "FILE") "Write output to FILE (.hef)"
     , Option "e" ["emf"] (ReqArg set_emf "PATH") "Compara alignments are at PATH"
+    , Option "r" ["reference"] (ReqArg set_ref "FILE") "Read reference from FILE (.2bit)"
     , Option "s" ["species"] (ReqArg set_species "NAME") "Import species NAME"
     , Option "a" ["ancestor"] (ReqArg set_anc "NAME") "Import ancestor with species NAME" ]
   where
     set_output  a c = return $ c { emf_output = a }
     set_emf     a c = return $ c { emf_input  = a }
+    set_ref     a c = return $ c { emf_reference  = a }
     set_species a c = return $ c { emf_select = species_to_species  ("homo","sapiens") (w2 a) }
     set_anc     a c = return $ c { emf_select = ancestor_to_species ("homo","sapiens") (w2 a) }
 
@@ -342,12 +348,15 @@ main_emf args = do
     hPrint stderr $ H.keys frags
     hPrint stderr $ map I.size $ H.elems frags
 
+    ref <- readTwoBit emf_reference
     withFile emf_output WriteMode $ \hdl ->
-        hPutBuilder hdl . encode_hap $ catStretches
+        hPutBuilder hdl . encode ref $ catLumps
             [ fragmap1_to_stretch $ H.lookupDefault I.empty c frags
             | c <- map (BS.toShort . L.toStrict) chroms ]
 
     hPutStrLn stderr "All done!"
+  where
+    catLumps = foldr (\a b -> a $ Fix $ Break b) (Fix Done)
 
 
 
@@ -370,7 +379,7 @@ collect_frags hm !frag =
 -- | Takes 'Fragment's and turns them into a 'Stretch'.  For good reasons,
 -- this only works for one chromosome at a time.  (Recycles the logic
 -- already developed for MAF input.)
-fragmap1_to_stretch :: FragMap1 -> Stretch -> Stretch
+fragmap1_to_stretch :: FragMap1 -> Fix Lump -> Fix Lump
 fragmap1_to_stretch fm done = normMaf done $ go 0 $ I.toList fm
   where
     go  _  [        ] = MafDone

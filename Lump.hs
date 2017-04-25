@@ -606,26 +606,44 @@ encode r s = byteString "HEF\3" <>
              int32LE (fromIntegral (hash (nrss_chroms r, nrss_lengths r))) <>
              encodeLump s
 
-diff2 :: NewRefSeq -> L.ByteString -> Fix Lump -> Fix Lump
-diff2 r0 s0 done = generic r0 s0
+gendiff :: (a -> RefSeqView a) -> a -> L.ByteString -> Fix Lump -> Fix Lump
+gendiff view r0 s0 done = generic r0 s0
   where
     isN        c = c == c2w 'N' || c == c2w 'n' || c == c2w '-'
     eq (N2b a) b = b == c2w 'Q' || b == c2w 'q' ||
                    "TCAG" `B.index` fromIntegral a == b ||
                    "tcag" `B.index` fromIntegral a == b
 
-    generic (ManyNs l ref) smp = Fix $ Ns l $ generic ref (L.drop (fromIntegral l) smp)
     generic ref smp =
-        case (L.uncons smp, unconsNRS ref) of
+        case (L.uncons smp, view ref) of
             (Nothing, _)    -> Fix $ Break done
-            (_, Nothing)    -> Fix $ Break done
-            (Just (x, smp'), Just (u, ref'))
+            (_, NilRef)     -> Fix $ Break done
+            (_, l :== ref') -> Fix $ Ns l $ generic ref' (L.drop (fromIntegral l) smp)
+            (Just (x, smp'), u :> ref')
                 | isN  x    -> Fix $ Ns       1 $ generic ref' smp'
                 | eq u x    -> Fix $ Eqs2     1 $ generic ref' smp'
                 | otherwise -> Fix $ encvar u x $ generic ref' smp'
 
     encvar :: Nuc2b -> Word8 -> Fix Lump -> Lump (Fix Lump)
-    encvar = undefined
+    encvar = undefined  -- XXX
+
+diff2 :: NewRefSeq -> L.ByteString -> Fix Lump -> Fix Lump
+diff2 = gendiff viewNRS
+
+diff3 :: L.ByteString -> L.ByteString -> Fix Lump -> Fix Lump
+diff3 = gendiff viewLBS
+  where
+    viewLBS = maybe NilRef (\(a,b) -> fromCode a :> b) . L.uncons
+
+    fromCode  84 = N2b 0
+    fromCode  67 = N2b 1
+    fromCode  65 = N2b 2
+    fromCode  71 = N2b 3
+    fromCode 116 = N2b 0
+    fromCode  99 = N2b 1
+    fromCode  97 = N2b 2
+    fromCode 103 = N2b 3
+    fromCode _ = N2b 255
 
 
 data Frag = Short !Char Frag | Long !L.ByteString Frag | Term (Fix Lump)
