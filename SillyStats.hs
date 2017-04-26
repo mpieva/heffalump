@@ -282,7 +282,31 @@ opts_dstat =
     set_no_cpg   c =                       return $ c { conf_filter  = filterCpG }
     set_tvonly   c = return $ c { conf_filter = const (filter (isTransversion . v_alt)) }
 
-filterCpG = undefined -- XXX
+filterCpG :: Either String NewRefSeqs -> [Variant] -> [Variant]
+filterCpG (Left  err) = error $ "GpG filtering needs a reference, " ++ err
+filterCpG (Right nrs) = go (nrss_seqs nrs) 0
+  where
+    -- We prepend one N to the reference so we can see
+    -- if we're on the G of a CpG.
+    go [    ] !_  _ = [ ]
+    go (r:rs) !c vs = go1 rs (ManyNs 1 $ r ()) c 0 vs
+
+    go1  _ _ !_ !_ [    ] = [ ]
+    go1 rs r !c !p (v:vs)
+        | v_chr v > c                =  go rs (succ c) (v:vs)
+        | v_chr v < c || v_pos v < p =  error "[Variant] should be sorted."
+        | otherwise                  = maybe (k id NewRefEnd) (uncurry k) isCpG
+      where
+        k f r' = f $ go1 rs r' c (succ p) vs
+        isCpG = do
+            (x,r') <- unconsNRS $ dropNRS (v_pos v - p) r
+            (y,r'') <- unconsNRS r'
+            (z,_) <- unconsNRS r''
+            let f | x == N2b 1 && y == N2b 3 = id
+                  | y == N2b 1 && z == N2b 3 = id
+                  | otherwise                = (:) v
+            return (f,r')
+
 
 main_patterson :: [String] -> IO ()
 main_patterson args = do

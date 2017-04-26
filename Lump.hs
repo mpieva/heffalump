@@ -34,8 +34,7 @@ import Util ( decomp )
 -- trans-complement.  Deletions just have a length, insertions have a
 -- length and a sequence of bases.  Complex alleles (such as two different
 -- alleles) would need to be broken up into separate variants---haven't
--- thought about the details.  Heterozygotes with two alternative
--- alleles are unrepresentable.  XXX
+-- thought about the details.
 
 data Lump a
     = Ns !Int a                         -- ^ uncalled stretch
@@ -66,7 +65,7 @@ data Lump a
 
     | Break a                           -- ^ break marker (end-of-chromosome)
     | Done                              -- ^ end of data stream
-  deriving Functor
+  deriving (Functor, Show)
 
 type Seq1 = U.Vector Word8
 
@@ -104,6 +103,8 @@ debugLump' c i fl = case unFix fl of
     InsH      s l -> do putStrLn $ shows (c,i) "\tInsH " ++ shows s " " ; debugLump' c i l
 
 
+concatLumps :: Foldable t => t (Fix Lump -> Fix Lump) -> Fix Lump
+concatLumps = foldr (\a b -> a $ Fix $ Break b) (Fix Done)
 
 normalizeLump :: Fix Lump -> Fix Lump
 normalizeLump = ana (go . unFix)
@@ -258,17 +259,17 @@ decodeLump = ana decode1
             | otherwise                        -> error $ "Impossibru! " ++ show c
 
     stretch_of cons c s1
-        | c .&. 0x40 == 0x3F  = cons (fromIntegral (L.index s1 0)) (L.drop 1 s1)
-        | c .&. 0x40 == 0x3E  = cons (fromIntegral (L.index s1 0) .|.
+        | c .&. 0x3F == 0x3F  = cons (fromIntegral (L.index s1 0)) (L.drop 1 s1)
+        | c .&. 0x3F == 0x3E  = cons (fromIntegral (L.index s1 0) .|.
                                       fromIntegral (L.index s1 1) `shiftL`  8) (L.drop 2 s1)
-        | c .&. 0x40 == 0x3D  = cons (fromIntegral (L.index s1 0) .|.
+        | c .&. 0x3F == 0x3D  = cons (fromIntegral (L.index s1 0) .|.
                                       fromIntegral (L.index s1 1) `shiftL`  8 .|.
                                       fromIntegral (L.index s1 2) `shiftL` 16) (L.drop 3 s1)
-        | c .&. 0x40 == 0x3C  = cons (fromIntegral (L.index s1 0) .|.
+        | c .&. 0x3F == 0x3C  = cons (fromIntegral (L.index s1 0) .|.
                                       fromIntegral (L.index s1 1) `shiftL`  8 .|.
-                                      fromIntegral (L.index s1 1) `shiftL` 16 .|.
-                                      fromIntegral (L.index s1 1) `shiftL` 24) (L.drop 4 s1)
-        | otherwise           = cons (fromIntegral (c .&. 0x40)) s1
+                                      fromIntegral (L.index s1 2) `shiftL` 16 .|.
+                                      fromIntegral (L.index s1 3) `shiftL` 24) (L.drop 4 s1)
+        | otherwise           = cons (fromIntegral (c .&. 0x3F)) s1
 
     del_of cons c s1
         | c .&. 0x07 == 0  = cons (fromIntegral (L.head s1)) (L.tail s1)
@@ -514,7 +515,7 @@ stretchToLump :: NewRefSeqs -> Stretch -> Fix Lump
 stretchToLump nrs = normalizeLump . go1 (nrss_seqs nrs)
   where
     go1 [     ] _ = Fix Done
-    go1 (r0:rs) l = go r0 l
+    go1 (r0:rs) l = go (r0 ()) l
       where
         go r (S.Chrs a b k) = call a (call b (flip go k)) r
         go r (S.Ns     c k) = Fix $ Ns   (fromIntegral $ c+c) $ go (dropNRS (fromIntegral $ c+c) r) k
@@ -540,22 +541,22 @@ stretchToLump nrs = normalizeLump . go1 (nrss_seqs nrs)
 -- compatible one.  "HEF\2" is the new format.  If a reference is given,
 -- we check if we can use it.
 decode :: Either String NewRefSeqs -> L.ByteString -> Fix Lump
-decode (Left err)  str | "HEF\2" `L.isPrefixOf` str = decodeLump (L.drop 4 str)
+decode (Left err)  str | "HEF\3" `L.isPrefixOf` str = decodeLump . L.drop 5 $ L.dropWhile (/= 0) str
                        | otherwise                  = error err
 
 decode (Right  r) str | "HEF\0" `L.isPrefixOf` str = stretchToLump r $ decode_dip (L.drop 4 str)
                       | "HEF\1" `L.isPrefixOf` str = stretchToLump r $ decode_hap (L.drop 4 str)
-                      | "HEF\2" `L.isPrefixOf` str = go (L.drop 4 str)
+                      | "HEF\3" `L.isPrefixOf` str = go (L.drop 4 str)
                       | otherwise                  = stretchToLump r $ decode_dip (L.drop 4 str) -- error "Format not recognized?"
   where
     go s = let (hs,s') = L.splitAt 4 . L.drop 1 . L.dropWhile (/= 0) $ s
                hv = L.foldr (\b a -> fromIntegral b .|. shiftL a 8) 0 hs
-           in if hv == 0xFFFFFF .&. hash (nrss_chroms r, nrss_lengths r)
+           in if hv == 0xFFFFFFFF .&. hash (nrss_chroms r, nrss_lengths r)
               then decodeLump s'
               else error "Incompatible reference genome."
 
 getRefPath :: L.ByteString -> Maybe FilePath
-getRefPath str | "HEF\2" `L.isPrefixOf` str = Just . C.unpack . L.takeWhile (/= 0) $ L.drop 4 str
+getRefPath str | "HEF\3" `L.isPrefixOf` str = Just . C.unpack . L.takeWhile (/= 0) $ L.drop 4 str
                | otherwise                  = Nothing
 
 decodeMany :: Maybe FilePath -> [FilePath] -> IO ( Either String NewRefSeqs, V.Vector (Fix Lump) )
@@ -594,8 +595,8 @@ gendiff view r0 s0 done = generic r0 s0
 
     generic ref smp =
         case (L.uncons smp, view ref) of
-            (Nothing, _)    -> Fix $ Break done
-            (_, NilRef)     -> Fix $ Break done
+            (Nothing, _)    -> done
+            (_, NilRef)     -> done
             (_, l :== ref') -> Fix $ Ns l $ generic ref' (L.drop (fromIntegral l) smp)
             (Just (x, smp'), u :> ref')
                 | isN  x    -> Fix $ Ns       1 $ generic ref' smp'
@@ -603,17 +604,17 @@ gendiff view r0 s0 done = generic r0 s0
                 | otherwise -> Fix $ encvar u x $ generic ref' smp'
 
     fromAmbCode :: Word8 -> Word8       -- two alleles in bits 0,1 and 2,3
-    fromAmbCode c | c == c2w 't' = 0
-                  | c == c2w 'a' = 5
-                  | c == c2w 'c' = 10
+    fromAmbCode c | c == c2w 't' =  0
+                  | c == c2w 'c' =  5
+                  | c == c2w 'a' = 10
                   | c == c2w 'g' = 15
 
-                  | c == c2w 's' = 11
-                  | c == c2w 'w' = 1
-                  | c == c2w 'm' = 6
-                  | c == c2w 'k' = 3
-                  | c == c2w 'r' = 7
-                  | c == c2w 'y' = 2
+                  | c == c2w 's' =  7
+                  | c == c2w 'w' =  2
+                  | c == c2w 'm' =  6
+                  | c == c2w 'k' =  3
+                  | c == c2w 'r' = 11
+                  | c == c2w 'y' =  1
 
     encvar :: Nuc2b -> Word8 -> Fix Lump -> Lump (Fix Lump)
     encvar r c = encTwoNucs r $ fromAmbCode (c .|. 32)
@@ -635,8 +636,8 @@ encTwoVars vs = fromMaybe (Ns 1) $ vv V.!? fromIntegral vs
           , Eqs1 1, Trans1, Compl1, TCompl1 ]
 
 
-diff2 :: NewRefSeq -> L.ByteString -> Fix Lump -> Fix Lump
-diff2 = gendiff viewNRS
+diff2 :: (() -> NewRefSeq) -> L.ByteString -> Fix Lump -> Fix Lump
+diff2 = gendiff viewNRS . ($ ())
 
 diff :: L.ByteString -> L.ByteString -> Fix Lump -> Fix Lump
 diff = gendiff viewLBS
@@ -644,8 +645,8 @@ diff = gendiff viewLBS
     viewLBS = maybe NilRef (\(a,b) -> fromCode (a .|. 32) :> b) . L.uncons
 
     fromCode c | c == c2w 't' = N2b 0
-               | c == c2w 'a' = N2b 1
-               | c == c2w 'c' = N2b 2
+               | c == c2w 'c' = N2b 1
+               | c == c2w 'a' = N2b 2
                | c == c2w 'g' = N2b 3
                | otherwise =  N2b 255
 

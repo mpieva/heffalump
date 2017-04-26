@@ -109,8 +109,10 @@ main_hetfa args = do
     smp  <- readSampleFa conf_imp_sample
 
     withFile conf_imp_output WriteMode $ \hdl ->
-        hPutBuilder hdl . encode refs . foldr ($) (Fix Done) $
-        zipWith diff2 (nrss_seqs refs) smp
+        hPutBuilder hdl . encode refs $ importHetfa (nrss_seqs refs) smp
+
+importHetfa :: [() -> NewRefSeq] -> [L.ByteString] -> Fix Lump
+importHetfa = (.) normalizeLump . (.) concatLumps . zipWith diff2
 
 
 opts_maf :: [ OptDescr ( (FilePath,FilePath) -> IO (FilePath,FilePath) ) ]
@@ -127,11 +129,8 @@ main_maf args = do
                                              (mk_opts "maf" "[maf-file...]" opts_maf) args
     ref <- readTwoBit conf_ref
     withFile conf_output WriteMode $ \hdl ->
-        hPutBuilder hdl . encode ref . catLumps =<<
+        hPutBuilder hdl . encode ref . concatLumps =<<
            mapM (\f -> parseMaf . decomp <$> L.readFile f) maffs
-  where
-    catLumps = foldr (\a b -> a $ Fix $ Break b) (Fix Done)
-
 
 
 opts_patch :: [ OptDescr (ConfImportGen -> IO ConfImportGen) ]
@@ -163,7 +162,7 @@ main_debmaf      _ = hPutStrLn stderr $ "Usage: debmaf [ref.fa] [smp.hetfa]"
 main_debhetfa :: [String] -> IO ()
 main_debhetfa [reff, smpf] = do ref <- nrss_seqs <$> readTwoBit reff
                                 smp <- readSampleFa smpf
-                                debugLump . ($ Fix Done) . head $ zipWith diff2 ref smp
+                                debugLump $ importHetfa ref smp
 main_debhetfa _ = hPutStrLn stderr $ "Usage: debhetfa [ref.fa] [smp.hetfa]"
 
 main_dumplump :: [String] -> IO ()
@@ -300,14 +299,14 @@ main_xcf ext reader key trans args = do
 make_hap :: Fix Lump -> Fix Lump
 make_hap = id
 
-patchFasta :: Handle -> Int64 -> [B.ByteString] -> [NewRefSeq] -> Fix Lump -> IO ()
+patchFasta :: Handle -> Int64 -> [B.ByteString] -> [() -> NewRefSeq] -> Fix Lump -> IO ()
 patchFasta hdl wd = p1
   where
-    p1 :: [B.ByteString] -> [NewRefSeq] -> Fix Lump -> IO ()
+    p1 :: [B.ByteString] -> [() -> NewRefSeq] -> Fix Lump -> IO ()
     p1 [    ]     _  _ = return ()
     p1      _ [    ] _ = return ()
     p1 (c:cs) (r:rs) p = do hPutStrLn hdl $ '>' : B.unpack c
-                            p2 (p1 cs rs) 0 (patch r p)
+                            p2 (p1 cs rs) 0 (patch (r ()) p)
 
     p2 :: (Fix Lump -> IO ()) -> Int64 -> Frag -> IO ()
     p2 k l f | l == wd = L.hPutStrLn hdl L.empty >> p2 k 0 f

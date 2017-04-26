@@ -36,6 +36,7 @@ module NewRef where
 
 import BasePrelude
 import Foreign.Storable                     ( peekByteOff )
+import System.Directory                     ( makeAbsolute )
 import System.IO.Posix.MMap                 ( unsafeMMapFile )
 import System.IO.Unsafe                     ( unsafeDupablePerformIO )
 
@@ -64,11 +65,11 @@ instance Show NewRefSeq where
 
 data NewRefSeqs = NewRefSeqs { nrss_chroms  :: [ B.ByteString ]
                              , nrss_lengths :: [ Int ]
-                             , nrss_seqs    :: [ NewRefSeq ]
+                             , nrss_seqs    :: [ () -> NewRefSeq ]
                              , nrss_path    :: !B.ByteString }
 
 readTwoBit :: FilePath -> IO NewRefSeqs
-readTwoBit fp = parseTwopBit fp <$> unsafeMMapFile fp
+readTwoBit fp = parseTwopBit <$> makeAbsolute fp <*> unsafeMMapFile fp
 
 parseTwopBit :: FilePath -> B.ByteString -> NewRefSeqs
 parseTwopBit fp0 raw = case (getW32 0, getW32 4) of (0x1A412743, 0) -> parseEachSeq 16 0
@@ -83,7 +84,7 @@ parseTwopBit fp0 raw = case (getW32 0, getW32 4) of (0x1A412743, 0) -> parseEach
     parseEachSeq  _  n | num_seq == n = NewRefSeqs [] [] [] (fromString fp0)
     parseEachSeq off n = case parseEachSeq (off+5+nmsize) (n+1) of
                             NewRefSeqs cs ls ss fp ->
-                                NewRefSeqs (name:cs) (dnasize:ls) (the_seq:ss) fp
+                                NewRefSeqs (name:cs) (dnasize:ls) ((\() -> the_seq):ss) fp
       where
         !nmsize  = fromIntegral $ B.index raw off
         !name    = B.take nmsize $ B.drop (1+off) raw
@@ -229,7 +230,7 @@ addRef :: NewRefSeqs -> [Variant] -> [Variant]
 addRef ref = go 0 (nrss_seqs ref)
   where
     go _ [     ] = const []
-    go c (r0:rs) = go1 r0 0
+    go c (r0:rs) = go1 (r0 ()) 0
       where
         go1 _ _ [    ] = []
         go1 r p (v:vs)

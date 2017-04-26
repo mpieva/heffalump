@@ -115,7 +115,7 @@ sample_piles :: StdGen -> Bool -> Pick -> NewRefSeqs -> [ Var0 ] -> [ Var1 ]
 sample_piles g0 deam pick cs0 = nextChrom g0 (nrss_seqs cs0) (Refseq 0)
   where
     nextChrom _ [    ]  _ = const []
-    nextChrom g (c:cs) rs = generic g cs c rs 0
+    nextChrom g (c:cs) rs = generic g cs (c ()) rs 0
 
     generic _  _ _ !_     _ [          ]     = []
     generic g cs c !rs !pos (var1:mvars)

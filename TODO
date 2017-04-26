@@ -1,11 +1,5 @@
-- restore the CpG filter in SillyStats.hs
-
-- Lump.encode/Lump.decode needs testing
-
-- Hetfa patch, import needs testing (looked weird, but could be due to the SGDP)
-
-- more flexible Hetfa import so genomes with missing chromosomes (Ust-Ishim)
-  work
+- more flexible Hetfa import so genomes with missing chromosomes
+  (Ust-Ishim?) work
 
 - fix the EMF importer (needs Lumps to stay in reasonable memory bounds)
 
@@ -33,6 +27,5 @@
 - Maybe allow Bamin with multiple sampling schemes in parallel?  The
   streaming package may come in handy.  It's only interesting for silly
   tests, though.
-
 
 
