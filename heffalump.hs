@@ -8,6 +8,7 @@ import System.IO
 import qualified Data.ByteString.Builder         as B
 import qualified Data.ByteString.Char8           as B
 import qualified Data.ByteString.Lazy.Char8      as L
+import qualified Data.IntMap                     as I
 import qualified Data.Vector                     as V
 import qualified Data.Vector.Unboxed             as U
 
@@ -109,10 +110,36 @@ main_hetfa args = do
     smp  <- readSampleFa conf_imp_sample
 
     withFile conf_imp_output WriteMode $ \hdl ->
-        hPutBuilder hdl . encode refs $ importHetfa (nrss_seqs refs) smp
+        hPutBuilder hdl $ importHetfa refs smp
 
-importHetfa :: [() -> NewRefSeq] -> [L.ByteString] -> Fix Lump
-importHetfa = (.) normalizeLump . (.) concatLumps . zipWith diff2
+-- Import Hetfa by diffing it against a reference.  We must read the
+-- Hetfa in the order of the file (Fasta doesn't have an index), but
+-- write it in the order of the reference.  So we parse a chromosome at
+-- a time, sort in memory and dump it at the end.
+--
+-- Chromosomes in input that don't have match in the reference are
+-- silently ignored.  Chromsomes that don't show up in the input are
+-- emitted as empty sequences.  If no sequence matches, we produce a
+-- warning message.
+importHetfa :: NewRefSeqs -> [( B.ByteString, L.ByteString )] -> B.Builder
+importHetfa ref smps
+    | I.null map1 = error "Found only unexpected sequences.  Is this the right reference?"
+    | otherwise   = encodeHeader ref <>
+                    foldMap (\i -> maybe noLump B.lazyByteString  $ I.lookup i map1)
+                            [0 .. length (nrss_chroms ref) - 1]
+  where
+    noLump = encodeLump $ Fix (Break (Fix Done))
+
+    map1 :: I.IntMap L.ByteString
+    map1 = foldl' enc1 I.empty smps
+
+    enc1 :: I.IntMap L.ByteString -> (B.ByteString, L.ByteString) -> I.IntMap L.ByteString
+    enc1 im (nm,sq) = maybe im (\i -> I.insert i (enc2 i sq ) im)
+                      $ findIndex (nm ==) (nrss_chroms ref)
+
+    enc2 :: Int -> L.ByteString -> L.ByteString
+    enc2 i sq = B.toLazyByteString . encodeLump . normalizeLump .
+                diff2 (nrss_seqs ref !! i) sq $ Fix (Break (Fix Done))
 
 
 opts_maf :: [ OptDescr ( (FilePath,FilePath) -> IO (FilePath,FilePath) ) ]
@@ -157,13 +184,23 @@ main_patch args = do
 
 main_debmaf :: [String] -> IO ()
 main_debmaf [maff] = debugLump . ($ Fix Done) . parseMaf . decomp =<< L.readFile maff
-main_debmaf      _ = hPutStrLn stderr $ "Usage: debmaf [ref.fa] [smp.hetfa]"
+main_debmaf      _ = hPutStrLn stderr $ "Usage: debmaf [ref.2bit] [smp.hetfa]"
 
+-- This is broken.  Have to do it differently, maybe match the
+-- incoming chromosomes against the reference, print the index, dump
+-- them one at a time.  Clone some code from importHetfa.
 main_debhetfa :: [String] -> IO ()
-main_debhetfa [reff, smpf] = do ref <- nrss_seqs <$> readTwoBit reff
-                                smp <- readSampleFa smpf
-                                debugLump $ importHetfa ref smp
-main_debhetfa _ = hPutStrLn stderr $ "Usage: debhetfa [ref.fa] [smp.hetfa]"
+main_debhetfa args = case args of
+    [reff, smpf] -> do ref <- readTwoBit reff
+                       readSampleFa smpf >>= mapM_ (enc1 ref)
+    _            -> hPutStrLn stderr $ "Usage: debhetfa [ref.2bit] [smp.hetfa]"
+  where
+    -- enc1 :: NewRefSeqs -> (B.ByteString, L.ByteString) -> L.ByteString
+    enc1 ref (nm,sq) = {- L.hPut stdout . B.toLazyByteString . encodeLump .-}
+                       debugLump . normalizeLump .
+                       ($ Fix (Break (Fix Done))) .
+                       maybe id (\i -> diff2 (nrss_seqs ref !! i) sq) $
+                       findIndex (nm ==) (nrss_chroms ref)
 
 main_dumplump :: [String] -> IO ()
 main_dumplump [ref,inf] = do rs <- readTwoBit ref

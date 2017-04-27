@@ -578,30 +578,33 @@ decodeMany mrs fs = do
 -- (1) able to find it again and (2) to make sure we got the right one
 -- when operating on a 'Lump'.
 encode :: NewRefSeqs -> Fix Lump -> Builder
-encode r s = byteString "HEF\3" <>
-             byteString (nrss_path r) <> word8 0 <>
-             int32LE (fromIntegral (hash (nrss_chroms r, nrss_lengths r))) <>
-             encodeLump s
+encode r s = encodeHeader r <> encodeLump s
+
+encodeHeader :: NewRefSeqs -> Builder
+encodeHeader r = byteString "HEF\3" <>
+                 byteString (nrss_path r) <> word8 0 <>
+                 int32LE (fromIntegral (hash (nrss_chroms r, nrss_lengths r)))
 
 -- | Diff between a reference and a sample in string format.  The sample
 -- is treated as diploid.
 gendiff :: (a -> RefSeqView a) -> a -> L.ByteString -> Fix Lump -> Fix Lump
-gendiff view r0 s0 done = generic r0 s0
+gendiff view = generic
   where
     isN        c = c == c2w 'N' || c == c2w 'n' || c == c2w '-'
     eq (N2b a) b = b == c2w 'Q' || b == c2w 'q' ||
                    "TCAG" `B.index` fromIntegral a == b ||
                    "tcag" `B.index` fromIntegral a == b
 
-    generic ref smp =
+    generic !ref !smp =
         case (L.uncons smp, view ref) of
-            (Nothing, _)    -> done
-            (_, NilRef)     -> done
-            (_, l :== ref') -> Fix $ Ns l $ generic ref' (L.drop (fromIntegral l) smp)
+            (Nothing, _)    -> id
+            (_, NilRef)     -> id
+            (_, l :== ref') -> Fix . Ns l . generic ref' (L.drop (fromIntegral l) smp)
             (Just (x, smp'), u :> ref')
-                | isN  x    -> Fix $ Ns       1 $ generic ref' smp'
-                | eq u x    -> Fix $ Eqs2     1 $ generic ref' smp'
-                | otherwise -> Fix $ encvar u x $ generic ref' smp'
+                | x .&. 0x7F <= 32             -> generic ref  smp'
+                | isN  x    -> Fix . Ns       1 . generic ref' smp'
+                | eq u x    -> Fix . Eqs2     1 . generic ref' smp'
+                | otherwise -> Fix . encvar u x . generic ref' smp'
 
     fromAmbCode :: Word8 -> Word8       -- two alleles in bits 0,1 and 2,3
     fromAmbCode c | c == c2w 't' =  0
@@ -615,6 +618,7 @@ gendiff view r0 s0 done = generic r0 s0
                   | c == c2w 'k' =  3
                   | c == c2w 'r' = 11
                   | c == c2w 'y' =  1
+                  | otherwise    = error $ "[fromAmbCode] What?! " ++ show c
 
     encvar :: Nuc2b -> Word8 -> Fix Lump -> Lump (Fix Lump)
     encvar r c = encTwoNucs r $ fromAmbCode (c .|. 32)

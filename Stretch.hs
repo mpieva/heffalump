@@ -182,10 +182,6 @@ encode_v0 Done      = mempty
 iupac_chars :: B.ByteString
 iupac_chars = "NACGTMRWSYKacgtN"
 
-{-# INLINE code #-}
-code :: Char -> NucCode
-code a = NucCode $ maybe 0 fromIntegral $ B.elemIndex a iupac_chars
-
 {-# INLINE tr #-}
 tr :: NucCode -> Char
 tr (NucCode w) = B.w2c . BB.unsafeIndex iupac_chars . fromIntegral $ w .&. 0xF
@@ -205,6 +201,8 @@ diff r0 s0 done = generic r0 s0
   where
     isN  c = c == 'N' || c == 'n' || c == '-'
     eq a b = b == 'Q' || b == 'q' || low (B.c2w a) == low (B.c2w b)
+
+    code a = NucCode $ maybe 0 fromIntegral $ B.elemIndex a iupac_chars
 
     -- Scan generic strings
     generic ref smp
