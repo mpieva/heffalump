@@ -160,19 +160,19 @@ importHetfa' ref smps = S.mwrap $ do -- ?!
     when (I.null map1) $ error
             "Found only unexpected sequences.  Is this the right reference?"
 
-    {-  encodeHeader ref <>
-                    foldMap (\i -> maybe noLump B.lazyByteString  $ I.lookup i map1)
-                            [0 .. length (nrss_chroms ref) - 1] -}
-    return $ pure r
+    return $ do S.fromLazy $ B.toLazyByteString $ encodeHeader ref
+                forM_ [0 .. length (nrss_chroms ref) - 1] $
+                        \i -> S.fromLazy $ I.findWithDefault noLump i map1
+                pure r
   where
-    noLump = encodeLump $ Fix (Break (Fix Done))
+    noLump = B.toLazyByteString $ encodeLump $ Fix (Break (Fix Done))
 
-    enc2 :: Monad m => Int -> S.ByteString m r -> m (B.ByteString,r)
+    enc2 :: Monad m => Int -> S.ByteString m r -> m (L.ByteString,r)
     enc2 i sq = -- B.toLazyByteString . encodeLump . normalizeLump $
                 undefined $
-                (diff2' (nrss_seqs ref !! i) sq >>=
-                yields . Break)
+                diff2' (nrss_seqs ref !! i) sq >>= yields . Break
 
+    fold_1 :: Monad m => I.IntMap L.ByteString -> Stream (FastaSeq m) m r -> m (I.IntMap L.ByteString, r)
     fold_1 !acc s = inspect s >>= \case
         Left r -> return $ (acc,r)
         Right (FastaSeq nm sq) -> case findIndex (nm ==) (nrss_chroms ref) of

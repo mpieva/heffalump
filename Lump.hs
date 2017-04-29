@@ -158,6 +158,14 @@ normalizeLump = ana (go . unFix)
 
     go lump = lump
 
+normalizeLump' :: Monad m => Stream Lump m r -> Stream Lump m r
+normalizeLump' = undefined -- XXX  How do we do this?
+
+-- Not sure about this type.  Maybe reimplement and fill some sort of
+-- buffer?  Make a strict byte string?  We rarely stream this stuff
+-- anymore.
+encodeLump' :: Monad m => Stream Lump m r -> Builder
+encodeLump' = undefined -- XXX  How do we do this?
 
 encodeLump :: Fix Lump -> Builder
 encodeLump = cata encode1
