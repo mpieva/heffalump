@@ -36,7 +36,11 @@ executable heffalump
                        math-functions,
                        primitive,
                        random,
+                       resourcet,
                        snappy,
+                       streaming >= 0.1.4 && < 2.0,
+                       streaming-bytestring >= 0.1.4 && < 2.0,
+                       streaming-utils >= 0.1.4 && < 2.0,
                        unordered-containers,
                        vector,
                        zlib ==0.6.*

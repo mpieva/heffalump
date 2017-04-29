@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 import BasePrelude
 import Data.ByteString.Builder          ( hPutBuilder )
 import Data.Fix
@@ -11,6 +12,9 @@ import qualified Data.ByteString.Lazy.Char8      as L
 import qualified Data.IntMap                     as I
 import qualified Data.Vector                     as V
 import qualified Data.Vector.Unboxed             as U
+import Streaming
+import qualified Data.ByteString.Streaming as S
+import Control.Monad.Trans.Resource
 
 import Bamin
 import Bcf
@@ -112,6 +116,14 @@ main_hetfa args = do
     withFile conf_imp_output WriteMode $ \hdl ->
         hPutBuilder hdl $ importHetfa refs smp
 
+main_hetfa' :: [String] -> IO ()
+main_hetfa' args = do
+    ( _, ConfImportGen{..} ) <- parseOpts False defaultImportConf (mk_opts "hetfa" [] opts_hetfa) args
+    refs <- readTwoBit conf_imp_reference
+
+    runResourceT $ S.writeFile conf_imp_output $
+            importHetfa' refs $ readSampleFa' conf_imp_sample
+
 -- Import Hetfa by diffing it against a reference.  We must read the
 -- Hetfa in the order of the file (Fasta doesn't have an index), but
 -- write it in the order of the reference.  So we parse a chromosome at
@@ -134,12 +146,40 @@ importHetfa ref smps
     map1 = foldl' enc1 I.empty smps
 
     enc1 :: I.IntMap L.ByteString -> (B.ByteString, L.ByteString) -> I.IntMap L.ByteString
-    enc1 im (nm,sq) = maybe im (\i -> I.insert i (enc2 i sq ) im)
+    enc1 im (nm,sq) = maybe im (\i -> let !l = enc2 i sq in trace (show (i, L.length l)) (I.insert i l im))
                       $ findIndex (nm ==) (nrss_chroms ref)
 
     enc2 :: Int -> L.ByteString -> L.ByteString
     enc2 i sq = B.toLazyByteString . encodeLump . normalizeLump .
                 diff2 (nrss_seqs ref !! i) sq $ Fix (Break (Fix Done))
+
+importHetfa' :: Monad m => NewRefSeqs -> Stream (FastaSeq m) m r -> S.ByteString m r
+importHetfa' ref smps = S.mwrap $ do -- ?!
+    (map1,r) <- fold_1 I.empty smps
+
+    when (I.null map1) $ error
+            "Found only unexpected sequences.  Is this the right reference?"
+
+    {-  encodeHeader ref <>
+                    foldMap (\i -> maybe noLump B.lazyByteString  $ I.lookup i map1)
+                            [0 .. length (nrss_chroms ref) - 1] -}
+    return $ pure r
+  where
+    noLump = encodeLump $ Fix (Break (Fix Done))
+
+    enc2 :: Monad m => Int -> S.ByteString m r -> m (B.ByteString,r)
+    enc2 i sq = -- B.toLazyByteString . encodeLump . normalizeLump $
+                undefined $
+                (diff2' (nrss_seqs ref !! i) sq >>=
+                yields . Break)
+
+    fold_1 !acc s = inspect s >>= \case
+        Left r -> return $ (acc,r)
+        Right (FastaSeq nm sq) -> case findIndex (nm ==) (nrss_chroms ref) of
+            Nothing -> S.effects sq >>= fold_1 acc
+            Just  i -> do (!lump, s') <- enc2 i sq
+                          fold_1 (I.insert i lump acc) s'
+
 
 
 opts_maf :: [ OptDescr ( (FilePath,FilePath) -> IO (FilePath,FilePath) ) ]

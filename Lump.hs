@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedLists #-}
+{-# LANGUAGE OverloadedLists, LambdaCase #-}
 module Lump where
 
 import BasePrelude
@@ -6,12 +6,14 @@ import Data.ByteString.Builder
 import Data.ByteString.Internal             ( c2w )
 import Data.Fix
 import Data.Hashable ( hash )
+import Streaming hiding ( Of(..) )
 import System.Directory ( doesFileExist )
 
 import qualified Data.ByteString            as B
 import qualified Data.ByteString.Char8      as BC
 import qualified Data.ByteString.Lazy       as L
 import qualified Data.ByteString.Lazy.Char8 as C
+import qualified Data.ByteString.Streaming  as S
 import qualified Data.Vector                as V
 import qualified Data.Vector.Unboxed        as U
 
@@ -604,29 +606,50 @@ gendiff view = generic
                 | x .&. 0x7F <= 32             -> generic ref  smp'
                 | isN  x    -> Fix . Ns       1 . generic ref' smp'
                 | eq u x    -> Fix . Eqs2     1 . generic ref' smp'
-                | otherwise -> Fix . encvar u x . generic ref' smp'
+                | otherwise -> Fix . encVar u x . generic ref' smp'
 
-    fromAmbCode :: Word8 -> Word8       -- two alleles in bits 0,1 and 2,3
-    fromAmbCode c | c == c2w 't' =  0
-                  | c == c2w 'c' =  5
-                  | c == c2w 'a' = 10
-                  | c == c2w 'g' = 15
 
-                  | c == c2w 's' =  7
-                  | c == c2w 'w' =  2
-                  | c == c2w 'm' =  6
-                  | c == c2w 'k' =  3
-                  | c == c2w 'r' = 11
-                  | c == c2w 'y' =  1
-                  | otherwise    = error $ "[fromAmbCode] What?! " ++ show c
+gendiff' :: Monad m => (a -> RefSeqView a) -> a -> S.ByteString m r -> Stream Lump m r
+gendiff' view = generic
+  where
+    isN        c = c == c2w 'N' || c == c2w 'n' || c == c2w '-'
+    eq (N2b a) b = b == c2w 'Q' || b == c2w 'q' ||
+                   "TCAG" `B.index` fromIntegral a == b ||
+                   "tcag" `B.index` fromIntegral a == b
 
-    encvar :: Nuc2b -> Word8 -> Fix Lump -> Lump (Fix Lump)
-    encvar r c = encTwoNucs r $ fromAmbCode (c .|. 32)
+    generic !ref !smp = effect $ case view ref of
+            NilRef     -> pure <$> S.effects smp
+            l :== ref' -> return $ yields (Ns l (S.drop (fromIntegral l) smp)) >>= generic ref'
+            u :> ref'  -> S.nextByte smp >>= \case
+                Left r         -> return $ pure r
+                Right (x, smp')
+                    | x .&. 0x7F <= 32             -> return $ generic ref  smp'
+                    | isN  x    -> return $ yields (Ns       1 smp') >>= generic ref'
+                    | eq u x    -> return $ yields (Eqs2     1 smp') >>= generic ref'
+                    | otherwise -> return $ yields (encVar u x smp') >>= generic ref'
 
-encTwoNucs :: Nuc2b -> Word8 ->  Fix Lump -> Lump (Fix Lump)
+
+fromAmbCode :: Word8 -> Word8       -- two alleles in bits 0,1 and 2,3
+fromAmbCode c | c == c2w 't' =  0
+              | c == c2w 'c' =  5
+              | c == c2w 'a' = 10
+              | c == c2w 'g' = 15
+
+              | c == c2w 's' =  7
+              | c == c2w 'w' =  2
+              | c == c2w 'm' =  6
+              | c == c2w 'k' =  3
+              | c == c2w 'r' = 11
+              | c == c2w 'y' =  1
+              | otherwise    = error $ "[fromAmbCode] What?! " ++ show c
+
+encVar :: Nuc2b -> Word8 -> a -> Lump a
+encVar r c = encTwoNucs r $ fromAmbCode (c .|. 32)
+
+encTwoNucs :: Nuc2b -> Word8 -> a -> Lump a
 encTwoNucs (N2b r) ns = encTwoVars $ xor ns (r .|. shiftL r 2)
 
-encTwoVars :: Word8 -> Fix Lump -> Lump (Fix Lump)
+encTwoVars :: Word8 -> a -> Lump a
 encTwoVars vs = fromMaybe (Ns 1) $ vv V.!? fromIntegral vs
   where
     !vv = [ Eqs2 1,    RefTrans,    RefCompl,    RefTCompl
@@ -642,6 +665,9 @@ encTwoVars vs = fromMaybe (Ns 1) $ vv V.!? fromIntegral vs
 
 diff2 :: (() -> NewRefSeq) -> L.ByteString -> Fix Lump -> Fix Lump
 diff2 = gendiff viewNRS . ($ ())
+
+diff2' :: Monad m => (() -> NewRefSeq) -> S.ByteString m r -> Stream Lump m r
+diff2' = gendiff' viewNRS . ($ ())
 
 diff :: L.ByteString -> L.ByteString -> Fix Lump -> Fix Lump
 diff = gendiff viewLBS

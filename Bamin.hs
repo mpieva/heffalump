@@ -145,17 +145,17 @@ importPile = normalizeLump . generic (Refseq 0) 0
         -- gap, creates Ns
         | v_loc var1 >= pos =
             Fix $ Ns (fromIntegral $ v_loc var1 - pos) $
-            Fix $ encvar (v_call var1) $
+            Fix $ enc_var (v_call var1) $
             generic rs (v_loc var1 + 1) mvars
 
         | otherwise = error $ "Got variant position " ++ show (v_refseq var1, v_loc var1)
                            ++ " when expecting " ++ show pos ++ " or higher."
 
-    encvar (V2b 0) = Eqs1 1     -- ref equals alt, could both be N
-    encvar (V2b 1) = Trans1     -- transition
-    encvar (V2b 2) = Compl1     -- complement
-    encvar (V2b 3) = TCompl1    -- trans-complement
-    encvar (V2b _) = Ns 1       -- ref is N, or alt is N
+    enc_var (V2b 0) = Eqs1 1     -- ref equals alt, could both be N
+    enc_var (V2b 1) = Trans1     -- transition
+    enc_var (V2b 2) = Compl1     -- complement
+    enc_var (V2b 3) = TCompl1    -- trans-complement
+    enc_var (V2b _) = Ns 1       -- ref is N, or alt is N
 
 
 
