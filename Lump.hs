@@ -5,9 +5,9 @@ import BasePrelude
 import Data.ByteString.Builder
 import Data.ByteString.Internal             ( c2w )
 import Data.Fix
-import Data.Hashable ( hash )
-import Streaming hiding ( Of(..) )
-import System.Directory ( doesFileExist )
+import Data.Hashable                        ( hash )
+import Streaming
+import System.Directory                     ( doesFileExist )
 
 import qualified Data.ByteString            as B
 import qualified Data.ByteString.Char8      as BC
@@ -159,24 +159,109 @@ normalizeLump = ana (go . unFix)
     go lump = lump
 
 normalizeLump' :: Monad m => Stream Lump m r -> Stream Lump m r
-normalizeLump' = undefined -- XXX  How do we do this?
+normalizeLump' = unfold (inspect >=> either (return . Left) go)
+  where
+    wrapE = either pure wrap
 
--- Not sure about this type.  Maybe reimplement and fill some sort of
--- buffer?  Make a strict byte string?  We rarely stream this stuff
--- anymore.
-encodeLump' :: Monad m => Stream Lump m r -> Builder
-encodeLump' = undefined -- XXX  How do we do this?
+    go (Ns 0 l) = inspect l
+    go (Ns n l) = inspect l >>= \case
+        Right (Ns n' l') -> go $ Ns (n+n') l'
+        l'               -> return $ Right (Ns n (wrapE l'))
+
+    go (Eqs1 0 l) = inspect l
+    go (Eqs1 n l) = inspect l >>= \case
+        Right (Eqs1 n' l') -> go $ Eqs1 (n+n') l'
+        l'                 -> return $ Right (Eqs1 n (wrapE l'))
+
+    go (Eqs2 0 l) = inspect l
+    go (Eqs2 n l) = inspect l >>= \case
+        Right (Eqs2 n' l') -> go $ Eqs2 (n+n') l'
+        l'                 -> return $ Right (Eqs2 n (wrapE l'))
+
+    go (Del1 0 l) = inspect l
+    go (Del1 n l) = inspect l >>= \case
+        Right (Del1 n' l') -> go $ Del1 (n+n') l'
+        l'                 -> return $ Right (Del1 n (wrapE l'))
+
+    go (Del2 0 l) = inspect l
+    go (Del2 n l) = inspect l >>= \case
+        Right (Del2 n' l') -> go $ Del2 (n+n') l'
+        l'                 -> return $ Right (Del2 n (wrapE l'))
+
+    go (DelH 0 l) = inspect l
+    go (DelH n l) = inspect l >>= \case
+        Right (DelH n' l') -> go $ DelH (n+n') l'
+        l'                 -> return $ Right (DelH n (wrapE l'))
+
+    go (Ins1 s l) | U.null s = inspect l
+    go (Ins1 s l) = inspect l >>= \case
+        Right (Ins1 s' l') -> go $ Ins1 (s<>s') l'
+        l'                 -> return $ Right (Ins1 s (wrapE l'))
+
+    go (Ins2 s l) | U.null s = inspect l
+    go (Ins2 s l) = inspect l >>= \case
+        Right (Ins2 s' l') -> go $ Ins2 (s<>s') l'
+        l'                 -> return $ Right (Ins2 s (wrapE l'))
+
+    go (InsH s l) | U.null s = inspect l
+    go (InsH s l) = inspect l >>= \case
+        Right (InsH s' l') -> go $ InsH (s<>s') l'
+        l'                 -> return $ Right (InsH s (wrapE l'))
+
+    go lump = return $ Right lump
+
+
+-- This is not useful, yet.  The stream of builders can be turned into
+-- one builder, but the value at the end is lost, and so are the
+-- benefits of streaming.
+--
+-- It's probably best to turn this into a fold.  We could fill a buffer,
+-- 'yields' it when full, thereby producing an 'S.ByteString'.  If it's
+-- to be retained in memory, that's just an application of 'S.toLazy'
+-- away.
+--
+encodeLump' :: Monad m => Stream Lump m r -> Stream (Of Builder) m r
+encodeLump' = maps encode1
+  where
+    encode1 (Ns n b)                           = stretchOf 0x40 n :> b
+    encode1 (Eqs1 n b)                         = stretchOf 0x80 n :> b
+    encode1 (Trans1 b)                         = word8 0x01 :> b
+    encode1 (Compl1 b)                         = word8 0x02 :> b
+    encode1 (TCompl1 b)                        = word8 0x03 :> b
+
+    encode1 (Eqs2 n b)                         = stretchOf 0xC0 n :> b
+    encode1 (RefTrans b)                       = word8 0x05 :> b
+    encode1 (Trans2 b)                         = word8 0x06 :> b
+    encode1 (RefCompl b)                       = word8 0x07 :> b
+    encode1 (TransCompl b)                     = word8 0x08 :> b
+    encode1 (Compl2 b)                         = word8 0x09 :> b
+    encode1 (RefTCompl b)                      = word8 0x0A :> b
+    encode1 (TransTCompl b)                    = word8 0x0B :> b
+    encode1 (ComplTCompl b)                    = word8 0x0C :> b
+    encode1 (TCompl2 b)                        = word8 0x0D :> b
+
+    encode1 (Del1 n b)                         = indelOf 0x10 n :> b
+    encode1 (DelH n b)                         = indelOf 0x20 n :> b
+    encode1 (Del2 n b)                         = indelOf 0x30 n :> b
+
+    encode1 (Ins1 s b)                         = (indelOf 0x18 (U.length s) <> seqOf s) :> b
+    encode1 (InsH s b)                         = (indelOf 0x28 (U.length s) <> seqOf s) :> b
+    encode1 (Ins2 s b)                         = (indelOf 0x38 (U.length s) <> seqOf s) :> b
+
+    encode1 (Break b)                          = word8 0x00 :> b
+    -- encode1  Done                              = mempty
+
 
 encodeLump :: Fix Lump -> Builder
 encodeLump = cata encode1
   where
-    encode1 (Ns n b)                           = stretch_of 0x40 n <> b
-    encode1 (Eqs1 n b)                         = stretch_of 0x80 n <> b
+    encode1 (Ns n b)                           = stretchOf 0x40 n <> b
+    encode1 (Eqs1 n b)                         = stretchOf 0x80 n <> b
     encode1 (Trans1 b)                         = word8 0x01 <> b
     encode1 (Compl1 b)                         = word8 0x02 <> b
     encode1 (TCompl1 b)                        = word8 0x03 <> b
 
-    encode1 (Eqs2 n b)                         = stretch_of 0xC0 n <> b
+    encode1 (Eqs2 n b)                         = stretchOf 0xC0 n <> b
     encode1 (RefTrans b)                       = word8 0x05 <> b
     encode1 (Trans2 b)                         = word8 0x06 <> b
     encode1 (RefCompl b)                       = word8 0x07 <> b
@@ -187,48 +272,51 @@ encodeLump = cata encode1
     encode1 (ComplTCompl b)                    = word8 0x0C <> b
     encode1 (TCompl2 b)                        = word8 0x0D <> b
 
-    encode1 (Del1 n b)                         = indel_of 0x10 n <> b
-    encode1 (DelH n b)                         = indel_of 0x20 n <> b
-    encode1 (Del2 n b)                         = indel_of 0x30 n <> b
+    encode1 (Del1 n b)                         = indelOf 0x10 n <> b
+    encode1 (DelH n b)                         = indelOf 0x20 n <> b
+    encode1 (Del2 n b)                         = indelOf 0x30 n <> b
 
-    encode1 (Ins1 s b)                         = indel_of 0x18 (U.length s) <> seq_of s <> b
-    encode1 (InsH s b)                         = indel_of 0x28 (U.length s) <> seq_of s <> b
-    encode1 (Ins2 s b)                         = indel_of 0x38 (U.length s) <> seq_of s <> b
+    encode1 (Ins1 s b)                         = indelOf 0x18 (U.length s) <> seqOf s <> b
+    encode1 (InsH s b)                         = indelOf 0x28 (U.length s) <> seqOf s <> b
+    encode1 (Ins2 s b)                         = indelOf 0x38 (U.length s) <> seqOf s <> b
 
     encode1 (Break b)                          = word8 0x00 <> b
     encode1  Done                              = mempty
 
-    stretch_of k n
-        | n < 0x3C                             = word8 (k .|. fromIntegral n)
-        | n < 0x100                            = word8 (k .|. 0x3F) <> word8 (fromIntegral  n)
-        | n < 0x10000                          = word8 (k .|. 0x3E) <> word8 (fromIntegral (n             .&. 0xff))
-                                                                    <> word8 (fromIntegral (n `shiftR`  8 .&. 0xff))
-        | n < 0x1000000                        = word8 (k .|. 0x3D) <> word8 (fromIntegral (n             .&. 0xff))
-                                                                    <> word8 (fromIntegral (n `shiftR`  8 .&. 0xff))
-                                                                    <> word8 (fromIntegral (n `shiftR` 16 .&. 0xff))
-        | otherwise                            = word8 (k .|. 0x3C) <> word8 (fromIntegral (n             .&. 0xff))
-                                                                    <> word8 (fromIntegral (n `shiftR`  8 .&. 0xff))
-                                                                    <> word8 (fromIntegral (n `shiftR` 16 .&. 0xff))
-                                                                    <> word8 (fromIntegral (n `shiftR` 24 .&. 0xff))
-    indel_of k n
-        | n == 0        = error "empty indel"
-        | n < 8         = word8 (k .|. fromIntegral n)
-        | n < 0x100     = word8 k <> word8 (fromIntegral n)
-        | otherwise     = error $ "long indel: " ++ show n
+stretchOf :: Word8 -> Int -> Builder
+stretchOf k n
+    | n < 0x3C                             = word8 (k .|. fromIntegral n)
+    | n < 0x100                            = word8 (k .|. 0x3F) <> word8 (fromIntegral  n)
+    | n < 0x10000                          = word8 (k .|. 0x3E) <> word8 (fromIntegral (n             .&. 0xff))
+                                                                <> word8 (fromIntegral (n `shiftR`  8 .&. 0xff))
+    | n < 0x1000000                        = word8 (k .|. 0x3D) <> word8 (fromIntegral (n             .&. 0xff))
+                                                                <> word8 (fromIntegral (n `shiftR`  8 .&. 0xff))
+                                                                <> word8 (fromIntegral (n `shiftR` 16 .&. 0xff))
+    | otherwise                            = word8 (k .|. 0x3C) <> word8 (fromIntegral (n             .&. 0xff))
+                                                                <> word8 (fromIntegral (n `shiftR`  8 .&. 0xff))
+                                                                <> word8 (fromIntegral (n `shiftR` 16 .&. 0xff))
+                                                                <> word8 (fromIntegral (n `shiftR` 24 .&. 0xff))
+indelOf :: Word8 -> Int -> Builder
+indelOf k n
+    | n == 0        = error "empty indel"
+    | n < 8         = word8 (k .|. fromIntegral n)
+    | n < 0x100     = word8 k <> word8 (fromIntegral n)
+    | otherwise     = error $ "long indel: " ++ show n
 
-    seq_of s
-        | U.length s == 0 = mempty
-        | U.length s == 1 = word8 (U.unsafeIndex s 0)
-        | U.length s == 2 = word8 (U.unsafeIndex s 0 .|.
-                                   U.unsafeIndex s 1 `shiftL` 2)
-        | U.length s == 3 = word8 (U.unsafeIndex s 0 .|.
-                                   U.unsafeIndex s 1 `shiftL` 2 .|.
-                                   U.unsafeIndex s 2 `shiftL` 4)
-        | otherwise       = word8 (U.unsafeIndex s 0 .|.
-                                   U.unsafeIndex s 1 `shiftL` 2 .|.
-                                   U.unsafeIndex s 2 `shiftL` 4 .|.
-                                   U.unsafeIndex s 3 `shiftL` 6)
-                            <> seq_of (U.unsafeDrop 4 s)
+seqOf :: U.Vector Word8 -> Builder
+seqOf s
+    | U.length s == 0 = mempty
+    | U.length s == 1 = word8 (U.unsafeIndex s 0)
+    | U.length s == 2 = word8 (U.unsafeIndex s 0 .|.
+                               U.unsafeIndex s 1 `shiftL` 2)
+    | U.length s == 3 = word8 (U.unsafeIndex s 0 .|.
+                               U.unsafeIndex s 1 `shiftL` 2 .|.
+                               U.unsafeIndex s 2 `shiftL` 4)
+    | otherwise       = word8 (U.unsafeIndex s 0 .|.
+                               U.unsafeIndex s 1 `shiftL` 2 .|.
+                               U.unsafeIndex s 2 `shiftL` 4 .|.
+                               U.unsafeIndex s 3 `shiftL` 6)
+                        <> seqOf (U.unsafeDrop 4 s)
 
 
 decodeLump :: L.ByteString -> Fix Lump
@@ -610,7 +698,7 @@ gendiff view = generic
             (Nothing, _)    -> id
             (_, NilRef)     -> id
             (_, l :== ref') -> Fix . Ns l . generic ref' (L.drop (fromIntegral l) smp)
-            (Just (x, smp'), u :> ref')
+            (Just (x, smp'), u :^ ref')
                 | x .&. 0x7F <= 32             -> generic ref  smp'
                 | isN  x    -> Fix . Ns       1 . generic ref' smp'
                 | eq u x    -> Fix . Eqs2     1 . generic ref' smp'
@@ -628,7 +716,7 @@ gendiff' view = generic
     generic !ref !smp = effect $ case view ref of
             NilRef     -> pure <$> S.effects smp
             l :== ref' -> return $ yields (Ns l (S.drop (fromIntegral l) smp)) >>= generic ref'
-            u :> ref'  -> S.nextByte smp >>= \case
+            u :^  ref' -> S.nextByte smp >>= \case
                 Left r         -> return $ pure r
                 Right (x, smp')
                     | x .&. 0x7F <= 32             -> return $ generic ref  smp'
@@ -680,7 +768,7 @@ diff2' = gendiff' viewNRS . ($ ())
 diff :: L.ByteString -> L.ByteString -> Fix Lump -> Fix Lump
 diff = gendiff viewLBS
   where
-    viewLBS = maybe NilRef (\(a,b) -> fromCode (a .|. 32) :> b) . L.uncons
+    viewLBS = maybe NilRef (\(a,b) -> fromCode (a .|. 32) :^ b) . L.uncons
 
     fromCode c | c == c2w 't' = N2b 0
                | c == c2w 'c' = N2b 1

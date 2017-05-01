@@ -2,6 +2,7 @@
 import BasePrelude
 import Data.ByteString.Builder          ( hPutBuilder )
 import Data.Fix
+import Streaming
 import System.Console.GetOpt
 import System.FilePath                  ( takeBaseName )
 import System.IO
@@ -12,9 +13,7 @@ import qualified Data.ByteString.Lazy.Char8      as L
 import qualified Data.IntMap                     as I
 import qualified Data.Vector                     as V
 import qualified Data.Vector.Unboxed             as U
-import Streaming
 import qualified Data.ByteString.Streaming as S
-import Control.Monad.Trans.Resource
 
 import Bamin
 import Bcf
@@ -48,6 +47,7 @@ main = do
         [ z "eigenstrat"  main_eigenstrat         "Merge heffalumps into Eigenstrat format"
         , z "vcfexport"   main_vcfout             "Merge heffalumps into VCF"
         , z "hetfa"       main_hetfa              "Import hetfa file"
+        , z "het2fa"      main_hetfa'             "Import hetfa file (new)"
         , z "bamin"       main_bam                "Import BAM file"
         , z "maf"         main_maf                "Import two-species maf"
         , z "emf"         main_emf                "Import one genome from emf (Compara)"
@@ -167,9 +167,9 @@ importHetfa' ref smps = S.mwrap $ do -- ?!
   where
     noLump = B.toLazyByteString $ encodeLump $ Fix (Break (Fix Done))
 
-    enc2 :: Monad m => Int -> S.ByteString m r -> m (L.ByteString,r)
-    enc2 i sq = -- B.toLazyByteString . encodeLump . normalizeLump $
-                undefined $
+    enc2 :: Int -> S.ByteString IO r -> L.ByteString
+    enc2 i sq = B.toLazyByteString .
+                S.concatBuilders . encodeLump' . normalizeLump' $
                 diff2' (nrss_seqs ref !! i) sq >>= yields . Break
 
     fold_1 :: Monad m => I.IntMap L.ByteString -> Stream (FastaSeq m) m r -> m (I.IntMap L.ByteString, r)
@@ -179,7 +179,6 @@ importHetfa' ref smps = S.mwrap $ do -- ?!
             Nothing -> S.effects sq >>= fold_1 acc
             Just  i -> do (!lump, s') <- enc2 i sq
                           fold_1 (I.insert i lump acc) s'
-
 
 
 opts_maf :: [ OptDescr ( (FilePath,FilePath) -> IO (FilePath,FilePath) ) ]

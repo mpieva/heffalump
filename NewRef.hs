@@ -69,11 +69,11 @@ data NewRefSeqs = NewRefSeqs { nrss_chroms  :: [ B.ByteString ]
                              , nrss_path    :: !B.ByteString }
 
 readTwoBit :: FilePath -> IO NewRefSeqs
-readTwoBit fp = parseTwopBit <$> makeAbsolute fp <*> unsafeMMapFile fp
+readTwoBit fp = parseTwoBit <$> makeAbsolute fp <*> unsafeMMapFile fp
 
-parseTwopBit :: FilePath -> B.ByteString -> NewRefSeqs
-parseTwopBit fp0 raw = case (getW32 0, getW32 4) of (0x1A412743, 0) -> parseEachSeq 16 0
-                                                    _ -> error "This does not look like a 2bit file."
+parseTwoBit :: FilePath -> B.ByteString -> NewRefSeqs
+parseTwoBit fp0 raw = case (getW32 0, getW32 4) of (0x1A412743, 0) -> parseEachSeq 16 0
+                                                   _ -> error "This does not look like a 2bit file."
   where
     getW32 :: Int -> Word32
     getW32 o | o + 4 >= B.length raw = error $ "out of bounds access: " ++ show (o, B.length raw)
@@ -207,12 +207,12 @@ unconsNRS (SomeSeq raw off len s) = Just (c, s')
     c  = N2b . fromIntegral $ (B.index raw (off `shiftR` 2) `shiftR` (6 - 2 * (off .&. 3))) .&. 3
     s' = if len == 1 then s else SomeSeq raw (off+1) (len-1) s
 
-data RefSeqView a = !Int :== a | !Nuc2b :>a | NilRef
+data RefSeqView a = !Int :== a | !Nuc2b :^ a | NilRef
 
 viewNRS :: NewRefSeq -> RefSeqView NewRefSeq
-viewNRS NewRefEnd = NilRef
-viewNRS (ManyNs l s) = l :== s
-viewNRS (SomeSeq raw off len s) = c :> s'
+viewNRS  NewRefEnd              = NilRef
+viewNRS (ManyNs            l s) = l :== s
+viewNRS (SomeSeq raw off len s) = c :^  s'
   where
     c  = N2b . fromIntegral $ (B.index raw (off `shiftR` 2) `shiftR` (6 - 2 * (off .&. 3))) .&. 3
     s' = if len == 1 then s else SomeSeq raw (off+1) (len-1) s
