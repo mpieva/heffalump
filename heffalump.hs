@@ -153,7 +153,7 @@ importHetfa ref smps
     enc2 i sq = B.toLazyByteString . encodeLump . normalizeLump .
                 diff2 (nrss_seqs ref !! i) sq $ Fix (Break (Fix Done))
 
-importHetfa' :: Monad m => NewRefSeqs -> Stream (FastaSeq m) m r -> S.ByteString m r
+importHetfa' :: MonadIO m => NewRefSeqs -> Stream (FastaSeq m) m r -> S.ByteString m r
 importHetfa' ref smps = S.mwrap $ do -- ?!
     (map1,r) <- fold_1 I.empty smps
 
@@ -167,17 +167,17 @@ importHetfa' ref smps = S.mwrap $ do -- ?!
   where
     noLump = B.toLazyByteString $ encodeLump $ Fix (Break (Fix Done))
 
-    enc2 :: Int -> S.ByteString IO r -> L.ByteString
-    enc2 i sq = B.toLazyByteString .
-                S.concatBuilders . encodeLump' . normalizeLump' $
+    enc2 :: MonadIO m => Int -> S.ByteString m r -> m (Of L.ByteString r)
+    enc2 i sq = S.toLazy . encodeLump' . normalizeLump' $
                 diff2' (nrss_seqs ref !! i) sq >>= yields . Break
 
-    fold_1 :: Monad m => I.IntMap L.ByteString -> Stream (FastaSeq m) m r -> m (I.IntMap L.ByteString, r)
+    fold_1 :: MonadIO m => I.IntMap L.ByteString -> Stream (FastaSeq m) m r -> m (I.IntMap L.ByteString, r)
     fold_1 !acc s = inspect s >>= \case
         Left r -> return $ (acc,r)
         Right (FastaSeq nm sq) -> case findIndex (nm ==) (nrss_chroms ref) of
             Nothing -> S.effects sq >>= fold_1 acc
-            Just  i -> do (!lump, s') <- enc2 i sq
+            Just  i -> do lump :> s' <- enc2 i sq
+                          liftIO $ hPrint stderr (i, L.length lump)
                           fold_1 (I.insert i lump acc) s'
 
 

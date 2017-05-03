@@ -41,6 +41,7 @@ executable heffalump
                        streaming >= 0.1.4 && < 2.0,
                        streaming-bytestring >= 0.1.4 && < 2.0,
                        streaming-utils >= 0.1.4 && < 2.0,
+                       transformers,
                        unordered-containers,
                        vector,
                        zlib ==0.6.*

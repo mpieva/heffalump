@@ -6,14 +6,20 @@ import Data.ByteString.Builder
 import Data.ByteString.Internal             ( c2w )
 import Data.Fix
 import Data.Hashable                        ( hash )
+import Foreign.C.Types                      ( CChar )
+import Foreign.Marshal.Alloc                ( mallocBytes )
+import Foreign.Ptr                          ( Ptr, castPtr )
+import Foreign.Storable                     ( pokeElemOff )
 import Streaming
 import System.Directory                     ( doesFileExist )
+import System.IO
 
 import qualified Data.ByteString            as B
 import qualified Data.ByteString.Char8      as BC
 import qualified Data.ByteString.Lazy       as L
 import qualified Data.ByteString.Lazy.Char8 as C
 import qualified Data.ByteString.Streaming  as S
+import qualified Data.ByteString.Unsafe     as B
 import qualified Data.Vector                as V
 import qualified Data.Vector.Unboxed        as U
 
@@ -210,6 +216,7 @@ normalizeLump' = unfold (inspect >=> either (return . Left) go)
 
     go lump = return $ Right lump
 
+data LBuf = LBuf !(Ptr CChar) !Int !Int
 
 -- This is not useful, yet.  The stream of builders can be turned into
 -- one builder, but the value at the end is lost, and so are the
@@ -219,38 +226,96 @@ normalizeLump' = unfold (inspect >=> either (return . Left) go)
 -- 'yields' it when full, thereby producing an 'S.ByteString'.  If it's
 -- to be retained in memory, that's just an application of 'S.toLazy'
 -- away.
---
-encodeLump' :: Monad m => Stream Lump m r -> Stream (Of Builder) m r
-encodeLump' = maps encode1
+
+encodeLump' :: MonadIO m => Stream Lump m r -> S.ByteString m r
+encodeLump' = go
   where
-    encode1 (Ns n b)                           = stretchOf 0x40 n :> b
-    encode1 (Eqs1 n b)                         = stretchOf 0x80 n :> b
-    encode1 (Trans1 b)                         = word8 0x01 :> b
-    encode1 (Compl1 b)                         = word8 0x02 :> b
-    encode1 (TCompl1 b)                        = word8 0x03 :> b
+    go s = S.mwrap $ do p <- liftIO $ mallocBytes 0x8000
+                        (o,r) <- fill p 0x8000 s 0
+                        c <- liftIO $ B.unsafePackMallocCStringLen (castPtr p,0x8000)
+                        return $ do S.chunk (B.take o c)
+                                    either pure go r
 
-    encode1 (Eqs2 n b)                         = stretchOf 0xC0 n :> b
-    encode1 (RefTrans b)                       = word8 0x05 :> b
-    encode1 (Trans2 b)                         = word8 0x06 :> b
-    encode1 (RefCompl b)                       = word8 0x07 :> b
-    encode1 (TransCompl b)                     = word8 0x08 :> b
-    encode1 (Compl2 b)                         = word8 0x09 :> b
-    encode1 (RefTCompl b)                      = word8 0x0A :> b
-    encode1 (TransTCompl b)                    = word8 0x0B :> b
-    encode1 (ComplTCompl b)                    = word8 0x0C :> b
-    encode1 (TCompl2 b)                        = word8 0x0D :> b
+    -- An insert is never longer than 255, so it needs no more than
+    -- ceil(255/4)+2 bytes, hence the nagic 66 below.
+    fill p l s o
+        | l - o < 66 = return (o, Right s)      -- need more space
+        | otherwise  = inspect s >>= either (return . (,) o . Left) (\case   -- stuff is guaranteed to fit
+            Ns n s'                          -> stretchOf 0x40 n >>= fill p l s'
+            Eqs1 n s'                        -> stretchOf 0x80 n >>= fill p l s'
+            Trans1 s'                        -> wrd8 0x01 >>= fill p l s'
+            Compl1 s'                        -> wrd8 0x02 >>= fill p l s'
+            TCompl1 s'                       -> wrd8 0x03 >>= fill p l s'
 
-    encode1 (Del1 n b)                         = indelOf 0x10 n :> b
-    encode1 (DelH n b)                         = indelOf 0x20 n :> b
-    encode1 (Del2 n b)                         = indelOf 0x30 n :> b
+            Eqs2 n s'                        -> stretchOf 0xC0 n >>= fill p l s'
+            RefTrans s'                      -> wrd8 0x05 >>= fill p l s'
+            Trans2 s'                        -> wrd8 0x06 >>= fill p l s'
+            RefCompl s'                      -> wrd8 0x07 >>= fill p l s'
+            TransCompl s'                    -> wrd8 0x08 >>= fill p l s'
+            Compl2 s'                        -> wrd8 0x09 >>= fill p l s'
+            RefTCompl s'                     -> wrd8 0x0A >>= fill p l s'
+            TransTCompl s'                   -> wrd8 0x0B >>= fill p l s'
+            ComplTCompl s'                   -> wrd8 0x0C >>= fill p l s'
+            TCompl2 s'                       -> wrd8 0x0D >>= fill p l s'
 
-    encode1 (Ins1 s b)                         = (indelOf 0x18 (U.length s) <> seqOf s) :> b
-    encode1 (InsH s b)                         = (indelOf 0x28 (U.length s) <> seqOf s) :> b
-    encode1 (Ins2 s b)                         = (indelOf 0x38 (U.length s) <> seqOf s) :> b
+            Del1 n s'                        -> indelOf 0x10 n >>= fill p l s'
+            DelH n s'                        -> indelOf 0x20 n >>= fill p l s'
+            Del2 n s'                        -> indelOf 0x30 n >>= fill p l s'
 
-    encode1 (Break b)                          = word8 0x00 :> b
+            Ins1 sq s'                       -> indelOf 0x18 (U.length sq) >>= seqOf sq >>= fill p l s'
+            InsH sq s'                       -> indelOf 0x28 (U.length sq) >>= seqOf sq >>= fill p l s'
+            Ins2 sq s'                       -> indelOf 0x38 (U.length sq) >>= seqOf sq >>= fill p l s'
+
+            Break s'                         -> wrd8 0x00 >>= fill p l s')
     -- encode1  Done                              = mempty
+      where
+        -- stretchOf :: MonadIO m => Word8 -> Int -> S.ByteString (StateT LBuf m) ()
+        stretchOf k n
+            | n < 0x3C      = liftIO $ do pokeElemOff p o (k .|. fromIntegral n)
+                                          return $ o+1
+            | n < 0x100     = liftIO $ do pokeElemOff p (o+0) (k .|. 0x3F)
+                                          pokeElemOff p (o+1) (fromIntegral  n)
+                                          return $ o+2
+            | n < 0x10000   = liftIO $ do pokeElemOff p (o+0) (k .|. 0x3E)
+                                          pokeElemOff p (o+1) (fromIntegral (n             .&. 0xff))
+                                          pokeElemOff p (o+2) (fromIntegral (n `shiftR`  8 .&. 0xff))
+                                          return $ o+3
+            | n < 0x1000000 = liftIO $ do pokeElemOff p (o+0) (k .|. 0x3D)
+                                          pokeElemOff p (o+1) (fromIntegral (n             .&. 0xff))
+                                          pokeElemOff p (o+2) (fromIntegral (n `shiftR`  8 .&. 0xff))
+                                          pokeElemOff p (o+3) (fromIntegral (n `shiftR` 16 .&. 0xff))
+                                          return $ o+4
+            | otherwise     = liftIO $ do pokeElemOff p (o+0) (k .|. 0x3C)
+                                          pokeElemOff p (o+1) (fromIntegral (n             .&. 0xff))
+                                          pokeElemOff p (o+2) (fromIntegral (n `shiftR`  8 .&. 0xff))
+                                          pokeElemOff p (o+3) (fromIntegral (n `shiftR` 16 .&. 0xff))
+                                          pokeElemOff p (o+4) (fromIntegral (n `shiftR` 24 .&. 0xff))
+                                          return $ o+5
 
+        -- indelOf :: MonadIO m => Word8 -> Int -> S.ByteString (StateT LBuf m) ()
+        indelOf k n
+            | n == 0        = error "empty indel"
+            | n < 8         = liftIO $ pokeElemOff p o (k .|. fromIntegral n) >> return (o+1)
+            | n < 0x100     = liftIO $ pokeElemOff p o k >> pokeElemOff p (o+1) (fromIntegral n) >> return (o+2)
+            | otherwise     = error $ "long indel: " ++ show n
+
+        -- seqOf :: MonadIO m => U.Vector Word8 -> S.ByteString (StateT LBuf m) ()
+        seqOf sq oo
+            | U.length sq == 0 = return oo
+            | U.length sq == 1 = liftIO $ pokeElemOff p oo (U.unsafeIndex sq 0) >> return (oo+1)
+            | U.length sq == 2 = liftIO $ pokeElemOff p oo (U.unsafeIndex sq 0 .|.
+                                                            U.unsafeIndex sq 1 `shiftL` 2) >> return (oo+1)
+            | U.length sq == 3 = liftIO $ pokeElemOff p oo (U.unsafeIndex sq 0 .|.
+                                                            U.unsafeIndex sq 1 `shiftL` 2 .|.
+                                                            U.unsafeIndex sq 2 `shiftL` 4) >> return (oo+1)
+            | otherwise        = liftIO (pokeElemOff p oo (U.unsafeIndex sq 0 .|.
+                                                           U.unsafeIndex sq 1 `shiftL` 2 .|.
+                                                           U.unsafeIndex sq 2 `shiftL` 4 .|.
+                                                           U.unsafeIndex sq 3 `shiftL` 6))
+                                 >> seqOf (U.unsafeDrop 4 sq) (oo+1)
+
+        -- wrd8 :: MonadIO m => Word8 -> S.ByteString (StateT LBuf m) ()
+        wrd8 w = liftIO $ pokeElemOff p o w >> return (o+1)
 
 encodeLump :: Fix Lump -> Builder
 encodeLump = cata encode1
@@ -283,40 +348,40 @@ encodeLump = cata encode1
     encode1 (Break b)                          = word8 0x00 <> b
     encode1  Done                              = mempty
 
-stretchOf :: Word8 -> Int -> Builder
-stretchOf k n
-    | n < 0x3C                             = word8 (k .|. fromIntegral n)
-    | n < 0x100                            = word8 (k .|. 0x3F) <> word8 (fromIntegral  n)
-    | n < 0x10000                          = word8 (k .|. 0x3E) <> word8 (fromIntegral (n             .&. 0xff))
-                                                                <> word8 (fromIntegral (n `shiftR`  8 .&. 0xff))
-    | n < 0x1000000                        = word8 (k .|. 0x3D) <> word8 (fromIntegral (n             .&. 0xff))
-                                                                <> word8 (fromIntegral (n `shiftR`  8 .&. 0xff))
-                                                                <> word8 (fromIntegral (n `shiftR` 16 .&. 0xff))
-    | otherwise                            = word8 (k .|. 0x3C) <> word8 (fromIntegral (n             .&. 0xff))
-                                                                <> word8 (fromIntegral (n `shiftR`  8 .&. 0xff))
-                                                                <> word8 (fromIntegral (n `shiftR` 16 .&. 0xff))
-                                                                <> word8 (fromIntegral (n `shiftR` 24 .&. 0xff))
-indelOf :: Word8 -> Int -> Builder
-indelOf k n
-    | n == 0        = error "empty indel"
-    | n < 8         = word8 (k .|. fromIntegral n)
-    | n < 0x100     = word8 k <> word8 (fromIntegral n)
-    | otherwise     = error $ "long indel: " ++ show n
+    stretchOf :: Word8 -> Int -> Builder
+    stretchOf k n
+        | n < 0x3C                             = word8 (k .|. fromIntegral n)
+        | n < 0x100                            = word8 (k .|. 0x3F) <> word8 (fromIntegral  n)
+        | n < 0x10000                          = word8 (k .|. 0x3E) <> word8 (fromIntegral (n             .&. 0xff))
+                                                                    <> word8 (fromIntegral (n `shiftR`  8 .&. 0xff))
+        | n < 0x1000000                        = word8 (k .|. 0x3D) <> word8 (fromIntegral (n             .&. 0xff))
+                                                                    <> word8 (fromIntegral (n `shiftR`  8 .&. 0xff))
+                                                                    <> word8 (fromIntegral (n `shiftR` 16 .&. 0xff))
+        | otherwise                            = word8 (k .|. 0x3C) <> word8 (fromIntegral (n             .&. 0xff))
+                                                                    <> word8 (fromIntegral (n `shiftR`  8 .&. 0xff))
+                                                                    <> word8 (fromIntegral (n `shiftR` 16 .&. 0xff))
+                                                                    <> word8 (fromIntegral (n `shiftR` 24 .&. 0xff))
+    indelOf :: Word8 -> Int -> Builder
+    indelOf k n
+        | n == 0        = error "empty indel"
+        | n < 8         = word8 (k .|. fromIntegral n)
+        | n < 0x100     = word8 k <> word8 (fromIntegral n)
+        | otherwise     = error $ "long indel: " ++ show n
 
-seqOf :: U.Vector Word8 -> Builder
-seqOf s
-    | U.length s == 0 = mempty
-    | U.length s == 1 = word8 (U.unsafeIndex s 0)
-    | U.length s == 2 = word8 (U.unsafeIndex s 0 .|.
-                               U.unsafeIndex s 1 `shiftL` 2)
-    | U.length s == 3 = word8 (U.unsafeIndex s 0 .|.
-                               U.unsafeIndex s 1 `shiftL` 2 .|.
-                               U.unsafeIndex s 2 `shiftL` 4)
-    | otherwise       = word8 (U.unsafeIndex s 0 .|.
-                               U.unsafeIndex s 1 `shiftL` 2 .|.
-                               U.unsafeIndex s 2 `shiftL` 4 .|.
-                               U.unsafeIndex s 3 `shiftL` 6)
-                        <> seqOf (U.unsafeDrop 4 s)
+    seqOf :: U.Vector Word8 -> Builder
+    seqOf s
+        | U.length s == 0 = mempty
+        | U.length s == 1 = word8 (U.unsafeIndex s 0)
+        | U.length s == 2 = word8 (U.unsafeIndex s 0 .|.
+                                   U.unsafeIndex s 1 `shiftL` 2)
+        | U.length s == 3 = word8 (U.unsafeIndex s 0 .|.
+                                   U.unsafeIndex s 1 `shiftL` 2 .|.
+                                   U.unsafeIndex s 2 `shiftL` 4)
+        | otherwise       = word8 (U.unsafeIndex s 0 .|.
+                                   U.unsafeIndex s 1 `shiftL` 2 .|.
+                                   U.unsafeIndex s 2 `shiftL` 4 .|.
+                                   U.unsafeIndex s 3 `shiftL` 6)
+                            <> seqOf (U.unsafeDrop 4 s)
 
 
 decodeLump :: L.ByteString -> Fix Lump
@@ -705,6 +770,7 @@ gendiff view = generic
                 | otherwise -> Fix . encVar u x . generic ref' smp'
 
 
+{-# INLINE gendiff' #-}
 gendiff' :: Monad m => (a -> RefSeqView a) -> a -> S.ByteString m r -> Stream Lump m r
 gendiff' view = generic
   where
@@ -715,14 +781,36 @@ gendiff' view = generic
 
     generic !ref !smp = effect $ case view ref of
             NilRef     -> pure <$> S.effects smp
-            l :== ref' -> return $ yields (Ns l (S.drop (fromIntegral l) smp)) >>= generic ref'
+            l :== ref' -> ns 1 ref' (S.drop (fromIntegral l) smp) -- return $ yields (Ns l (S.drop (fromIntegral l) smp)) >>= generic ref'
             u :^  ref' -> S.nextByte smp >>= \case
                 Left r         -> return $ pure r
                 Right (x, smp')
                     | x .&. 0x7F <= 32             -> return $ generic ref  smp'
-                    | isN  x    -> return $ yields (Ns       1 smp') >>= generic ref'
-                    | eq u x    -> return $ yields (Eqs2     1 smp') >>= generic ref'
+                    | isN  x    -> ns 1 ref' smp'    -- return $ yields (Ns       1 smp') >>= generic ref'
+                    | eq u x    -> eqs_2 1 ref' smp' -- return $ yields (Eqs2     1 smp') >>= generic ref'
                     | otherwise -> return $ yields (encVar u x smp') >>= generic ref'
+
+    eqs_2 !n !ref !smp = case view ref of
+            NilRef     -> S.effects smp >>= \r -> return $ yields (Eqs2 n ()) >> pure r
+            l :== ref' -> return $ yields (Eqs2 n (S.drop (fromIntegral l) smp)) >>= yields . Ns l >>= generic ref'
+            u :^  ref' -> S.nextByte smp >>= \case
+                Left r                 -> return $ yields (Eqs2 n ()) >> pure r
+                Right (x, smp')
+                    | x .&. 0x7F <= 32 -> return $ yields (Eqs2 n smp') >>= generic ref
+                    | isN  x           -> return $ yields (Eqs2 n smp') >>= yields . Ns 1 >>= generic ref'
+                    | eq u x           -> eqs_2 (succ n) ref' smp' -- return $ yields (Eqs2     1 smp') >>= generic ref'
+                    | otherwise        -> return $ yields (Eqs2 n smp') >>= yields . encVar u x >>= generic ref'
+
+    ns !n !ref !smp = case view ref of
+            NilRef     -> S.effects smp >>= \r -> return $ yields (Ns n ()) >> pure r
+            l :== ref' -> ns (l+n) ref' (S.drop (fromIntegral l) smp) -- return $ yields (Ns l (S.drop (fromIntegral l) smp)) >>= generic ref'
+            u :^  ref' -> S.nextByte smp >>= \case
+                Left r         ->  return $ yields (Ns n ()) >> pure r
+                Right (x, smp')
+                    | x .&. 0x7F <= 32             -> return $ yields (Ns n smp') >>= generic ref
+                    | isN  x    -> ns (n+1) ref' smp' -- return $ yields (Eqs2 n smp') >>= yields . Ns 1 >>= generic ref'
+                    | eq u x    -> return $ yields (Ns n smp') >>= yields . Eqs2 1 >>= generic ref'
+                    | otherwise -> return $ yields (Eqs2 n smp') >>= yields . encVar u x >>= generic ref'
 
 
 fromAmbCode :: Word8 -> Word8       -- two alleles in bits 0,1 and 2,3
