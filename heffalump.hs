@@ -168,8 +168,7 @@ importHetfa' ref smps = S.mwrap $ do -- ?!
     noLump = B.toLazyByteString $ encodeLump $ Fix (Break (Fix Done))
 
     enc2 :: MonadIO m => Int -> S.ByteString m r -> m (Of L.ByteString r)
-    enc2 i sq = S.toLazy . encodeLump' . normalizeLump' $
-                diff2' (nrss_seqs ref !! i) sq >>= yields . Break
+    enc2 i sq = encodeLumpToMem $ diff2' (nrss_seqs ref !! i) sq >>= yields . Break
 
     fold_1 :: MonadIO m => I.IntMap L.ByteString -> Stream (FastaSeq m) m r -> m (I.IntMap L.ByteString, r)
     fold_1 !acc s = inspect s >>= \case

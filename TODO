@@ -3,8 +3,6 @@
 - fix the MAF importer (needs Lumps to stay in reasonable memory bounds
   in the general case)
 
-- plug the silly memory leak in Hetfa
-
 - fix the VCF/BCF parser:  we have low-coverage vs high-coverage and
   low-density vs high-density files
 

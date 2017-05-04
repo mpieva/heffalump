@@ -6,13 +6,11 @@ import Data.ByteString.Builder
 import Data.ByteString.Internal             ( c2w )
 import Data.Fix
 import Data.Hashable                        ( hash )
-import Foreign.C.Types                      ( CChar )
 import Foreign.Marshal.Alloc                ( mallocBytes )
-import Foreign.Ptr                          ( Ptr, castPtr )
+import Foreign.Ptr                          ( castPtr )
 import Foreign.Storable                     ( pokeElemOff )
 import Streaming
 import System.Directory                     ( doesFileExist )
-import System.IO
 
 import qualified Data.ByteString            as B
 import qualified Data.ByteString.Char8      as BC
@@ -216,17 +214,12 @@ normalizeLump' = unfold (inspect >=> either (return . Left) go)
 
     go lump = return $ Right lump
 
-data LBuf = LBuf !(Ptr CChar) !Int !Int
 
--- This is not useful, yet.  The stream of builders can be turned into
--- one builder, but the value at the end is lost, and so are the
--- benefits of streaming.
---
--- It's probably best to turn this into a fold.  We could fill a buffer,
--- 'yields' it when full, thereby producing an 'S.ByteString'.  If it's
--- to be retained in memory, that's just an application of 'S.toLazy'
--- away.
+{-# INLINE encodeLumpToMem #-}
+encodeLumpToMem :: MonadIO m => Stream Lump m r -> m (Of L.ByteString r)
+encodeLumpToMem = S.toLazy . encodeLump' . normalizeLump'
 
+{-# INLINE encodeLump' #-}
 encodeLump' :: MonadIO m => Stream Lump m r -> S.ByteString m r
 encodeLump' = go
   where
@@ -237,10 +230,11 @@ encodeLump' = go
                                     either pure go r
 
     -- An insert is never longer than 255, so it needs no more than
-    -- ceil(255/4)+2 bytes, hence the nagic 66 below.
+    -- ceil(255/4)+2 bytes, hence the magic 66 below.  Once we have 66
+    -- bytes, the next code is guaranteed to fit.
     fill p l s o
         | l - o < 66 = return (o, Right s)      -- need more space
-        | otherwise  = inspect s >>= either (return . (,) o . Left) (\case   -- stuff is guaranteed to fit
+        | otherwise  = inspect s >>= either (return . (,) o . Left) (\case
             Ns n s'                          -> stretchOf 0x40 n >>= fill p l s'
             Eqs1 n s'                        -> stretchOf 0x80 n >>= fill p l s'
             Trans1 s'                        -> wrd8 0x01 >>= fill p l s'
@@ -269,7 +263,6 @@ encodeLump' = go
             Break s'                         -> wrd8 0x00 >>= fill p l s')
     -- encode1  Done                              = mempty
       where
-        -- stretchOf :: MonadIO m => Word8 -> Int -> S.ByteString (StateT LBuf m) ()
         stretchOf k n
             | n < 0x3C      = liftIO $ do pokeElemOff p o (k .|. fromIntegral n)
                                           return $ o+1
@@ -292,14 +285,12 @@ encodeLump' = go
                                           pokeElemOff p (o+4) (fromIntegral (n `shiftR` 24 .&. 0xff))
                                           return $ o+5
 
-        -- indelOf :: MonadIO m => Word8 -> Int -> S.ByteString (StateT LBuf m) ()
         indelOf k n
             | n == 0        = error "empty indel"
             | n < 8         = liftIO $ pokeElemOff p o (k .|. fromIntegral n) >> return (o+1)
             | n < 0x100     = liftIO $ pokeElemOff p o k >> pokeElemOff p (o+1) (fromIntegral n) >> return (o+2)
             | otherwise     = error $ "long indel: " ++ show n
 
-        -- seqOf :: MonadIO m => U.Vector Word8 -> S.ByteString (StateT LBuf m) ()
         seqOf sq oo
             | U.length sq == 0 = return oo
             | U.length sq == 1 = liftIO $ pokeElemOff p oo (U.unsafeIndex sq 0) >> return (oo+1)
@@ -314,9 +305,9 @@ encodeLump' = go
                                                            U.unsafeIndex sq 3 `shiftL` 6))
                                  >> seqOf (U.unsafeDrop 4 sq) (oo+1)
 
-        -- wrd8 :: MonadIO m => Word8 -> S.ByteString (StateT LBuf m) ()
         wrd8 w = liftIO $ pokeElemOff p o w >> return (o+1)
 
+{-# INLINE encodeLump #-}
 encodeLump :: Fix Lump -> Builder
 encodeLump = cata encode1
   where
