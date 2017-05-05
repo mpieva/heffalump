@@ -2,42 +2,34 @@
 module Emf where
 
 -- ^ Getting variant calls from EMF file (Compara EPO whole genome
--- alignments).  EMF contains a list of blocks, and each block align
--- contiguous stretches of genomes, sometime multiple parts of one
+-- alignments).  EMF contains a list of blocks, and each block aligns
+-- contiguous stretches of genomes; sometimes multiple parts of one
 -- genome appear in the same block.
 --
 -- To scan for variants, we compute a difference between the first
--- column and every other column in such a format that it can be plugged
--- into VCF.  Each column gets mapped to some species:  another ape or
--- one of the human-ape common ancestors.  (Note that the human-gorilla
--- ancestor is usually, but not necessarily also the ancestor of the
--- chimp!)  Multiple columns can correspond to the same species, and we
--- only call variants for some species if at least column maps to it and
--- all these columns agree.
+-- column and every other column.  Each column gets mapped to some
+-- species:  another ape or one of the human-ape common ancestors.
+-- (Note that the human-gorilla ancestor is usually, but not necessarily
+-- also the ancestor of the chimp!)  Multiple columns can correspond to
+-- the same species, and we only call variants for a given species if at
+-- least one column maps to it and all such columns agree.
+--
+-- XXX  Did I fuck the reverse-complementing up?  Looks like it...
 
-
--- XXX  Since our 'Lump' data type can now encode strings of odd length,
--- we could simplify the whole strategy in here:  We could scan the
--- input in its given order, build small 'Lump's, then sort them.
 
 import BasePrelude
 import Codec.Compression.GZip
-import Data.ByteString.Builder          ( hPutBuilder )
-import Data.ByteString.Short            ( ShortByteString )
-import Data.Fix
+import Data.ByteString.Streaming        ( fromLazy, fromStrict )
+import Streaming
 import System.Console.GetOpt
 import System.Directory                 ( getDirectoryContents )
 import System.FilePath
 import System.IO
 
-import qualified Codec.Compression.Snappy           as Snappy
 import qualified Data.Attoparsec.ByteString.Char8   as A
-import qualified Data.ByteString                    as SB
-import qualified Data.ByteString.Char8              as S
-import qualified Data.ByteString.Lazy               as LB
-import qualified Data.ByteString.Lazy.Char8         as L
-import qualified Data.ByteString.Short              as BS
-import qualified Data.HashMap.Strict                as H
+import qualified Data.ByteString.Char8              as B
+import qualified Data.ByteString.Lazy               as L
+import qualified Data.ByteString.Lazy.Char8         as C
 import qualified Data.IntMap.Strict                 as I
 
 import Lump
@@ -50,85 +42,116 @@ import Util
 -- coordinates, and the file must be sorted by human coordinates.   We
 -- ignore the chromosome name.
 --
--- We wish to skip about between blocks.  But sometimes blocks join
--- immediately, and then we get into trouble because 'diff' only works
--- correctly for stretches of even length.  So instead we return a new
--- data type to make that explicit.
+-- XXX  Ultimately, this needs to be both more flexible and
+-- configurable.
 
-data MafStretch = Skip !Int MafStretch | Aln !L.ByteString !L.ByteString MafStretch | MafDone
+-- | We get disjointed blocks, and they are not guaranteed to be in order.
+-- (There is an important use case where they are guaranteed to be
+-- jumbled.)  So we need an intermediate, compact representation of the
+-- fragmented genome.  We map chromosome indices to maps from starting
+-- position to a pair of a 'PackedLump' and its length.
 
-parseMaf :: L.ByteString -> Fix Lump -> Fix Lump
-parseMaf inp done = normMaf done . parse1 0 $ L.lines inp
+newtype Genome = Genome (I.IntMap (I.IntMap (Int, PackedLump)))
+
+emptyGenome :: Genome
+emptyGenome = Genome I.empty
+
+insertGenome :: Genome -> Int -> Int -> Int -> PackedLump -> Genome
+insertGenome (Genome m1) !c !p !l !s = Genome m1'
   where
-    parse1 oldpos lns = case dropWhile (\l -> L.null l || L.all isSpace l || L.head l == '#') lns of
-        [] -> MafDone
+    !m2 = I.findWithDefault I.empty c m1
+    !m2' = I.insert p (l,s) m2
+    !m1' = I.insert c m2' m1
+
+-- | To parse MAF, we shouldn't need a reference, and in fact we don't
+-- look at the reference sequence at all.  We use the reference only to
+-- map chromsome names to indices.
+--
+-- XXX  We have to deal with gaps.  Gaps in the reference can simply be
+-- removed.  If the sample is gapped, we want to encode an N.
+-- Thankfully, that's precisely what diff already does when it sees a
+-- gap.  Ultimately, it would be more healthy to encode gaps properly,
+-- but the appropriate diff algorithm isn't here yet.
+--
+-- XXX  Could (should?) use a streaming bytestring.
+
+parseMaf :: [B.ByteString] -> Genome -> L.ByteString -> IO Genome
+parseMaf chrs gnm0 inp = doParse gnm0 $ C.lines inp
+  where
+    doParse :: Genome -> [C.ByteString] -> IO Genome
+    doParse gnm lns = case dropWhile (\l -> C.null l || C.all isSpace l || C.head l == '#') lns of
+        [] -> return gnm
         (ahdr:shum:sother:lns')
-            | "a " `L.isPrefixOf` ahdr
-            , ["s", _, hpos_, _hlen, "+",  _clen, hum_seq] <- L.words shum
-            , ["s", _, _opos, _olen,   _, _oclen, oth_seq] <- L.words sother
-            , Just (hpos, "") <- L.readInt hpos_
-            , hpos >= oldpos ->
-                -- We have to deal with gaps.  Gaps in the reference can
-                -- simply be removed.  If the sample is gapped, we want
-                -- to encode an N.  Thankfully, that's precisely what
-                -- diff already does when it sees a gap.
-                let (ref', smp') = LB.unzip $ map (up *** up) $ filter ((/=) 45 . fst) $ LB.zip hum_seq oth_seq
-                in Skip (hpos - oldpos) $ Aln ref' smp' $
-                   parse1 (fromIntegral (L.length ref') + hpos) lns'
+            | "a " `C.isPrefixOf` ahdr
+            , ["s", hchr_, hpos_, _hlen, "+",  _clen, hum_seq] <- C.words shum
+            , ["s", _, _opos, _olen,   _, _oclen, oth_seq] <- C.words sother
+            , Just (hpos, "") <- C.readInt hpos_
+            , Just hchr <- findIndex (C.toStrict hchr_ ==) chrs
+                -> do let (ref', smp') = L.unzip $ filter ((/=) 45 . fst) $ L.zip hum_seq oth_seq
+                      plump :> _ <- encodeLumpToMem $ diff' ref' (fromLazy smp')
+                      doParse (insertGenome gnm hchr hpos (fromIntegral $ C.length ref') plump) lns'
 
-        ls -> error $ "WTF?! (" ++ show oldpos ++ ") near \n" ++ L.unpack (L.unlines $ take 3 ls)
+        ls -> error $ "WTF?! near \n" ++ C.unpack (C.unlines $ take 3 ls)
 
--- XXX this is not borked anymore, but it is inefficient and needlessly
--- brittle
-normMaf :: Fix Lump -> MafStretch -> Fix Lump
-normMaf done = norm
+
+encodeGenome :: Genome -> L.ByteString
+encodeGenome (Genome m1)
+    | I.null m1 = error "effectively empty genome"
+    | otherwise = L.concat [ maybe (unpackLump noLump) encodeChr $ I.lookup i m1
+                           | i <- [ 0 .. fst (I.findMax m1) ] ]
   where
-    -- remove degenerate stretches
-    norm (Skip  0 ms)            = norm ms
-    norm (Aln r _ ms) | L.null r = norm ms
+    encodeChr :: I.IntMap (Int, PackedLump) -> L.ByteString
+    encodeChr m2 = I.foldrWithKey step (const L.empty) m2 0
 
-    -- join adjacent similar stretches
-    norm (Skip n1   (Skip n2   ms)) = norm $ Skip (n1+n2) ms
-    norm (Aln r1 s1 (Aln r2 s2 ms)) = norm $ Aln (L.append r1 r2) (L.append s1 s2) ms
+    step :: Int -> (Int, PackedLump) -> (Int -> L.ByteString) -> Int -> L.ByteString
+    step start (len, PackLump lump) k pos =
+            lots_of_Ns (start - pos) <> lump <> k (start+len)
 
-    -- emit 'Skip' or 'Aln', but transfer an N to make the length even
-    norm (Skip n1 (Aln ref smp ms))
-        | L.null ref = norm $ Skip n1 ms
-        | otherwise  = Fix $ Ns (fromIntegral n1) $ norm $ Aln ref smp ms
-
-    norm (Aln r1 s1 (Skip n2 ms))
-        | n2 == 0    = norm $ Aln r1 s1 ms
-        | otherwise  = diff r1 s1 (norm $ Skip n2 ms)
-
-    -- anything else runs into the end
-    norm (Aln r1 s1 MafDone) = diff r1 s1 done
-    norm (Skip n1   MafDone) = Fix $ Ns (fromIntegral n1) done
-    norm            MafDone  = done
+    -- Argh, this wasn't supposed to be repeated here, but it's the most
+    -- straight forward way to do it.
+    lots_of_Ns :: Int -> L.ByteString
+    lots_of_Ns n
+        | n == 0        = L.empty
+        | n < 0x3C      = L.singleton $ 0x40 .|. fromIntegral n
+        | n < 0x100     = L.pack [ 0x40 .|. 0x3F
+                                 , fromIntegral  n ]
+        | n < 0x10000   = L.pack [ 0x40 .|. 0x3E
+                                 , fromIntegral (n             .&. 0xff)
+                                 , fromIntegral (n `shiftR`  8 .&. 0xff) ]
+        | n < 0x1000000 = L.pack [ 0x40 .|. 0x3D
+                                 , fromIntegral (n             .&. 0xff)
+                                 , fromIntegral (n `shiftR`  8 .&. 0xff)
+                                 , fromIntegral (n `shiftR` 16 .&. 0xff) ]
+        | otherwise     = L.pack [ 0x40 .|. 0x3C
+                                 , fromIntegral (n             .&. 0xff)
+                                 , fromIntegral (n `shiftR`  8 .&. 0xff)
+                                 , fromIntegral (n `shiftR` 16 .&. 0xff)
+                                 , fromIntegral (n `shiftR` 24 .&. 0xff) ]
 
 
 data EmfBlock = EmfBlock { emf_tree :: Tree Label
-                         , emf_seqs :: [S.ByteString] }
+                         , emf_seqs :: [B.ByteString] }
     deriving Show
 
-scanOneBlock :: [S.ByteString] -> ( EmfBlock, [S.ByteString] )
+scanOneBlock :: [B.ByteString] -> ( EmfBlock, [B.ByteString] )
 scanOneBlock inp = ( EmfBlock tree seqs, drop 1 remainder )
   where
-    (seqlns, treeln : "DATA" : inp2) = span (S.isPrefixOf "SEQ ") .           -- names and indices of sequences
-                                       dropWhile (S.all A.isSpace) $          -- and empty lines
-                                       dropWhile ("#" `S.isPrefixOf`) inp     -- get rid of comments
+    (seqlns, treeln : "DATA" : inp2) = span (B.isPrefixOf "SEQ ") .           -- names and indices of sequences
+                                       dropWhile (B.all A.isSpace) $          -- and empty lines
+                                       dropWhile ("#" `B.isPrefixOf`) inp     -- get rid of comments
 
     rngs = zipWith parse_seq_name [0..] seqlns
     tree = relabel rngs $ parse_tree treeln                                   -- topology of tree w/ indices
 
     (datalns, remainder) = span ("//" /=) inp2
-    seqs = S.transpose . map (S.map toUpper) $ datalns
+    seqs = B.transpose . map (B.map toUpper) $ datalns
 
-    parse_seq_name i s = Label i (spc, S.drop 1 race) (str $ Range (BS.toShort sqn) (beg-1) (end-beg+1))
+    parse_seq_name i s = Label i (spc, B.drop 1 race) (str $ Range sqn (beg-1) (end-beg+1))
       where
-        ("SEQ":sr:sqn:beg':end':str':_) = S.words s
-        (spc,race) = S.break ('_' ==) sr
-        Just (beg,"") = S.readInt beg'
-        Just (end,"") = S.readInt end'
+        ("SEQ":sr:sqn:beg':end':str':_) = B.words s
+        (spc,race) = B.break ('_' ==) sr
+        Just (beg,"") = B.readInt beg'
+        Just (end,"") = B.readInt end'
         str = if str' == "1" then id else reverseRange
 
     parse_tree s = case A.parseOnly (A.string "TREE " *> treep <* A.char ';') s of
@@ -136,13 +159,13 @@ scanOneBlock inp = ( EmfBlock tree seqs, drop 1 remainder )
         Right r -> r
 
     treep = Branch <$> (A.char '(' *> treep) <*> (A.char ',' *> treep) <*> (A.char ')' *> label) <|> Leaf <$> label
-    label = (\x y z -> (x `S.append` S.pack ['[',y,']'], z))
+    label = (\x y z -> (x `B.append` B.pack ['[',y,']'], z))
             <$> A.takeWhile (\c -> A.isAlpha_ascii c || A.isDigit c || c == '_' || c == '.')
             <*> (A.char '[' *> (A.char '+' <|> A.char '-'))
             <*> (A.char ']' *> A.char ':' *> A.double)
 
 
-data Range = Range { r_seq    :: {-# UNPACK #-} !ShortByteString
+data Range = Range { r_seq    :: {-# UNPACK #-} !B.ByteString
                    , r_pos    :: {-# UNPACK #-} !Int
                    , r_length :: {-# UNPACK #-} !Int }
     deriving (Show, Eq, Ord)
@@ -153,30 +176,30 @@ reverseRange (Range sq pos len) = Range sq (-pos-len) len
 data Label = Label Int Species Range deriving Show
 data Tree label = Branch (Tree label) (Tree label) label | Leaf label deriving Show
 
-relabel :: [Label] -> Tree (S.ByteString, Double) -> Tree Label
+relabel :: [Label] -> Tree (B.ByteString, Double) -> Tree Label
 relabel ls (Leaf (lbl,_)) = Leaf (find_label lbl ls)
 relabel ls (Branch u v (lbl,_)) = Branch (relabel ls u) (relabel ls v) (find_label lbl ls)
 
-find_label :: S.ByteString -> [Label] -> Label
+find_label :: B.ByteString -> [Label] -> Label
 find_label lbl ls = case filter ((==) lbl . get_short) ls of
     [l] -> l
     []  -> error $ "not found: " ++ show lbl ++ " in " ++ show ls
     _   -> error $ "WTF?  " ++ show lbl ++ " in " ++ show ls
 
-get_short :: Label -> S.ByteString
-get_short (Label _ (spc,race) (Range chrom pos len)) = S.concat $
-    [ S.map toUpper (S.take 1 spc),
-      S.take 3 race, S.singleton '_',
-      BS.fromShort chrom, S.singleton '_' ] ++
-    if pos >= 0 then [ S.pack (show $ 1+pos), S.singleton '_',
-                       S.pack (show $ pos+len), "[+]" ]
-                else [ S.pack (show $ 1-pos-len), S.singleton '_',
-                       S.pack (show $ -pos), "[-]" ]
+get_short :: Label -> B.ByteString
+get_short (Label _ (spc,race) (Range chrom pos len)) = B.concat $
+    [ B.map toUpper (B.take 1 spc),
+      B.take 3 race, B.singleton '_',
+      chrom, B.singleton '_' ] ++
+    if pos >= 0 then [ B.pack (show $ 1+pos), B.singleton '_',
+                       B.pack (show $ pos+len), "[+]" ]
+                else [ B.pack (show $ 1-pos-len), B.singleton '_',
+                       B.pack (show $ -pos), "[-]" ]
 
 data BlockDef = BlockDef { human_label :: !Label
                          , anc_label   :: !Label }
 
-type Species = (S.ByteString,S.ByteString)
+type Species = (B.ByteString,B.ByteString)
 
 -- | Find closely related sequence in another species.  We look for a
 -- tree that has homo on one side, but no chimp, and at least one chimp
@@ -218,69 +241,24 @@ tree_has s (Branch u' v' _) = tree_has s u' ++ tree_has s v'
 -- multiple Human sequences, we return mutiple results.  If we find
 -- multiple Chimps, we turn them into a consensus sequence and return
 -- the result for the consensus sequence.
-get_trees :: ( Tree Label -> [(Label, [Label])] ) -> EmfBlock -> [Fragment]
-get_trees select  block = [ mkFragment rref (emf_seqs block !! iref) $ consensus_seq
-                                [ emf_seqs block !! itgt | Label itgt _ _ <- tgt_lbls ]
-                          | (Label iref _ rref, tgt_lbls) <- select $ emf_tree block ]
+collectTrees :: [B.ByteString] -> ( Tree Label -> [(Label, [Label])] ) -> Genome -> EmfBlock -> IO Genome
+collectTrees chrs select genome block
+    = foldlM (\g f -> f g) genome
+            [ \g -> do plump :> _ <- encodeLumpToMem $ diff' ref_seq (fromStrict smp_seq)
+                       hPrint stderr (r_seq rref, r_pos rref, L.length (unpackLump plump))
+                       return $! insertGenome g ref_idx (r_pos rref) (r_length rref) plump
+            | (Label iref _ rref, tgt_lbls) <- select $ emf_tree block
+            , ref_idx <- maybeToList $ findIndex (r_seq rref ==) chrs
+            , let ref_seq = L.fromStrict $ emf_seqs block !! iref
+            , let smp_seq = consensus_seq
+                      [ emf_seqs block !! itgt | Label itgt _ _ <- tgt_lbls ] ]
 
 
--- Fragmentary alignment reconstructed from EMF.  A list of these could
--- add up to a chromosome; we keep chromosomes neatly apart.
-data Fragment = Fragment {-# UNPACK #-} !Range {-# UNPACK #-} !ShortByteString deriving Eq
-
-frag_range :: Fragment -> Range
-frag_range (Fragment r _) = r
-
-frag_seqs :: Fragment -> (L.ByteString,L.ByteString)
-frag_seqs (Fragment _ s) = frag_seqs1 s
-
-frag_seqs1 :: ShortByteString -> (L.ByteString,L.ByteString)
-frag_seqs1 s = L.splitAt (fromIntegral $ S.length s' `div` 2) (L.fromStrict s')
-    where s' = Snappy.decompress $ BS.fromShort s
-
-frag_raw :: Fragment -> ShortByteString
-frag_raw (Fragment _ s) = s
-
-instance Show Fragment where
-    showsPrec _ frag = (++) "[ " . shows (r_seq rng) .  (:)  ':' . shows (r_pos rng) .
-                       (++) ".." . shows (r_pos rng + r_length rng) .  (++) " ] " .
-                       shows (L.take 25 rs) . (++) ".../" . shows (L.take 25 ss) . (++) "..."
-      where
-        rng     = frag_range frag
-        (rs,ss) = frag_seqs frag
-
-
-mkFragment :: Range -> S.ByteString -> S.ByteString -> Fragment
-mkFragment rng rs ss
-    | S.length rs == S.length ss &&
-      S.length (S.filter (/='-') rs) == r_length rng
-        = if r_pos rng >= 0
-            then Fragment rng (compr2 rs ss)
-            else Fragment (reverseRange rng) (compr2 (revcom rs) (revcom ss))
-  where
-    compr2 a b = case LB.unzip $ filter ((/=) (45,45)) $ SB.zip a b of
-                    (u,v) -> BS.toShort $ Snappy.compress (L.toStrict $ u <> v)
-
-    revcom = SB.reverse . SB.map complc
-
-    complc 65 = 84
-    complc 67 = 71
-    complc 71 = 67
-    complc 84 = 65
-
-    complc  97 = 116
-    complc  99 = 103
-    complc 103 =  99
-    complc 116 =  97
-
-    complc c = c
-
-
-consensus_seq :: [S.ByteString] -> S.ByteString
+consensus_seq :: [B.ByteString] -> B.ByteString
 consensus_seq [   x  ] = x
-consensus_seq (x:xs) | all (== S.length x) (map S.length xs) =
-    S.pack [ foldl' (\r c -> if r == c then r else 'N') (S.index x i) (map (`S.index` i) xs)
-           | i <- [0 .. S.length x -1] ]
+consensus_seq (x:xs) | all (== B.length x) (map B.length xs) =
+    B.pack [ foldl' (\r c -> if r == c then r else 'N') (B.index x i) (map (`B.index` i) xs)
+           | i <- [0 .. B.length x -1] ]
 
 
 -- | Scans a directory with gzipped EMF files in arbitrary order.  (The
@@ -292,19 +270,13 @@ scan_all_emf dir = do
     foldr (\fp k -> do bs  <- unsafeInterleaveIO k
                        let go [] = bs
                            go ls = case scanOneBlock ls of (b,ls') -> b : go ls'
-                       go . map L.toStrict . L.lines . decompress <$> L.readFile fp)
+                       go . map L.toStrict . C.lines . decompress <$> L.readFile fp)
           (return []) fs
 
 
-apes :: [(S.ByteString, S.ByteString)]
+apes :: [(B.ByteString, B.ByteString)]
 apes = [("pan","troglodytes"),("gorilla","gorilla"),("pongo","abelii")
        ,("macaca","mulatta"),("callithrix","jacchus") ]
-
-
-smoke_test :: IO ()
-smoke_test = mapM_ print .
-             concatMap (get_trees $ species_to_species ("homo","sapiens") ("pan","troglodytes")) =<<
-             scan_all_emf "/mnt/expressions/martin/sequence_db/epo/epo_6_primate_v66"
 
 
 data OptsEmf = OptsEmf {
@@ -334,58 +306,24 @@ opts_emf =
     set_species a c = return $ c { emf_select = species_to_species  ("homo","sapiens") (w2 a) }
     set_anc     a c = return $ c { emf_select = ancestor_to_species ("homo","sapiens") (w2 a) }
 
-    w2 s = case S.words (S.pack s) of (a:b:_) -> (a,b)
+    w2 s = case B.words (B.pack s) of (a:b:_) -> (a,b)
 
 
 main_emf :: [String] -> IO ()
 main_emf args = do
     ( _, OptsEmf{..} ) <- parseOpts False opts_emf_default (mk_opts "emf" "[emf-file...]" opts_emf) args
-    !frags <- foldl' collect_frags empty_frag_map .
-              concatMap (get_trees emf_select) <$>
-              scan_all_emf emf_input
+    ref <- readTwoBit emf_reference
+
+    !genome <- foldM (collectTrees (nrss_chroms ref) emf_select) emptyGenome
+               =<< scan_all_emf emf_input
 
     hPutStrLn stderr "I survived!"
-    hPrint stderr $ H.keys frags
-    hPrint stderr $ map I.size $ H.elems frags
+    case genome of { Genome m1 -> do
+        hPrint stderr $ sum $ fmap I.size m1
+        hPrint stderr $ sum $ fmap (sum . fmap fst) m1 }
 
-    ref <- readTwoBit emf_reference
     withFile emf_output WriteMode $ \hdl ->
-        hPutBuilder hdl . encode ref $ catLumps
-            [ fragmap1_to_stretch $ H.lookupDefault I.empty c frags
-            | c <- map (BS.toShort . L.toStrict) chroms ]
+        L.hPut hdl $ encodeGenome genome
 
     hPutStrLn stderr "All done!"
-  where
-    catLumps = foldr (\a b -> a $ Fix $ Break b) (Fix Done)
-
-
-
-type FragMap  = H.HashMap ShortByteString FragMap1
-type FragMap1 = I.IntMap ShortByteString
-
-empty_frag_map :: FragMap
-empty_frag_map = H.empty
-
-collect_frags :: FragMap -> Fragment -> FragMap
-collect_frags hm !frag =
-    let m1 = H.lookupDefault I.empty (r_seq (frag_range frag)) hm
-    in case I.lookup (r_pos (frag_range frag)) m1 of
-            Just f' | f' == frag_raw frag -> hm
-                    | otherwise  -> error $ "not-quite-duplicate: " ++ show (f',frag)
-            Nothing -> H.insert (r_seq (frag_range frag))
-                                (I.insert (r_pos (frag_range frag))
-                                          (frag_raw frag) m1) hm
-
--- | Takes 'Fragment's and turns them into a 'Stretch'.  For good reasons,
--- this only works for one chromosome at a time.  (Recycles the logic
--- already developed for MAF input.)
-fragmap1_to_stretch :: FragMap1 -> Fix Lump -> Fix Lump
-fragmap1_to_stretch fm done = normMaf done $ go 0 $ I.toList fm
-  where
-    go  _  [        ] = MafDone
-    go pos ((p,f):fs) = Skip (p - pos) $ Aln rs ss $ go (p+len) fs
-      where
-        (rs,ss) = frag_seqs1 f
-        len     = fromIntegral $ L.length $ L.filter (/='-') rs
-
 

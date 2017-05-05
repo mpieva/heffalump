@@ -144,23 +144,6 @@ parseFasta' = go . ignoreBody . S.lines
             Right ( _ ,line') -> return $ ignoreBody $ effect (S.effects line')
 
 
--- Cheap 'toLower' function, best applied to FastA sequences only.
-{-# INLINE low #-}
-{-# DEPRECATED low "Do we need this?" #-}
-low :: Word8 -> Word8
-low !x = x .|. 32
-
--- Cheap 'toUpper' function, best applied to FastA sequences only.
-{-# INLINE up #-}
-{-# DEPRECATED up "Do we need this?" #-}
-up :: Word8 -> Word8
-up !x = x .&. complement 32
-
--- | Our expected chromosomes.
-{-# DEPRECATED chroms "Use proper reference." #-}
-chroms :: [C.ByteString]
-chroms = C.words "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 X Y"
-
 readNumIO :: String -> IO Int
 readNumIO s = case reads s of
     [(n,[ ])] -> return n

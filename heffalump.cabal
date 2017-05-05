@@ -40,7 +40,6 @@ executable heffalump
                        primitive,
                        random,
                        resourcet,
-                       snappy,
                        streaming                >= 0.1.4 && < 2.0,
                        streaming-bytestring     >= 0.1.4 && < 2.0,
                        transformers,

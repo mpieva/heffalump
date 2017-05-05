@@ -10,6 +10,7 @@ import Foreign.Marshal.Alloc                ( mallocBytes )
 import Foreign.Ptr                          ( castPtr )
 import Foreign.Storable                     ( pokeElemOff )
 import Streaming
+import Streaming.Prelude                    ( mapOf )
 import System.Directory                     ( doesFileExist )
 
 import qualified Data.ByteString            as B
@@ -215,9 +216,15 @@ normalizeLump' = unfold (inspect >=> either (return . Left) go)
     go lump = return $ Right lump
 
 
+newtype PackedLump = PackLump { unpackLump :: L.ByteString }
+
+-- | The encoding of an empty chromosome:  just the 'Break'
+noLump :: PackedLump
+noLump = PackLump (L.singleton 0)
+
 {-# INLINE encodeLumpToMem #-}
-encodeLumpToMem :: MonadIO m => Stream Lump m r -> m (Of L.ByteString r)
-encodeLumpToMem = S.toLazy . encodeLump' . normalizeLump'
+encodeLumpToMem :: MonadIO m => Stream Lump m r -> m (Of PackedLump r)
+encodeLumpToMem = fmap (mapOf PackLump) . S.toLazy . encodeLump' . normalizeLump'
 
 {-# INLINE encodeLump' #-}
 encodeLump' :: MonadIO m => Stream Lump m r -> S.ByteString m r
@@ -766,42 +773,47 @@ gendiff' :: Monad m => (a -> RefSeqView a) -> a -> S.ByteString m r -> Stream Lu
 gendiff' view = generic
   where
     isN        c = c == c2w 'N' || c == c2w 'n' || c == c2w '-'
+    isNN (N2b a) = a > 3
+
     eq (N2b a) b = b == c2w 'Q' || b == c2w 'q' ||
                    "TCAG" `B.index` fromIntegral a == b ||
                    "tcag" `B.index` fromIntegral a == b
 
     generic !ref !smp = effect $ case view ref of
-            NilRef     -> pure <$> S.effects smp
-            l :== ref' -> ns 1 ref' (S.drop (fromIntegral l) smp) -- return $ yields (Ns l (S.drop (fromIntegral l) smp)) >>= generic ref'
+            NilRef              -> pure <$> S.effects smp
+            l :== ref'          -> ns l ref' (S.drop (fromIntegral l) smp)
+            u :^  ref' | isNN u -> ns 1 ref' (S.drop 1 smp)
             u :^  ref' -> S.nextByte smp >>= \case
-                Left r         -> return $ pure r
+                Left r                 -> return $ pure r
                 Right (x, smp')
-                    | x .&. 0x7F <= 32             -> return $ generic ref  smp'
-                    | isN  x    -> ns 1 ref' smp'    -- return $ yields (Ns       1 smp') >>= generic ref'
-                    | eq u x    -> eqs_2 1 ref' smp' -- return $ yields (Eqs2     1 smp') >>= generic ref'
-                    | otherwise -> return $ yields (encVar u x smp') >>= generic ref'
+                    | x .&. 0x7F <= 32 -> return $ generic ref  smp'
+                    | isN  x           -> ns 1 ref' smp'
+                    | eq u x           -> eqs_2 1 ref' smp'
+                    | otherwise        -> return $ yields (encVar u x smp') >>= generic ref'
 
     eqs_2 !n !ref !smp = case view ref of
-            NilRef     -> S.effects smp >>= \r -> return $ yields (Eqs2 n ()) >> pure r
-            l :== ref' -> return $ yields (Eqs2 n (S.drop (fromIntegral l) smp)) >>= yields . Ns l >>= generic ref'
-            u :^  ref' -> S.nextByte smp >>= \case
+            NilRef              -> S.effects smp >>= \r -> return $ yields (Eqs2 n ()) >> pure r
+            l :== ref'          -> return $ yields (Eqs2 n (S.drop (fromIntegral l) smp)) >>= effect . ns l ref'
+            u :^  ref' | isNN u -> return $ yields (Eqs2 n (S.drop 1 smp)) >>= effect . ns 1 ref'
+            u :^  ref'                 -> S.nextByte smp >>= \case
                 Left r                 -> return $ yields (Eqs2 n ()) >> pure r
                 Right (x, smp')
-                    | x .&. 0x7F <= 32 -> return $ yields (Eqs2 n smp') >>= generic ref
-                    | isN  x           -> return $ yields (Eqs2 n smp') >>= yields . Ns 1 >>= generic ref'
-                    | eq u x           -> eqs_2 (succ n) ref' smp' -- return $ yields (Eqs2     1 smp') >>= generic ref'
+                    | x .&. 0x7F <= 32 -> eqs_2 n ref smp'
+                    | isN  x           -> return $ yields (Eqs2 n smp') >>= effect . ns 1 ref'
+                    | eq u x           -> eqs_2 (succ n) ref' smp'
                     | otherwise        -> return $ yields (Eqs2 n smp') >>= yields . encVar u x >>= generic ref'
 
     ns !n !ref !smp = case view ref of
-            NilRef     -> S.effects smp >>= \r -> return $ yields (Ns n ()) >> pure r
-            l :== ref' -> ns (l+n) ref' (S.drop (fromIntegral l) smp) -- return $ yields (Ns l (S.drop (fromIntegral l) smp)) >>= generic ref'
+            NilRef              -> S.effects smp >>= \r -> return $ yields (Ns n ()) >> pure r
+            l :== ref'          -> ns (l+n) ref' (S.drop (fromIntegral l) smp)
+            u :^  ref' | isNN u -> ns (1+n) ref' (S.drop 1 smp)
             u :^  ref' -> S.nextByte smp >>= \case
-                Left r         ->  return $ yields (Ns n ()) >> pure r
+                Left r                 ->  return $ yields (Ns n ()) >> pure r
                 Right (x, smp')
-                    | x .&. 0x7F <= 32             -> return $ yields (Ns n smp') >>= generic ref
-                    | isN  x    -> ns (n+1) ref' smp' -- return $ yields (Eqs2 n smp') >>= yields . Ns 1 >>= generic ref'
-                    | eq u x    -> return $ yields (Ns n smp') >>= yields . Eqs2 1 >>= generic ref'
-                    | otherwise -> return $ yields (Eqs2 n smp') >>= yields . encVar u x >>= generic ref'
+                    | x .&. 0x7F <= 32 -> ns n ref smp'
+                    | isN  x           -> ns (n+1) ref' smp'
+                    | eq u x           -> return $ yields (Ns n smp') >>= effect . eqs_2 1 ref'
+                    | otherwise        -> return $ yields (Eqs2 n smp') >>= yields . encVar u x >>= generic ref'
 
 
 fromAmbCode :: Word8 -> Word8       -- two alleles in bits 0,1 and 2,3
@@ -843,6 +855,17 @@ diff2 = gendiff viewNRS . ($ ())
 
 diff2' :: Monad m => (() -> NewRefSeq) -> S.ByteString m r -> Stream Lump m r
 diff2' = gendiff' viewNRS . ($ ())
+
+diff' :: Monad m => L.ByteString -> S.ByteString m r -> Stream Lump m r
+diff' = gendiff' viewLBS
+  where
+    viewLBS = maybe NilRef (\(a,b) -> fromCode (a .|. 32) :^ b) . L.uncons
+
+    fromCode c | c == c2w 't' = N2b 0
+               | c == c2w 'c' = N2b 1
+               | c == c2w 'a' = N2b 2
+               | c == c2w 'g' = N2b 3
+               | otherwise =  N2b 255
 
 diff :: L.ByteString -> L.ByteString -> Fix Lump -> Fix Lump
 diff = gendiff viewLBS

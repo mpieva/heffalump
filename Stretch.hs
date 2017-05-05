@@ -16,7 +16,7 @@ import qualified Data.ByteString.Lazy.Char8     as L
 import qualified Data.ByteString.Lazy           as LB
 import qualified Data.ByteString.Unsafe         as BB
 
-import Util ( low, decomp )
+import Util ( decomp )
 
 -- ^ A genome is encoded by taking the difference to the reference and
 -- run-length coding the result.
@@ -50,6 +50,7 @@ debugStretch' c i (Chrs x y s) = do putStrLn $ shows (c,i) "\tChrs " ++ [tr x,' 
 decode :: L.ByteString -> Stretch
 decode str | "HEF\0" `L.isPrefixOf` str = decode_dip (L.drop 4 str)
            | "HEF\1" `L.isPrefixOf` str = decode_hap (L.drop 4 str)
+           | "HEF\3" `L.isPrefixOf` str = error "I can't handle this new format."
            | otherwise                  = decode_dip (L.drop 4 str) -- error "Format not recognixed."
 
 {-# DEPRECATED encode_dip "Switch to Lumps" #-}
@@ -200,7 +201,7 @@ diff :: L.ByteString -> L.ByteString -> Stretch -> Stretch
 diff r0 s0 done = generic r0 s0
   where
     isN  c = c == 'N' || c == 'n' || c == '-'
-    eq a b = b == 'Q' || b == 'q' || low (B.c2w a) == low (B.c2w b)
+    eq a b = b == 'Q' || b == 'q' || B.c2w a .|. 32 == B.c2w b .|. 32
 
     code a = NucCode $ maybe 0 fromIntegral $ B.elemIndex a iupac_chars
 

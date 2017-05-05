@@ -61,7 +61,7 @@ main = do
         , z "vcfhc"   (main_vcf "vcfhc" id)       "Import high coverage vcf (diploid)"
         , z "vcflc"   (main_vcf "vcflc" make_hap) "Import low coverage vcf (haploid)"
         , z "debhetfa"    main_debhetfa           "(debugging aid)"
-        , z "debmaf"      main_debmaf             "(debugging aid)"
+        -- , z "debmaf"      main_debmaf             "(debugging aid)"
         , z "dumppatch"   main_dumppatch          "(debugging aid)"
         , z "dumplump"    main_dumplump           "(debugging aid)" ]
 
@@ -137,11 +137,10 @@ importHetfa :: NewRefSeqs -> [( B.ByteString, L.ByteString )] -> B.Builder
 importHetfa ref smps
     | I.null map1 = error "Found only unexpected sequences.  Is this the right reference?"
     | otherwise   = encodeHeader ref <>
-                    foldMap (\i -> maybe noLump B.lazyByteString  $ I.lookup i map1)
+                    -- a single 0 is the encoding of an empty chromosome (just the 'Break')
+                    foldMap (\i -> maybe (B.word8 0) B.lazyByteString  $ I.lookup i map1)
                             [0 .. length (nrss_chroms ref) - 1]
   where
-    noLump = encodeLump $ Fix (Break (Fix Done))
-
     map1 :: I.IntMap L.ByteString
     map1 = foldl' enc1 I.empty smps
 
@@ -162,21 +161,19 @@ importHetfa' ref smps = S.mwrap $ do -- ?!
 
     return $ do S.fromLazy $ B.toLazyByteString $ encodeHeader ref
                 forM_ [0 .. length (nrss_chroms ref) - 1] $
-                        \i -> S.fromLazy $ I.findWithDefault noLump i map1
+                        \i -> S.fromLazy $ unpackLump $ I.findWithDefault noLump i map1
                 pure r
   where
-    noLump = B.toLazyByteString $ encodeLump $ Fix (Break (Fix Done))
-
-    enc2 :: MonadIO m => Int -> S.ByteString m r -> m (Of L.ByteString r)
+    enc2 :: MonadIO m => Int -> S.ByteString m r -> m (Of PackedLump r)
     enc2 i sq = encodeLumpToMem $ diff2' (nrss_seqs ref !! i) sq >>= yields . Break
 
-    fold_1 :: MonadIO m => I.IntMap L.ByteString -> Stream (FastaSeq m) m r -> m (I.IntMap L.ByteString, r)
+    fold_1 :: MonadIO m => I.IntMap PackedLump -> Stream (FastaSeq m) m r -> m (I.IntMap PackedLump, r)
     fold_1 !acc s = inspect s >>= \case
         Left r -> return $ (acc,r)
         Right (FastaSeq nm sq) -> case findIndex (nm ==) (nrss_chroms ref) of
             Nothing -> S.effects sq >>= fold_1 acc
             Just  i -> do lump :> s' <- enc2 i sq
-                          liftIO $ hPrint stderr (i, L.length lump)
+                          liftIO $ hPrint stderr (i, L.length $ unpackLump lump)
                           fold_1 (I.insert i lump acc) s'
 
 
@@ -194,8 +191,9 @@ main_maf args = do
                                              (mk_opts "maf" "[maf-file...]" opts_maf) args
     ref <- readTwoBit conf_ref
     withFile conf_output WriteMode $ \hdl ->
-        hPutBuilder hdl . encode ref . concatLumps =<<
-           mapM (\f -> parseMaf . decomp <$> L.readFile f) maffs
+        L.hPut hdl . encodeGenome =<<
+           foldM (\g f -> parseMaf (nrss_chroms ref) g . decomp =<< L.readFile f)
+                 emptyGenome maffs
 
 
 opts_patch :: [ OptDescr (ConfImportGen -> IO ConfImportGen) ]
@@ -219,10 +217,10 @@ main_patch args = do
     withFile conf_imp_output WriteMode $ \hdl ->
         patchFasta hdl conf_imp_width (nrss_chroms ref) (nrss_seqs ref) pat
 
-
-main_debmaf :: [String] -> IO ()
-main_debmaf [maff] = debugLump . ($ Fix Done) . parseMaf . decomp =<< L.readFile maff
-main_debmaf      _ = hPutStrLn stderr $ "Usage: debmaf [ref.2bit] [smp.hetfa]"
+-- XXX  B0rk3d.
+-- main_debmaf :: [String] -> IO ()
+-- main_debmaf [maff] = debugLump . ($ Fix Done) . parseMaf . decomp =<< L.readFile maff
+-- main_debmaf      _ = hPutStrLn stderr $ "Usage: debmaf [ref.2bit] [smp.hetfa]"
 
 -- This is broken.  Have to do it differently, maybe match the
 -- incoming chromosomes against the reference, print the index, dump
