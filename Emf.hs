@@ -56,12 +56,38 @@ newtype Genome = Genome (I.IntMap (I.IntMap (Int, PackedLump)))
 emptyGenome :: Genome
 emptyGenome = Genome I.empty
 
-insertGenome :: Genome -> Int -> Int -> Int -> PackedLump -> Genome
-insertGenome (Genome m1) !c !p !l !s = Genome m1'
+insertGenome :: Genome -> Int -> Int -> Int -> PackedLump -> (String, Genome)
+insertGenome (Genome m1) !c !p !l !s = ( warning, Genome m1' )
   where
     !m2 = I.findWithDefault I.empty c m1
     !m2' = I.insert p (l,s) m2
     !m1' = I.insert c m2' m1
+
+    warning = case I.splitLookup p m2 of
+        (_, Just (l',s'), _)
+            | l == l' && unpackLump s == unpackLump s'
+                -> "\27[32;1mduplication at " ++ shows c ":" ++ shows p "\27[0m"
+            | otherwise
+                -> "\27[33;1mcollision at " ++ shows c ":" ++ shows p
+                    " with different " ++
+                    (if l == l' then "sequences" else "blocks") ++ "\27[0m"
+
+        (lm, _, rm) -> case (I.maxViewWithKey lm, I.minViewWithKey rm) of
+
+            (Just ((p1, (l1, _)), _), _)
+                | p1 + l1 > p
+                    -> overlap p1 (p1+l1) p (p+l)
+
+            (_, Just ((p2, (l2, _)), _))
+                | p + l > p2
+                    -> overlap p (p+l) p2 (p2+l2)
+
+            _ -> ""
+
+    overlap u1 v1 u2 v2
+        = "\27[31;1moverlap between " ++ shows c ":" ++ shows u1 "-" ++ shows v1
+          " and " ++ shows c ":" ++ shows u2 "-" ++ shows v2 "\27[0m"
+
 
 -- | To parse MAF, we shouldn't need a reference, and in fact we don't
 -- look at the reference sequence at all.  We use the reference only to
@@ -89,7 +115,7 @@ parseMaf chrs gnm0 inp = doParse gnm0 $ C.lines inp
             , Just hchr <- findIndex (C.toStrict hchr_ ==) chrs
                 -> do let (ref', smp') = L.unzip $ filter ((/=) 45 . fst) $ L.zip hum_seq oth_seq
                       plump :> _ <- encodeLumpToMem $ diff' ref' (fromLazy smp')
-                      doParse (insertGenome gnm hchr hpos (fromIntegral $ C.length ref') plump) lns'
+                      doParse (snd $ insertGenome gnm hchr hpos (fromIntegral $ C.length ref') plump) lns'
 
         ls -> error $ "WTF?! near \n" ++ C.unpack (C.unlines $ take 3 ls)
 
@@ -104,8 +130,12 @@ encodeGenome (Genome m1)
     encodeChr m2 = I.foldrWithKey step (const L.empty) m2 0
 
     step :: Int -> (Int, PackedLump) -> (Int -> L.ByteString) -> Int -> L.ByteString
-    step start (len, PackLump lump) k pos =
-            lots_of_Ns (start - pos) <> lump <> k (start+len)
+    step start (len, PackLump lump) k pos
+        -- Could we get duplicated or overlapping blocks?  We won't deal
+        -- with them properly, but we skip them just in case to get
+        -- correct output.
+        | start >= pos = lots_of_Ns (start - pos) <> lump <> k (start+len)
+        | otherwise    =                                     k start
 
     -- Argh, this wasn't supposed to be repeated here, but it's the most
     -- straight forward way to do it.
@@ -133,6 +163,7 @@ data EmfBlock = EmfBlock { emf_tree :: Tree Label
                          , emf_seqs :: [B.ByteString] }
     deriving Show
 
+-- XXX Would be so cool if this could stream.
 scanOneBlock :: [B.ByteString] -> ( EmfBlock, [B.ByteString] )
 scanOneBlock inp = ( EmfBlock tree seqs, drop 1 remainder )
   where
@@ -244,14 +275,30 @@ tree_has s (Branch u' v' _) = tree_has s u' ++ tree_has s v'
 collectTrees :: [B.ByteString] -> ( Tree Label -> [(Label, [Label])] ) -> Genome -> EmfBlock -> IO Genome
 collectTrees chrs select genome block
     = foldlM (\g f -> f g) genome
-            [ \g -> do plump :> _ <- encodeLumpToMem $ diff' ref_seq (fromStrict smp_seq)
-                       hPrint stderr (r_seq rref, r_pos rref, L.length (unpackLump plump))
-                       return $! insertGenome g ref_idx (r_pos rref) (r_length rref) plump
-            | (Label iref _ rref, tgt_lbls) <- select $ emf_tree block
-            , ref_idx <- maybeToList $ findIndex (r_seq rref ==) chrs
-            , let ref_seq = L.fromStrict $ emf_seqs block !! iref
-            , let smp_seq = consensus_seq
-                      [ emf_seqs block !! itgt | Label itgt _ _ <- tgt_lbls ] ]
+            [ \g -> do plump :> _ <- encodeLumpToMem $ diff' (L.fromStrict ref_seq) (fromStrict smp_seq)
+                       let (w,g') = insertGenome g ref_idx (r_pos rref) (r_length rref) plump
+                       hPutStrLn stderr $ "Inserted " ++ shows ref_idx ":" ++
+                            shows (r_pos rref) "-" ++ shows (r_pos rref + r_length rref) ", " ++
+                            shows (L.length (unpackLump plump)) " bytes."
+                       unless (null w) $ hPutStrLn stderr $ "Warning: " ++ w
+                       return $! g'
+            | (Label iref _ rref_, tgt_lbls) <- select $ emf_tree block
+            , ref_idx <- maybeToList $ findIndex (r_seq rref_ ==) chrs
+            , let ref_seq_ = emf_seqs block !! iref
+            , let smp_seq_ = consensus_seq
+                      [ emf_seqs block !! itgt | Label itgt _ _ <- tgt_lbls ]
+            , let (rref, ref_seq, smp_seq) =
+                    if r_pos rref_ >= 0
+                    then (             rref_,          ref_seq_,          smp_seq_)
+                    else (reverseRange rref_, revcompl ref_seq_, revcompl smp_seq_) ]
+  where
+    revcompl :: B.ByteString -> B.ByteString
+    revcompl = B.reverse . B.map compl
+
+    compl 'A' = 'T' ; compl 'T' = 'A' ; compl 'a' = 't' ; compl 't' = 'a'
+    compl 'C' = 'G' ; compl 'G' = 'C' ; compl 'c' = 'g' ; compl 'g' = 'c'
+    compl  x  =  x
+
 
 
 consensus_seq :: [B.ByteString] -> B.ByteString
