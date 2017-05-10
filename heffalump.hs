@@ -10,13 +10,12 @@ import System.IO
 import qualified Data.ByteString.Builder         as B
 import qualified Data.ByteString.Char8           as B
 import qualified Data.ByteString.Lazy.Char8      as L
+import qualified Data.ByteString.Streaming       as S
 import qualified Data.IntMap                     as I
 import qualified Data.Vector                     as V
 import qualified Data.Vector.Unboxed             as U
-import qualified Data.ByteString.Streaming as S
 
 import Bamin
-import Bcf
 import Eigenstrat
 import Emf
 import Lump
@@ -25,7 +24,7 @@ import SillyStats
 import Stretch ( main_dumppatch )
 import Treemix
 import Util
-import VcfScan
+import Vcf
 
 main :: IO ()
 main = do
@@ -56,10 +55,8 @@ main = do
         , z "kayvergence" main_kayvergence        "Compute Kayvergence ratios"
         , z "dstatistics" main_patterson          "Compute Patterson's D"
         , z "yaddayadda"  main_yaddayadda         "Compute Yadda-yadda-counts"
-        , z "bcfhc"   (main_bcf "bcfhc" id)       "Import high coverage bcf (diploid)"
-        , z "bcflc"   (main_bcf "bcflc" make_hap) "Import low coverage bcf (haploid)"
-        , z "vcfhc"   (main_vcf "vcfhc" id)       "Import high coverage vcf (diploid)"
-        , z "vcflc"   (main_vcf "vcflc" make_hap) "Import low coverage vcf (haploid)"
+        , z "bcfin"      (main_xcf conf_bcf)      "Import BCF"
+        , z "vcfin"      (main_xcf conf_vcf)      "Import VCF"
         , z "debhetfa"    main_debhetfa           "(debugging aid)"
         -- , z "debmaf"      main_debmaf             "(debugging aid)"
         , z "dumppatch"   main_dumppatch          "(debugging aid)"
@@ -340,38 +337,6 @@ main_vcfout args = do
                      , "\t0/1" ]    -- 15, 3xref+3xalt (whatever)
 
 
-main_vcf :: String -> (Fix Lump -> Fix Lump) -> [String] -> IO ()
-main_vcf = main_xcf "vcf" readVcf
-
-main_bcf :: String -> (Fix Lump -> Fix Lump) -> [String] -> IO ()
-main_bcf = main_xcf "bcf" readBcf
-
-main_xcf :: String -> (FilePath -> IO [RawVariant]) -> String -> (Fix Lump -> Fix Lump) -> [String] -> IO ()
-main_xcf ext reader key trans args = do
-    ( vcfs, (conf_output, conf_ref) ) <- parseOpts True (error "no output file specified")
-                                                   (mk_opts key ("["++ext++"-file...]") opts_maf) args
-    ref <- readTwoBit conf_ref
-    withFile conf_output WriteMode $ \hdl ->
-        hPutBuilder hdl . encode ref
-        . trans . importVcf (nrss_chroms ref)
-        . progress conf_output . dedupVcf . cleanVcf
-        . concat =<< mapM reader vcfs
-  where
-    progress :: String -> [RawVariant] -> [RawVariant]
-    progress fp = go 0 0
-      where
-        go  _  _ [    ] = []
-        go rs po (v:vs)
-            | rs /= rv_chrom v || po + 10000000 <= rv_pos v
-                = unsafePerformIO $ do
-                    hPutStrLn stderr $ fp ++ "@" ++ show (rv_chrom v) ++ ":" ++ show (rv_pos v)
-                    return $ v : go (rv_chrom v) (rv_pos v) vs
-            | otherwise =  v : go rs po vs
-
--- Lowers all calls to haploid.
-make_hap :: Fix Lump -> Fix Lump
-make_hap = id
-
 patchFasta :: Handle -> Int64 -> [B.ByteString] -> [() -> NewRefSeq] -> Fix Lump -> IO ()
 patchFasta hdl wd = p1
   where
@@ -404,98 +369,4 @@ patchFasta hdl wd = p1
 --
 -- Note that we turn small letters into capital letters in the
 -- sequences.  Saves us from dealing with them later.
-
--- We also have two use cases:  dense files (more important), where
--- missing parts are considered "no call", and sparse files (less
--- important), where missing parts are considered "matches".
-
--- We start the coordinate at one(!), for VCF is one-based.
--- Pseudo-variants of the "no call" type must be filtered beforehand,
--- see 'cleanVcf'.
-importVcf :: [ B.ByteString ] -> [ RawVariant ] -> Fix Lump
-importVcf = (.) normalizeLump . go
-  where
-    go [    ] = const $ Fix $ Break $ Fix Done
-    go (c:cs) = generic (hashChrom c) 1
-      where
-        generic !_    _ [         ] = Fix $ Break $ Fix $ Done
-        generic !hs pos (var1:vars)
-            | hs /= rv_chrom var1   = Fix $ Break $ go cs (var1:vars)
-
-            -- long gap, creates Ns
-            | rv_pos var1 > pos     = Fix $ Ns (rv_pos var1 - pos) $ generic hs (rv_pos var1) (var1:vars)
-
-            -- positions must match now
-            | rv_pos var1 == pos =
-                        if isVar var1
-                          then Fix $ get_var_code var1 $ generic hs (succ pos) vars
-                          else Fix $ Eqs2 1 $ generic hs (succ pos) vars
-
-            | otherwise = error $ "Got variant position " ++ show (rv_pos var1)
-                               ++ " when expecting " ++ show pos ++ " or higher."
-
-    -- *sigh*  Have to turn a numeric genotype into a 'NucCode'.  We
-    -- have characters for the variants, and we need to map a pair of
-    -- them to a code.
-    get_var_code RawVariant{..}
-        | B.any (== 'N') rv_vars || B.null rv_vars = Ns 1
-
-        -- haploid call or one allele missing
-        | rv_gt .&. 0xFF00 == 0xFF00 || rv_gt .&. 0xFF00 == 0x0000 =
-                encTwoVars $ 16 + (char_to_2b c1 `xor` char_to_2b n0)
-
-        -- diploid call; one called allele must be the reference
-        | otherwise = encTwoVars $ (char_to_2b c1 `xor` char_to_2b n0)
-                                 + (char_to_2b c2 `xor` char_to_2b n0) * 4
-
-        -- diploid call, but unrepresentable
-        | otherwise = Ns 1
-      where
-        v1 = fromIntegral $ rv_gt            .&. 0x00FE - 2
-        v2 = fromIntegral $ rv_gt `shiftR` 8 .&. 0x00FE - 2
-
-        n0 = toUpper $ B.head rv_vars
-        c1 = toUpper $ safeIndex "c1" rv_vars v1
-        c2 = toUpper $ safeIndex ("c2 "++shows rv_pos " " ++ showHex rv_gt " ") rv_vars v2
-
-    safeIndex m s i | B.length s > i = B.index s i
-                    | otherwise = error $ "Attempted to index " ++ shows i " in " ++ shows s " (" ++ m ++ ")."
-
-    char_to_2b 'T' =  0
-    char_to_2b 'A' =  1
-    char_to_2b 'C' =  2
-    char_to_2b 'G' =  3
-    char_to_2b  c  = error $ "What's a " ++ shows c "?"
-
-    isVar RawVariant{..} | rv_gt == 0xFF02            = False     -- "0"
-                         | rv_gt .&. 0xFCFE == 0x0002 = False     -- "0|.", "0/.", "0|0", "0/0"
-                         | otherwise                  = True
-
--- | Remove indel variants, since we can't very well use them.  Also
--- removes "no call" variants, which are equivalent to missing entries.
-cleanVcf :: [ RawVariant ] -> [ RawVariant ]
-cleanVcf = filter $ \RawVariant{..} ->
-    B.length rv_vars  == B.length (B.filter (== ',') rv_vars) * 2 + 1
-    && rv_gt /= 0x0000 && rv_gt /= 0xff00
-
--- | Some idiot decided to output multiple records for the same position
--- into some VCF files.  If we hit that, we take the first.  (Einmal mit
--- Profis arbeiten!)
-dedupVcf :: [ RawVariant ] -> [ RawVariant ]
-dedupVcf (v1:v2:vs)
-    | rv_chrom v1 == rv_chrom v2 && rv_pos v1 == rv_pos v2  =      dedupVcf (v1:vs)
-    | otherwise                                             = v1 : dedupVcf (v2:vs)
-dedupVcf [v1] = [v1]
-dedupVcf [  ] = [  ]
-
--- Reads a VCF file and returns 'RawVariant's, which is not exactly
--- practical.
-readVcf :: FilePath -> IO [ RawVariant ]
-readVcf fp = do
-    sc <- initVcf fp
-    fix $ \self -> unsafeInterleaveIO $ do
-        mv <- getVariant sc
-        case mv of
-            Nothing -> return []
-            Just  v -> (:) v <$> self
 

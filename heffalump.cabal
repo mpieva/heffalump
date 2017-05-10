@@ -12,7 +12,7 @@ Extra-Source-Files:  man/man1/heffalump.1
 executable heffalump
   main-is:             heffalump.hs
   other-modules:       Bamin,
-                       Bcf,
+                       BcfScan,
                        Eigenstrat,
                        Emf,
                        Lump,
@@ -24,6 +24,7 @@ executable heffalump
                        Streaming.Zlib,
                        Stretch,
                        Util,
+                       Vcf,
                        VcfScan
 
   build-depends:       attoparsec,

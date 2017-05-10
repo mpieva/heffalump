@@ -1,8 +1,8 @@
 - test/debug the EMF importer 
 - test/debug the MAF importer 
+- test/debug the VCF/BCF parser
 
-- fix the VCF/BCF parser:  we have low-coverage vs high-coverage and
-  low-density vs high-density files
+- switch XCF parser to streaming
 
 - import from multi-MAF 
   - could create multiple heffalumps, implies a switch to "streaming"

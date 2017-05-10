@@ -215,6 +215,38 @@ normalizeLump' = unfold (inspect >=> either (return . Left) go)
 
     go lump = return $ Right lump
 
+-- | Lowers all calls to haploid.  (Not sure
+-- if this is really a good idea anymore...)
+make_hap :: Monad m => Stream Lump m r -> Stream Lump m r
+make_hap = maps step
+  where
+    step (Ns    n a) = Ns    n a
+    step (Eqs1  n a) = Eqs1  n a
+    step (Eqs2  n a) = Eqs1  n a
+    step (Trans1  a) = Trans1  a
+    step (Trans2  a) = Trans1  a
+    step (Compl1  a) = Compl1  a
+    step (Compl2  a) = Compl1  a
+    step (TCompl1 a) = TCompl1 a
+    step (TCompl2 a) = TCompl1 a
+
+    step (RefTrans    a) = RefTrans    a
+    step (RefCompl    a) = RefCompl    a
+    step (TransCompl  a) = TransCompl  a
+    step (RefTCompl   a) = RefTCompl   a
+    step (TransTCompl a) = TransTCompl a
+    step (ComplTCompl a) = ComplTCompl a
+
+    step (Del1 n a) = Del1 n a
+    step (Del2 n a) = Del1 n a
+    step (DelH n a) = DelH n a
+
+    step (Ins1 s a) = Ins1 s a
+    step (Ins2 s a) = Ins1 s a
+    step (InsH s a) = InsH s a
+
+    step (Break  a) = Break  a
+
 
 newtype PackedLump = PackLump { unpackLump :: L.ByteString }
 

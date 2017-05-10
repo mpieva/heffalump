@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings, RecordWildCards #-}
-module Bcf ( readBcf, decodeBcf ) where
+module BcfScan ( readBcf, decodeBcf ) where
 
 -- Minimalistic BCF reader.  We only care about the genotype of the
 -- first individual.  Should allow for a handful of shortcuts...
