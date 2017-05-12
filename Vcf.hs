@@ -23,6 +23,7 @@ data ConfXcf = ConfXcf
     { conf_output  :: FilePath
     , conf_ref     :: FilePath
     , conf_density :: GapCons
+    , conf_clean   :: [ RawVariant ] -> [ RawVariant ]
     , conf_ploidy  :: LumpXform
     , conf_key     :: String
     , conf_ext     :: String
@@ -31,7 +32,8 @@ data ConfXcf = ConfXcf
 conf_vcf :: ConfXcf
 conf_vcf = ConfXcf (error "no output file specified")
                    (error "no reference specified")
-                   Ns id "vcfin" "vcf" readVcf
+                   (error "specify either --dense or --sparse")
+                   id id "vcfin" "vcf" readVcf
 
 conf_bcf :: ConfXcf
 conf_bcf = conf_vcf { conf_key = "bcfin", conf_ext = "bcf", conf_reader = readBcf }
@@ -49,8 +51,8 @@ opts_xcf =
     set_output a c = return $ c { conf_output  = a }
     set_ref    a c = return $ c { conf_ref     = a }
 
-    set_dense    c = return $ c { conf_density = Ns       }
-    set_sparse   c = return $ c { conf_density = Eqs2     }
+    set_dense    c = return $ c { conf_density = Ns,   conf_clean = cleanMissing }
+    set_sparse   c = return $ c { conf_density = Eqs2, conf_clean = id           }
     set_low      c = return $ c { conf_ploidy  = make_hap }
     set_high     c = return $ c { conf_ploidy  = id       }
 
@@ -62,9 +64,9 @@ main_xcf conf0 args = do
                              in parseOpts True conf0 opts args
     ref <- readTwoBit conf_ref
     withFile conf_output WriteMode $ \hdl ->
-        S.hPut hdl . encodeLump' . conf_ploidy
+        S.hPut hdl . encode' ref . conf_ploidy
         . importVcf conf_density (nrss_chroms ref)
-        . progress conf_output . dedupVcf . cleanVcf
+        . progress conf_output . dedupVcf . conf_clean . cleanVcf
         . concat =<< mapM conf_reader vcfs
   where
     progress :: String -> [RawVariant] -> [RawVariant]
@@ -82,18 +84,22 @@ main_xcf conf0 args = do
 -- into some VCF files.  If we hit that, we take the first.  (Einmal mit
 -- Profis arbeiten!)
 dedupVcf :: [ RawVariant ] -> [ RawVariant ]
+dedupVcf [  ] = [  ]
+dedupVcf [v1] = [v1]
 dedupVcf (v1:v2:vs)
     | rv_chrom v1 == rv_chrom v2 && rv_pos v1 == rv_pos v2  =      dedupVcf (v1:vs)
     | otherwise                                             = v1 : dedupVcf (v2:vs)
-dedupVcf [v1] = [v1]
-dedupVcf [  ] = [  ]
 
--- | Remove indel variants, since we can't very well use them.  Also
--- removes "no call" variants, which are equivalent to missing entries.
+-- | Remove indel variants, since we can't very well use them.
 cleanVcf :: [ RawVariant ] -> [ RawVariant ]
 cleanVcf = filter $ \RawVariant{..} ->
     B.length rv_vars  == B.length (B.filter (== ',') rv_vars) * 2 + 1
-    && rv_gt /= 0x0000 && rv_gt /= 0xff00
+
+-- | Removes "no call" variants.  When reading dense files, they are
+-- equivalent to missing entries.
+cleanMissing :: [ RawVariant ] -> [ RawVariant ]
+cleanMissing = filter $ \RawVariant{..} ->
+    rv_gt /= 0x0000 && rv_gt /= 0xff00
 
 -- Reads a VCF file and returns 'RawVariant's, which is not exactly
 -- practical.
@@ -138,6 +144,9 @@ importVcf ns = (.) normalizeLump' . go
     get_var_code RawVariant{..}
         | B.any (== 'N') rv_vars || B.null rv_vars = Ns 1
 
+        -- missing call
+        | rv_gt == 0xFF00 || rv_gt == 0x0000 = Ns 1
+
         -- haploid call or one allele missing
         | rv_gt .&. 0xFF00 == 0xFF00 || rv_gt .&. 0xFF00 == 0x0000 =
                 encTwoVars $ 16 + (char_to_2b c1 `xor` char_to_2b n0)
@@ -160,8 +169,8 @@ importVcf ns = (.) normalizeLump' . go
                     | otherwise = error $ "Attempted to index " ++ shows i " in " ++ shows s " (" ++ m ++ ")."
 
     char_to_2b 'T' =  0
-    char_to_2b 'A' =  1
-    char_to_2b 'C' =  2
+    char_to_2b 'C' =  1
+    char_to_2b 'A' =  2
     char_to_2b 'G' =  3
     char_to_2b  c  = error $ "What's a " ++ shows c "?"
 

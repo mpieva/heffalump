@@ -144,7 +144,7 @@ int scan_vcf1( struct scanner *sc )
                         uint8_t g = 0 ;
                         while (*p >= '0' && *p <= '9') {
                             g = 10*g + *p - '0' ;
-                            inc() ; 
+                            inc() ;
                         }
                         *pgts++ = ((g+1) << 1) | ph ;
                     }

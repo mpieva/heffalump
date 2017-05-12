@@ -733,20 +733,30 @@ stretchToLump nrs = normalizeLump . go1 (nrss_seqs nrs)
 -- the old format, we need a reference, and we have to trust it's a
 -- compatible one.  "HEF\2" is the new format.  If a reference is given,
 -- we check if we can use it.
+--
+-- We try to support legacy files.  These could start with anything, but
+-- in practice start with either (Ns 5000) or (Ns 5001).  Anything else
+-- is rejected as unknown junk.
 decode :: Either String NewRefSeqs -> L.ByteString -> Fix Lump
 decode (Left err)  str | "HEF\3" `L.isPrefixOf` str = decodeLump . L.drop 5 $ L.dropWhile (/= 0) str
                        | otherwise                  = error err
 
-decode (Right  r) str | "HEF\0" `L.isPrefixOf` str = stretchToLump r $ decode_dip (L.drop 4 str)
-                      | "HEF\1" `L.isPrefixOf` str = stretchToLump r $ decode_hap (L.drop 4 str)
-                      | "HEF\3" `L.isPrefixOf` str = go (L.drop 4 str)
-                      | otherwise                  = stretchToLump r $ decode_dip (L.drop 4 str) -- error "Format not recognized?"
+decode (Right  r) str | "HEF\0"  `L.isPrefixOf` str = stretchToLump r $ decode_dip (L.drop 4 str)
+                      | "HEF\1"  `L.isPrefixOf` str = stretchToLump r $ decode_hap (L.drop 4 str)
+                      | "HEF\3"  `L.isPrefixOf` str = go (L.drop 4 str)
+                      | 176:113:2:_ <- L.unpack str = stretchToLump r $ decode_dip str
+                      | 177:113:2:_ <- L.unpack str = stretchToLump r $ decode_dip str
+                      | otherwise                   = error "File format not recognized?"
   where
     go s = let (hs,s') = L.splitAt 4 . L.drop 1 . L.dropWhile (/= 0) $ s
                hv = L.foldr (\b a -> fromIntegral b .|. shiftL a 8) 0 hs
            in if hv == 0xFFFFFFFF .&. hash (nrss_chroms r, nrss_lengths r)
               then decodeLump s'
               else error "Incompatible reference genome."
+
+
+
+
 
 getRefPath :: L.ByteString -> Maybe FilePath
 getRefPath str | "HEF\3" `L.isPrefixOf` str = Just . C.unpack . L.takeWhile (/= 0) $ L.drop 4 str
@@ -772,6 +782,10 @@ decodeMany mrs fs = do
 -- when operating on a 'Lump'.
 encode :: NewRefSeqs -> Fix Lump -> Builder
 encode r s = encodeHeader r <> encodeLump s
+
+encode' :: MonadIO m => NewRefSeqs -> Stream Lump m r -> S.ByteString m r
+encode' r s = do S.toStreamingByteString (encodeHeader r)
+                 encodeLump' s
 
 encodeHeader :: NewRefSeqs -> Builder
 encodeHeader r = byteString "HEF\3" <>

@@ -48,10 +48,16 @@ debugStretch' c i (Chrs x y s) = do putStrLn $ shows (c,i) "\tChrs " ++ [tr x,' 
 -- | Main decoder.  Switches behavior based on header.
 {-# DEPRECATED decode "Switch to Lumps" #-}
 decode :: L.ByteString -> Stretch
-decode str | "HEF\0" `L.isPrefixOf` str = decode_dip (L.drop 4 str)
-           | "HEF\1" `L.isPrefixOf` str = decode_hap (L.drop 4 str)
-           | "HEF\3" `L.isPrefixOf` str = error "I can't handle this new format."
-           | otherwise                  = decode_dip (L.drop 4 str) -- error "Format not recognixed."
+decode str | "HEF\0"   `L.isPrefixOf` str = decode_dip (L.drop 4 str)
+           | "HEF\1"   `L.isPrefixOf` str = decode_hap (L.drop 4 str)
+           | "HEF\3"   `L.isPrefixOf` str = error "I can't handle this new format."
+
+           -- legacy files (could start with anything, but
+           -- in practice start with (Ns 5000) or (Ns 5001)
+           | 176:113:2:_ <- LB.unpack str = decode_dip str
+           | 177:113:2:_ <- LB.unpack str = decode_dip str
+
+           | otherwise                    = error "File format not recognixed."
 
 {-# DEPRECATED encode_dip "Switch to Lumps" #-}
 encode_dip :: Stretch -> Builder

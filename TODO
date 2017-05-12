@@ -1,6 +1,5 @@
 - test/debug the EMF importer 
 - test/debug the MAF importer 
-- test/debug the VCF/BCF parser
 
 - switch XCF parser to streaming
 
