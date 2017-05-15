@@ -173,23 +173,38 @@ importHetfa' ref smps = S.mwrap $ do -- ?!
                           liftIO $ hPrint stderr (i, L.length $ unpackLump lump)
                           fold_1 (I.insert i lump acc) s'
 
+data ConfMaf = ConfMaf
+    { conf_maf_output :: FilePath
+    , conf_maf_reference :: FilePath
+    , conf_maf_ref_species :: B.ByteString
+    , conf_maf_oth_species :: B.ByteString }
 
-opts_maf :: [ OptDescr ( (FilePath,FilePath) -> IO (FilePath,FilePath) ) ]
+opts_maf :: [ OptDescr ( ConfMaf -> IO ConfMaf ) ]
 opts_maf =
-    [ Option "o" ["output"] (ReqArg set_output "FILE") "Write output to FILE (.hef)"
-    , Option "r" ["reference"] (ReqArg set_ref "FILE") "Read reference from FILE (.2bit)" ]
+    [ Option "o" ["output"]     (ReqArg set_output "FILE") "Write output to FILE (.hef)"
+    , Option "r" ["reference"]     (ReqArg set_ref "FILE") "Read reference from FILE (.2bit)"
+    , Option "R" ["ref-species"]  (ReqArg set_from "NAME") "Set reference species to NAME"
+    , Option "S" ["sample-species"] (ReqArg set_to "NAME") "Set sample species to NAME" ]
   where
-    set_output a (_,b) = return (a,b)
-    set_ref    b (a,_) = return (a,b)
+    set_output a c = return $ c { conf_maf_output = a }
+    set_ref    a c = return $ c { conf_maf_reference = a }
+    set_from   a c = return $ c { conf_maf_ref_species = fromString a }
+    set_to     a c = return $ c { conf_maf_oth_species = fromString a }
+
+conf_maf :: ConfMaf
+conf_maf = ConfMaf (error "no output file specified")
+                   (error "no reference specified")
+                   (error "no reference species specified")
+                   (error "no sample species specified")
 
 main_maf :: [String] -> IO ()
 main_maf args = do
-    ( maffs, (conf_output, conf_ref) ) <- parseOpts True (error "no output file specified")
-                                             (mk_opts "maf" "[maf-file...]" opts_maf) args
-    ref <- readTwoBit conf_ref
-    withFile conf_output WriteMode $ \hdl ->
+    (maffs,ConfMaf{..}) <- parseOpts True conf_maf (mk_opts "maf" "[maf-file...]" opts_maf) args
+    ref <- readTwoBit conf_maf_reference
+    withFile conf_maf_output WriteMode $ \hdl ->
         L.hPut hdl . encodeGenome =<<
-           foldM (\g f -> parseMaf (nrss_chroms ref) g . decomp =<< L.readFile f)
+           foldM (\g f -> parseMaf (conf_maf_ref_species, conf_maf_oth_species)
+                                   (nrss_chroms ref) g . decomp =<< L.readFile f)
                  emptyGenome maffs
 
 

@@ -1,11 +1,4 @@
-- test/debug the EMF importer 
-- test/debug the MAF importer 
-
 - switch XCF parser to streaming
-
-- import from multi-MAF 
-  - could create multiple heffalumps, implies a switch to "streaming"
-  - or allow selection of one species
 
 - Bamin should check compatibility of reference (extra reference
   sequences in the Bam file would be silently ignored, extra sequences
@@ -20,8 +13,10 @@
 
 - C-library for reading and merging
 
+- better import from multi-MAF: could create multiple heffalumps in one
+  go, but that implies a switch to "streaming"
+
 - Maybe allow Bamin with multiple sampling schemes in parallel?  This
   implies a complete switch to streaming.  It's only interesting for
   silly tests, though.
-
 

@@ -13,13 +13,11 @@ module Emf where
 -- also the ancestor of the chimp!)  Multiple columns can correspond to
 -- the same species, and we only call variants for a given species if at
 -- least one column maps to it and all such columns agree.
---
--- XXX  Did I fuck the reverse-complementing up?  Looks like it...
 
 
 import BasePrelude
 import Codec.Compression.GZip
-import Data.ByteString.Streaming        ( fromLazy, fromStrict )
+import Data.ByteString.Streaming        ( fromLazy )
 import Streaming
 import System.Console.GetOpt
 import System.Directory                 ( getDirectoryContents )
@@ -36,15 +34,6 @@ import Lump
 import NewRef
 import Util
 
--- Read MAF.  We discard the header lines starting with '#'.  The rest
--- must be alignment blocks.  Each a-block must contain its own header
--- line and exactly two s-lines.  The first line must have human
--- coordinates, and the file must be sorted by human coordinates.   We
--- ignore the chromosome name.
---
--- XXX  Ultimately, this needs to be both more flexible and
--- configurable.
-
 -- | We get disjointed blocks, and they are not guaranteed to be in order.
 -- (There is an important use case where they are guaranteed to be
 -- jumbled.)  So we need an intermediate, compact representation of the
@@ -55,6 +44,14 @@ newtype Genome = Genome (I.IntMap (I.IntMap (Int, PackedLump)))
 
 emptyGenome :: Genome
 emptyGenome = Genome I.empty
+
+-- | Inserts an encoded block into a genome.  Blocks are checked for
+-- unexpected overlaps and warnings are printed.  In MAF files generated
+-- in an unspecified manner from EMF files, I get lots of strange
+-- overlaps.  They are "fixed" by ignoring the offending blocks.  If
+-- this happens, live with the damage or fix your input files.  In
+-- contrast, reading the same EMF files directly, I only get warnings
+-- about duplicated blocks.
 
 insertGenome :: Genome -> Int -> Int -> Int -> PackedLump -> (String, Genome)
 insertGenome (Genome m1) !c !p !l !s = ( warning, Genome m1' )
@@ -91,33 +88,68 @@ insertGenome (Genome m1) !c !p !l !s = ( warning, Genome m1' )
 
 -- | To parse MAF, we shouldn't need a reference, and in fact we don't
 -- look at the reference sequence at all.  We use the reference only to
--- map chromsome names to indices.
+-- map chromsome names to indices.  (We allow UCSC-style names to match
+-- NCBI-style names.  This happens all the time for the human genome.)
 --
--- XXX  We have to deal with gaps.  Gaps in the reference can simply be
--- removed.  If the sample is gapped, we want to encode an N.
--- Thankfully, that's precisely what diff already does when it sees a
--- gap.  Ultimately, it would be more healthy to encode gaps properly,
--- but the appropriate diff algorithm isn't here yet.
+-- | Reads MAF.  We discard the header lines starting with '#'.  The
+-- rest must be blocks.  Each block must begin with an "a" line and
+-- extends to the next empty line.  The "s" lines in the blocks are
+-- scanned for the two expected species, the coordinates are extracted
+-- from the line for the reference sequence.  Encoded blocks are
+-- accumulated in memory and finally emitted in the correct order.
+-- Chromosome names are mapped to target indices according to the
+-- reference genome.
 --
 -- XXX  Could (should?) use a streaming bytestring.
 
-parseMaf :: [B.ByteString] -> Genome -> L.ByteString -> IO Genome
-parseMaf chrs gnm0 inp = doParse gnm0 $ C.lines inp
+parseMaf :: (B.ByteString, B.ByteString) -> [B.ByteString] -> Genome -> L.ByteString -> IO Genome
+parseMaf (from_spc, to_spc) chrs gnm0 inp = doParse gnm0 $ C.lines inp
   where
     doParse :: Genome -> [C.ByteString] -> IO Genome
     doParse gnm lns = case dropWhile (\l -> C.null l || C.all isSpace l || C.head l == '#') lns of
-        [] -> return gnm
-        (ahdr:shum:sother:lns')
-            | "a " `C.isPrefixOf` ahdr
-            , ["s", hchr_, hpos_, _hlen, "+",  _clen, hum_seq] <- C.words shum
-            , ["s", _, _opos, _olen,   _, _oclen, oth_seq] <- C.words sother
-            , Just (hpos, "") <- C.readInt hpos_
-            , Just hchr <- findIndex (C.toStrict hchr_ ==) chrs
-                -> do let (ref', smp') = L.unzip $ filter ((/=) 45 . fst) $ L.zip hum_seq oth_seq
-                      plump :> _ <- encodeLumpToMem $ diff' ref' (fromLazy smp')
-                      doParse (snd $ insertGenome gnm hchr hpos (fromIntegral $ C.length ref') plump) lns'
+        [         ]                         -> return gnm
+        (ahdr:lns') | "a":_ <- C.words ahdr -> do
+            let (slns,lns'') = span (not . C.all isSpace) lns'
+            gnm' <- foldl (>>=) (return gnm) $ do
+                        ( [from_chr], from_pos, from_len, from_rev, from_seq ) <- extract from_spc slns
+                        ( _to_chr,   _to_pos,  _to_len,  _to_rev,     to_seq ) <- extract to_spc   slns
+                        let (ref', smp') = L.unzip $ filter ((/=) 45 . fst) $ L.zip from_seq to_seq
 
+                        return $ \g -> do
+                            hPrintf stderr "%d:%d-%d\n" from_chr from_pos (from_pos+from_len)
+                            insert1 g from_rev from_chr from_pos from_len ref' smp'
+
+            doParse gnm' lns''
         ls -> error $ "WTF?! near \n" ++ C.unpack (C.unlines $ take 3 ls)
+
+
+    insert1 :: Genome -> Bool -> Int -> Int -> Int -> L.ByteString -> L.ByteString -> IO Genome
+    insert1 g False chrm pos len ref smp = do
+            plump :> _ <- encodeLumpToMem $ diff' ref (fromLazy smp)
+            let (w,g') = insertGenome g chrm pos len plump
+            unless (null w) $ hPutStrLn stderr w
+            return g'
+
+    insert1 g True chrm pos len ref smp = do
+            plump :> _ <- encodeLumpToMem $ diff' (revcompl ref) (fromLazy $ revcompl smp)
+            let (w,g') = insertGenome g chrm (pos-len+1) len plump
+            unless (null w) $ hPutStrLn stderr w
+            return g'
+
+
+    extract :: B.ByteString -> [C.ByteString] -> [( [Int], Int, Int, Bool, C.ByteString )]
+    extract spc lns =
+        [ ( chrom, pos, len, rev, seq_ )
+        | sln <- lns
+        , "s":name:pos_:len_:str_:_olen:seq_:_ <- [ C.words sln ]
+        , C.fromChunks [ spc, "." ] `C.isPrefixOf` name || C.fromChunks [ spc ] == name
+        , let chr_ = C.drop (fromIntegral $ B.length spc + 1) name
+        , let chrom = take 1 $ findIndices ((==) chr_ . C.fromStrict) chrs
+                            ++ findIndices ((==) chr_ . (<>) "chr" . C.fromStrict) chrs
+                            ++ if chr_ == "chrM" then findIndices ((==) "MT") chrs else []
+        , (pos, "") <- maybeToList $ C.readInt pos_
+        , (len, "") <- maybeToList $ C.readInt len_
+        , rev <- case str_ of "+" -> [False] ; "-" -> [True] ; _ -> [] ]
 
 
 encodeGenome :: Genome -> L.ByteString
@@ -196,15 +228,17 @@ scanOneBlock inp = ( EmfBlock tree seqs, drop 1 remainder )
             <*> (A.char ']' *> A.char ':' *> A.double)
 
 
-data Range = Range { r_seq    :: {-# UNPACK #-} !B.ByteString
-                   , r_pos    :: {-# UNPACK #-} !Int
-                   , r_length :: {-# UNPACK #-} !Int }
+data Range s = Range { r_seq    ::                !s
+                     , r_pos    :: {-# UNPACK #-} !Int
+                     , r_length :: {-# UNPACK #-} !Int }
     deriving (Show, Eq, Ord)
 
-reverseRange :: Range -> Range
+type Range' = Range B.ByteString
+
+reverseRange :: Range s -> Range s
 reverseRange (Range sq pos len) = Range sq (-pos-len) len
 
-data Label = Label Int Species Range deriving Show
+data Label = Label Int Species Range' deriving Show
 data Tree label = Branch (Tree label) (Tree label) label | Leaf label deriving Show
 
 relabel :: [Label] -> Tree (B.ByteString, Double) -> Tree Label
@@ -275,7 +309,7 @@ tree_has s (Branch u' v' _) = tree_has s u' ++ tree_has s v'
 collectTrees :: [B.ByteString] -> ( Tree Label -> [(Label, [Label])] ) -> Genome -> EmfBlock -> IO Genome
 collectTrees chrs select genome block
     = foldlM (\g f -> f g) genome
-            [ \g -> do plump :> _ <- encodeLumpToMem $ diff' (L.fromStrict ref_seq) (fromStrict smp_seq)
+            [ \g -> do plump :> _ <- encodeLumpToMem $ diff' ref_seq (fromLazy smp_seq)
                        let (w,g') = insertGenome g ref_idx (r_pos rref) (r_length rref) plump
                        hPutStrLn stderr $ "Inserted " ++ shows ref_idx ":" ++
                             shows (r_pos rref) "-" ++ shows (r_pos rref + r_length rref) ", " ++
@@ -289,12 +323,12 @@ collectTrees chrs select genome block
                       [ emf_seqs block !! itgt | Label itgt _ _ <- tgt_lbls ]
             , let (rref, ref_seq, smp_seq) =
                     if r_pos rref_ >= 0
-                    then (             rref_,          ref_seq_,          smp_seq_)
-                    else (reverseRange rref_, revcompl ref_seq_, revcompl smp_seq_) ]
-  where
-    revcompl :: B.ByteString -> B.ByteString
-    revcompl = B.reverse . B.map compl
+                    then (             rref_,            L.fromStrict ref_seq_,            L.fromStrict smp_seq_)
+                    else (reverseRange rref_, revcompl $ L.fromStrict ref_seq_, revcompl $ L.fromStrict smp_seq_) ]
 
+revcompl :: L.ByteString -> L.ByteString
+revcompl = L.reverse . C.map compl
+  where
     compl 'A' = 'T' ; compl 'T' = 'A' ; compl 'a' = 't' ; compl 't' = 'a'
     compl 'C' = 'G' ; compl 'G' = 'C' ; compl 'c' = 'g' ; compl 'g' = 'c'
     compl  x  =  x

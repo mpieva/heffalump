@@ -814,6 +814,9 @@ gendiff view = generic
                 | otherwise -> Fix . encVar u x . generic ref' smp'
 
 
+-- | Generic diff between two aligned strings using "streaming" code.
+--
+-- XXX  We should deal with gaps, not that we can actually encode them
 {-# INLINE gendiff' #-}
 gendiff' :: Monad m => (a -> RefSeqView a) -> a -> S.ByteString m r -> Stream Lump m r
 gendiff' view = generic
