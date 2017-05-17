@@ -1,7 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
 import BasePrelude
 import Data.ByteString.Builder          ( hPutBuilder )
-import Data.Fix
 import Streaming
 import System.Console.GetOpt
 import System.FilePath                  ( takeBaseName )

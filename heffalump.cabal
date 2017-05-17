@@ -27,26 +27,25 @@ executable heffalump
                        Vcf,
                        VcfScan
 
-  build-depends:       attoparsec,
+  build-depends:       attoparsec               >= 0.10 && < 0.14,
                        base                     >= 4.7 && < 4.10,
                        base-prelude             == 1.*,
                        biohazard                >= 0.6.10 && < 0.7,
-                       bytestring,
+                       bytestring               >= 0.10.2 && < 0.11,
                        bytestring-mmap          == 0.2.*,
-                       containers,
-                       data-fix,
-                       directory,
-                       filepath,
+                       containers               >= 0.4.1 && < 0.6,
+                       directory                >= 1.2 && < 2.0,
+                       filepath                 >= 1.3 && < 2.0,
                        hashable                 == 1.2.*,
-                       math-functions,
-                       primitive,
-                       random,
-                       resourcet,
+                       math-functions           == 0.2.*,
+                       primitive                >= 0.5 && < 0.7,
+                       random                   >= 1.0 && < 1.2,
+                       resourcet                == 1.1.*,
                        streaming                >= 0.1.4 && < 2.0,
                        streaming-bytestring     >= 0.1.4 && < 2.0,
-                       transformers,
-                       unordered-containers,
-                       vector,
+                       transformers             >= 0.4.1 && < 0.6,
+                       unordered-containers     >= 0.2.3 && < 0.3,
+                       vector                   >= 0.11 && < 0.13,
                        zlib                     == 0.6.*
 
   default-language:    Haskell2010
@@ -64,9 +63,6 @@ executable heffalump
   ghc-options:         -Wall -auto-all
   cc-options:          -O3 -std=c99 -fPIC -ggdb -Wall
   c-sources:           cbits/vcf-scan.c
-                       cbits/mini-pileup.c
                        cbits/zlib-helper.c
   include-dirs:        .
   extra-libraries:     z
-
-  pkgconfig-depends:   htslib

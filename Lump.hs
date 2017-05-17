@@ -4,7 +4,6 @@ module Lump where
 import BasePrelude
 import Data.ByteString.Builder
 import Data.ByteString.Internal             ( c2w )
-import Data.Fix
 import Data.Hashable                        ( hash )
 import Foreign.Marshal.Alloc                ( mallocBytes )
 import Foreign.Ptr                          ( castPtr )
@@ -996,3 +995,14 @@ patch ref (Fix l) = case unconsNRS ref of
 
             Break       a -> Term a
             Done          -> Term (Fix Done)
+
+
+-- stolen from data-fix
+newtype Fix f = Fix { unFix :: f (Fix f) }
+
+ana :: Functor f => (a -> f a) -> (a -> Fix f)
+ana f = Fix . fmap (ana f) . f
+
+cata :: Functor f => (f a -> a) -> (Fix f -> a)
+cata f = f . fmap (cata f) . unFix
+

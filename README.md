@@ -12,7 +12,8 @@ Heffalump imports common file formats (VCF, BCF, Bam by picking from an arbitrar
 * install `htslib` from https://bitbucket.org/ustenzel/htslib,
 * run `cabal update` (takes a while to download the current package list),
 * run `cabal install
-  https://bitbucket.org/ustenzel/heffalump/get/0.1.tar.gz`
+  https://bitbucket.org/ustenzel/biohazard/get/0.6.13.tar.gz
+  https://bitbucket.org/ustenzel/heffalump/get/0.2.tar.gz`
 
 ## Homepage ##
 
