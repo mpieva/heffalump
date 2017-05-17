@@ -40,13 +40,12 @@ data ConfBam = ConfBam {
     conf_deaminate     :: Bool,
     conf_min_qual      :: Int,
     conf_min_mapq      :: Int,
-    conf_ignore_indels :: Bool,
     conf_snip          :: Int,
     conf_snap          :: Int }
   deriving Show
 
 conf_bam0 :: ConfBam
-conf_bam0 = ConfBam (error "no output file specified") (error "no reference file specified") Ostrich False 0 0 False 0 0
+conf_bam0 = ConfBam (error "no output file specified") (error "no reference file specified") Ostrich False 0 0 0 0
 
 opts_bam :: [ OptDescr ( ConfBam -> IO ConfBam ) ]
 opts_bam =
@@ -65,14 +64,12 @@ opts_bam =
     , Option [ ] ["mateja"]             (set_pick           Mateja) "Weird stuff"
     , Option [ ] ["mateja2"]            (set_pick          Mateja2) "Weird stuff"
     , Option [ ] ["snip"]               (ReqArg set_snip     "NUM") "Ignore the first NUM bases in each aread"
-    , Option [ ] ["snap"]               (ReqArg set_snap     "NUM") "Ignore the last NUM bases in each aread"
-    , Option "c" ["contiguous"]         (NoArg          set_contig) "Use only reads that align without indels" ]
+    , Option [ ] ["snap"]               (ReqArg set_snap     "NUM") "Ignore the last NUM bases in each aread" ]
   where
     set_pick p = NoArg (\c -> return $ c { conf_pick = p })
 
     set_output  a c = return $ c { conf_bam_output    = a }
     set_ref     a c = return $ c { conf_bam_reference = a }
-    set_contig    c = return $ c { conf_ignore_indels = True }
     set_deaminate c = return $ c { conf_deaminate     = True }
 
     set_minqual a c = readIO a >>= \b -> return $ c { conf_min_qual = b }
@@ -108,28 +105,21 @@ main_bam args = do
                 filterStream ((>= conf_min_mapq) . fromIntegral . unQ . b_mapq . unpackBam) =$
                 concatMapStream (decompose (DmgToken 0)) =$
                 pileup =$
-                mapStream collate_pile =$
-
-                -- XXX  won't fit the types :(
+                mapStream (collate_pile cfg) =$
                 sample_piles' rnd_gen conf_deaminate conf_pick ref =$
-
-                -- XXX Types appear to fit.  Wonder if that code can actually run...
-                --
-                -- S.hPut hdl . encode' ref :: MonadIO m => Stream Lump (Iteratee x m) r -> Iteratee x m r
-                -- importPile' :: Stream Lump (Iteratee [Var1] m) r
-                --
-                -- S.hPut hdl (encode' ref (importPile')) :: MonadIO m => Iteratee [Var1] m r
                 S.hPut hdl (encode' ref (importPile'))
-
     renameFile (conf_bam_output ++ "~") conf_bam_output
 
--- Note: some config options are not yet supported (--snip and --snap)
-collate_pile :: Pile -> Var0
-collate_pile p = Var { v_refseq = p_refseq p
-                     , v_loc    = p_pos p
-                     , v_call   = U.accum (+) (U.replicate 10 0) $
-                                    [ (fromIntegral (unN (db_call b)),    1) | b <- fst $ p_snp_pile p ] ++
-                                    [ (fromIntegral (unN (db_call b)) +4, 1) | b <- snd $ p_snp_pile p ] }
+collate_pile :: ConfBam -> Pile -> Var0
+collate_pile ConfBam{..} p =
+    Var { v_refseq = p_refseq p
+        , v_loc    = p_pos p
+        , v_call   = U.accum (+) (U.replicate 10 0) $
+            [ (fromIntegral (unN (db_call b)) +o, 1)
+            | (o,b) <- map ((,) 0) (fst $ p_snp_pile p) ++ map ((,) 4) (snd $ p_snp_pile p)
+            , db_qual b >= Q (fromIntegral conf_min_qual)
+            , db_dmg_pos b >= conf_snip || db_dmg_pos b < negate conf_snap ] }
+
 
 progressBam' :: String -> [Var0] -> [Var0]
 progressBam' fp = go 0 0
@@ -153,7 +143,7 @@ type Var0 = Var (U.Vector Int)
 type Var1 = Var Var2b
 
 sample_piles' :: Monad m => StdGen -> Bool -> Pick -> NewRefSeqs -> Enumeratee [ Var0 ] [ Var1 ] m r
-sample_piles' g0 deam pick cs0 = eneeCheckIfDone (nextChrom g0 (nrss_seqs cs0) (Refseq 0))  -- XXX
+sample_piles' g0 deam pick cs0 = eneeCheckIfDone (nextChrom g0 (nrss_seqs cs0) (Refseq 0))
   where
     nextChrom _ [    ]  _ = return . liftI
     nextChrom g (c:cs) rs = generic g cs (c ()) rs 0
@@ -280,8 +270,7 @@ word8 Buf{..} x = do
 htsPileup :: ConfBam -> FilePath -> IO [ Var0 ]
 htsPileup cfg fp = do
     plp <- throwErrnoIfNull "c_pileup_init" $ withCString fp $
-                c_pileup_init (fromIntegral $ conf_min_mapq cfg)
-                              (fromIntegral $ fromEnum $ conf_ignore_indels cfg)
+                c_pileup_init (fromIntegral $ conf_min_mapq cfg) 0
     repeatedly (step plp)
   where
     vsize = 2048
