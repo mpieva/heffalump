@@ -30,6 +30,7 @@ executable heffalump
   build-depends:       attoparsec,
                        base                     >= 4.7 && < 4.10,
                        base-prelude             == 1.*,
+                       biohazard                >= 0.6.10 && < 0.7,
                        bytestring,
                        bytestring-mmap          == 0.2.*,
                        containers,

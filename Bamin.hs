@@ -1,10 +1,13 @@
+{-# LANGUAGE LambdaCase #-}
 -- | Code to read a BAM file in.  We pileup, then sample a base
 -- randomly.  We end with the same format we would get if we ran 'vcflc'
 -- on an appropriately generated VCF file.
 
 module Bamin where
 
-import BasePrelude
+import Bio.Bam               hiding ( Ns )
+import Bio.Bam.Pileup
+import Bio.Prelude           hiding ( Ns )
 import Data.ByteString.Builder      ( hPutBuilder )
 import Data.Fix
 import Foreign.C
@@ -17,6 +20,8 @@ import System.Console.GetOpt
 import System.IO
 import System.Random                ( StdGen, newStdGen, next )
 
+import qualified Streaming                      as Q
+import qualified Data.ByteString.Streaming      as S
 import qualified Data.Vector.Unboxed            as U
 import qualified Data.Vector.Unboxed.Mutable    as U ( IOVector, new, read, write )
 
@@ -57,8 +62,8 @@ opts_bam =
     , Option [ ] ["stranded"]           (set_pick         Stranded) "Call only G&A on forward strand"
     , Option [ ] ["udg"]                (set_pick              UDG) "Simulate UDG treatment"
     , Option [ ] ["kay"]                (set_pick              Kay) "Ts become Ns"
-    , Option [ ] ["mateja"]             (set_pick           Mateja) "See man page"
-    , Option [ ] ["mateja2"]            (set_pick          Mateja2) "See man page"
+    , Option [ ] ["mateja"]             (set_pick           Mateja) "Weird stuff"
+    , Option [ ] ["mateja2"]            (set_pick          Mateja2) "Weird stuff"
     , Option [ ] ["snip"]               (ReqArg set_snip     "NUM") "Ignore the first NUM bases in each aread"
     , Option [ ] ["snap"]               (ReqArg set_snap     "NUM") "Ignore the last NUM bases in each aread"
     , Option "c" ["contiguous"]         (NoArg          set_contig) "Use only reads that align without indels" ]
@@ -76,22 +81,58 @@ opts_bam =
     set_snap    a c = readIO a >>= \b -> return $ c { conf_snap     = b }
 
 
+-- XXX  When importing, check the header.  Any target that matches a
+-- sequence in the reference is encoded and stored, we emit them at the
+-- end in the correct order.  Unknown targets are skipped, missing
+-- references are blanked.  If nothing overlaps, that's an error;
+-- anything else is fine.
 main_bam :: [String] -> IO ()
 main_bam args = do
     ( bams, cfg@ConfBam{..} ) <- parseOpts True conf_bam0 (mk_opts "bamin" "[bam-file...]" opts_bam) args
     ref <- readTwoBit conf_bam_reference
-
     rnd_gen <- newStdGen
-    withFile (conf_bam_output ++ "~") WriteMode        $ \hdl ->
+
+    -- version based on lazy I/O and htslib  *blech*
+{-  withFile (conf_bam_output ++ "~") WriteMode        $ \hdl ->
         hPutBuilder hdl . encode ref . importPile
                 . sample_piles rnd_gen conf_deaminate conf_pick ref
-                . progressBam conf_bam_output . concat
+                . progressBam' conf_bam_output . concat
                 =<< mapM (htsPileup cfg) bams
+    renameFile (conf_bam_output ++ "~") conf_bam_output  -}
+
+    -- version based on biohazard and iteratee  *groan*
+    withFile (conf_bam_output ++ "~") WriteMode        $ \hdl ->
+        mergeInputs combineCoordinates bams >=> run    $ \hdr ->
+
+                progressBam "bamin" (meta_refs hdr) 1000000 (hPutStr stderr) =$
+                filterStream ((>= conf_min_mapq) . fromIntegral . unQ . b_mapq . unpackBam) =$
+                concatMapStream (decompose (DmgToken 0)) =$
+                pileup =$
+                mapStream collate_pile =$
+
+                -- XXX  won't fit the types :(
+                sample_piles' rnd_gen conf_deaminate conf_pick ref =$
+
+                -- XXX Types appear to fit.  Wonder if that code can actually run...
+                --
+                -- S.hPut hdl . encode' ref :: MonadIO m => Stream Lump (Iteratee x m) r -> Iteratee x m r
+                -- importPile' :: Stream Lump (Iteratee [Var1] m) r
+                --
+                -- S.hPut hdl (encode' ref (importPile')) :: MonadIO m => Iteratee [Var1] m r
+                S.hPut hdl (encode' ref (importPile'))
+
     renameFile (conf_bam_output ++ "~") conf_bam_output
 
+-- Note: some config options are not yet supported (--snip and --snap)
+collate_pile :: Pile -> Var0
+collate_pile p = Var { v_refseq = p_refseq p
+                     , v_loc    = p_pos p
+                     , v_call   = U.accum (+) (U.replicate 10 0) $
+                                    [ (fromIntegral (unN (db_call b)),    1) | b <- fst $ p_snp_pile p ] ++
+                                    [ (fromIntegral (unN (db_call b)) +4, 1) | b <- snd $ p_snp_pile p ] }
 
-progressBam :: String -> [Var0] -> [Var0]
-progressBam fp = go 0 0
+progressBam' :: String -> [Var0] -> [Var0]
+progressBam' fp = go 0 0
   where
     go  _  _ [    ] = []
     go rs po (v:vs)
@@ -110,6 +151,31 @@ data Var a = Var { v_refseq  :: !Refseq
 
 type Var0 = Var (U.Vector Int)
 type Var1 = Var Var2b
+
+sample_piles' :: Monad m => StdGen -> Bool -> Pick -> NewRefSeqs -> Enumeratee [ Var0 ] [ Var1 ] m r
+sample_piles' g0 deam pick cs0 = eneeCheckIfDone (nextChrom g0 (nrss_seqs cs0) (Refseq 0))  -- XXX
+  where
+    nextChrom _ [    ]  _ = return . liftI
+    nextChrom g (c:cs) rs = generic g cs (c ()) rs 0
+
+    generic g cs c !rs !pos k = peekStream >>= \case
+        Nothing -> return (liftI k)
+        Just var1
+            | rs /= v_refseq var1
+                -> nextChrom g cs (succ rs) k
+
+            | v_loc var1 < pos -> error "Huh?"
+
+            | Just (N2b rb,c') <- unconsNRS $ dropNRS (fromIntegral $ v_loc var1 - pos) c
+                -> let (vv, g')      = if deam then deaminate (v_call var1) g else (v_call var1, g)
+                       cc            = post_collect (N2b rb) pick vv
+                       (N2b nc, g'') = sample_from cc g'
+                   in headStream >>
+                      eneeCheckIfDone (generic g'' cs c' rs (v_loc var1 + 1))
+                                      (k (Chunk [var1 { v_call = V2b (xor rb nc) }]))
+
+            | otherwise
+                -> headStream >> generic g cs NewRefEnd rs (v_loc var1 + 1) k
 
 sample_piles :: StdGen -> Bool -> Pick -> NewRefSeqs -> [ Var0 ] -> [ Var1 ]
 sample_piles g0 deam pick cs0 = nextChrom g0 (nrss_seqs cs0) (Refseq 0)
@@ -130,8 +196,31 @@ sample_piles g0 deam pick cs0 = nextChrom g0 (nrss_seqs cs0) (Refseq 0)
                  generic g'' cs c' rs (v_loc var1 + 1) mvars
 
         | otherwise
-            = generic g   cs NewRefEnd rs (v_loc var1 + 1) mvars
+            = generic g cs NewRefEnd rs (v_loc var1 + 1) mvars
 
+importPile' :: Monad m => Q.Stream Lump (Iteratee [Var1] m) ()
+importPile' = normalizeLump' $ generic (Refseq 0) 0
+  where
+    generic !rs !pos = Q.effect $ tryHead >>= \case
+        Nothing -> return $ Q.yields (Break ())
+        Just var1
+            -- switch to next chromosome
+            | rs /= v_refseq var1 -> return $ do
+                forM_ [succ rs .. v_refseq var1] $ \_ -> Q.yields (Break ())
+                when (v_loc var1 > 0) $
+                    Q.yields $ Ns (fromIntegral $ v_loc var1) ()
+                Q.yields $ enc_var (v_call var1) ()
+                generic (v_refseq var1) (v_loc var1 + 1)
+
+            -- gap, creates Ns
+            | v_loc var1 >= pos -> return $ do
+                when (v_loc var1 > pos) $
+                    Q.yields $ Ns (fromIntegral $ v_loc var1 - pos) ()
+                Q.yields $ enc_var (v_call var1) ()
+                generic rs (v_loc var1 + 1)
+
+            | otherwise -> error $ "Got variant position " ++ show (v_refseq var1, v_loc var1)
+                                ++ " when expecting " ++ show pos ++ " or higher."
 
 importPile :: [ Var1 ] -> Fix Lump
 importPile = normalizeLump . generic (Refseq 0) 0
@@ -151,11 +240,12 @@ importPile = normalizeLump . generic (Refseq 0) 0
         | otherwise = error $ "Got variant position " ++ show (v_refseq var1, v_loc var1)
                            ++ " when expecting " ++ show pos ++ " or higher."
 
-    enc_var (V2b 0) = Eqs1 1     -- ref equals alt, could both be N
-    enc_var (V2b 1) = Trans1     -- transition
-    enc_var (V2b 2) = Compl1     -- complement
-    enc_var (V2b 3) = TCompl1    -- trans-complement
-    enc_var (V2b _) = Ns 1       -- ref is N, or alt is N
+enc_var :: Var2b -> a -> Lump a
+enc_var (V2b 0) = Eqs1 1     -- ref equals alt, could both be N
+enc_var (V2b 1) = Trans1     -- transition
+enc_var (V2b 2) = Compl1     -- complement
+enc_var (V2b 3) = TCompl1    -- trans-complement
+enc_var (V2b _) = Ns 1       -- ref is N, or alt is N
 
 
 
@@ -357,5 +447,5 @@ foreign import ccall unsafe "mini-pileup.h pileup_step"
 foreign import ccall unsafe "mini-pileup.h pileup_done"
     c_pileup_done :: Ptr PlpAux -> IO ()
 
-newtype Refseq = Refseq { unRefseq :: Int } deriving (Show, Enum, Eq)
+-- newtype Refseq = Refseq { unRefseq :: Int } deriving (Show, Enum, Eq)
 

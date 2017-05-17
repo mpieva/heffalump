@@ -1,22 +1,13 @@
-- switch XCF parser to streaming
-
 - Bamin should check compatibility of reference (extra reference
   sequences in the Bam file would be silently ignored, extra sequences
   in the reference would elicit a warning, no common sequences would be
   an error)
 
 - BED file as filter (for the merging part, not for import).  Cannot
-  assume BED is sorted correctly.
+  assume BED is sorted correctly.  :-(
 
 - D-statistics with population definitions (multiple individuals for one
   population, with estimates of allele frequencies)
 
 - C-library for reading and merging
-
-- better import from multi-MAF: could create multiple heffalumps in one
-  go, but that implies a switch to "streaming"
-
-- Maybe allow Bamin with multiple sampling schemes in parallel?  This
-  implies a complete switch to streaming.  It's only interesting for
-  silly tests, though.
 
