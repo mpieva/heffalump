@@ -336,10 +336,15 @@ revcompl = L.reverse . C.map compl
 
 
 consensus_seq :: [B.ByteString] -> B.ByteString
-consensus_seq [   x  ] = x
-consensus_seq (x:xs) | all (== B.length x) (map B.length xs) =
-    B.pack [ foldl' (\r c -> if r == c then r else 'N') (B.index x i) (map (`B.index` i) xs)
-           | i <- [0 .. B.length x -1] ]
+consensus_seq [    ] = B.empty
+consensus_seq [  x ] = x
+consensus_seq (x:xs)
+    | all (== B.length x) (map B.length xs) =
+        B.pack [ foldl' (\r c -> if r == c then r else 'N')
+                        (B.index x i) (map (`B.index` i) xs)
+               | i <- [0 .. B.length x -1] ]
+    | otherwise =
+        error "consensus_seq: sequences have uneuqal lengths."
 
 
 -- | Scans a directory with gzipped EMF files in arbitrary order.  (The
@@ -387,7 +392,7 @@ opts_emf =
     set_species a c = return $ c { emf_select = species_to_species  ("homo","sapiens") (w2 a) }
     set_anc     a c = return $ c { emf_select = ancestor_to_species ("homo","sapiens") (w2 a) }
 
-    w2 s = case B.words (B.pack s) of (a:b:_) -> (a,b)
+    w2 s = case B.words (B.pack s) of a:b:_ -> (a,b) ; a:_ -> (a,B.empty) ; _ -> (B.empty,B.empty)
 
 
 main_emf :: [String] -> IO ()
