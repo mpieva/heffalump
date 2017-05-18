@@ -15,6 +15,7 @@ import qualified Data.Vector                     as V
 import qualified Data.Vector.Unboxed             as U
 
 import Bamin
+import Bed
 import Eigenstrat
 import Emf
 import Lump
@@ -79,13 +80,14 @@ data ConfMergeGen = ConfMergeGen {
     conf_all        :: Bool,
     conf_split      :: Bool,
     conf_reference  :: Maybe FilePath,
+    conf_regions    :: Maybe FilePath,
     conf_nrefpanel  :: Int,
     conf_output     :: FilePath,
     conf_sample     :: FilePath }
   deriving Show
 
 defaultMergeConf :: ConfMergeGen
-defaultMergeConf = ConfMergeGen 1 5000000 True True Nothing
+defaultMergeConf = ConfMergeGen 1 5000000 True True Nothing Nothing
                                 (error "size of reference panel not known")
                                 (error "no output file specified")
                                 (error "no sample file specified")
@@ -238,23 +240,27 @@ opts_eigen =
     , Option "r" ["reference"]     (ReqArg set_ref "FILE") "Read reference from FILE (.fa)"
     , Option "n" ["numoutgroups"]  (ReqArg set_nout "NUM") "The first NUM individuals are outgroups (1)"
     , Option "t" ["only-transversions"] (NoArg set_no_all) "Output only transversion sites"
-    , Option "b" ["only-biallelic"]   (NoArg set_no_split) "Discard, don't split, polyallelic sites" ]
+    , Option "b" ["only-biallelic"]   (NoArg set_no_split) "Discard, don't split, polyallelic sites"
+    , Option "R" ["regions"]      (ReqArg set_rgns "FILE") "Restrict to regions in bed-file FILE" ]
   where
     set_output a c = return $ c { conf_output     =      a }
     set_ref    a c = return $ c { conf_reference  = Just a }
     set_nout   a c = (\n ->   c { conf_noutgroups =      n }) <$> readIO a
     set_no_all   c = return $ c { conf_all        =  False }
     set_no_split c = return $ c { conf_split      =  False }
+    set_rgns   a c = return $ c { conf_regions    = Just a }
 
 -- merge multiple files with the reference, write Eigenstrat format (geno & snp files)
 main_eigenstrat :: [String] -> IO ()
 main_eigenstrat args = do
     ( hefs, ConfMergeGen{..} ) <- parseOpts True defaultMergeConf (mk_opts "eigenstrat" "[hef-file...]" opts_eigen) args
     (refs, inps) <- decodeMany conf_reference hefs
+    region_filter <- mkBedFilter conf_regions (either error nrss_chroms refs)
 
     withFile (conf_output ++ ".snp") WriteMode $ \hsnp ->
         withFile (conf_output ++ ".geno") WriteMode $ \hgeno -> do
             let vars = either (const id) addRef refs $
+                       region_filter $
                        bool singles_only concat conf_split $
                        mergeLumps conf_noutgroups inps
             forM_ vars $ \Variant{..} ->
@@ -286,6 +292,7 @@ main_vcfout args = do
     ( hefs, ConfMergeGen{..} ) <- parseOpts True defaultMergeConf { conf_noutgroups = 0 }
                                             (mk_opts "vcfexport" "[hef-file...]" (tail opts_eigen)) args
     (refs, inps) <- decodeMany conf_reference hefs
+    region_filter <- mkBedFilter conf_regions (either error nrss_chroms refs)
     let chrs = either error (V.fromList . nrss_chroms) refs
 
     B.putStr $ "##fileformat=VCFv4.1\n" <>
@@ -294,7 +301,7 @@ main_vcfout args = do
                mconcat [ '\t' `B.cons` B.pack (takeBaseName f) | f <- hefs ] <>
                B.singleton '\n'
 
-    let the_vars = addRef (either error id refs) $ concat $ mergeLumps conf_noutgroups inps
+    let the_vars = addRef (either error id refs) $ region_filter $ concat $ mergeLumps conf_noutgroups inps
 
     forM_ the_vars $ \Variant{..} ->
         -- samples (not outgroups) must show alt allele at least once

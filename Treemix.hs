@@ -11,6 +11,7 @@ import qualified Data.ByteString.Lazy.Char8      as L
 import qualified Data.HashMap.Strict             as H
 import qualified Data.Vector.Unboxed             as U
 
+import Bed
 import Lump
 import NewRef
 import Util
@@ -19,13 +20,14 @@ data ConfTmx = ConfTmx {
     conf_noutgroups :: Int,
     conf_indivs     :: Maybe FilePath,
     conf_reference  :: Maybe FilePath,
+    conf_regions    :: Maybe FilePath,
     conf_transv     :: Bool,
     conf_chroms     :: (Int,Int),
     conf_output     :: FilePath }
   deriving Show
 
 defaultConfTmx :: ConfTmx
-defaultConfTmx = ConfTmx 1 Nothing Nothing False (0,21)
+defaultConfTmx = ConfTmx 1 Nothing Nothing Nothing False (0,21)
                          (error "no output file specified")
 
 opts_treemix :: [ OptDescr (ConfTmx -> IO ConfTmx) ]
@@ -35,7 +37,8 @@ opts_treemix =
     , Option "i" ["individuals"]   (ReqArg set_indiv  "FILE") "Read individuals from FILE (.ind)"
     , Option "n" ["numoutgroups"]  (ReqArg set_nout    "NUM") "The first NUM individuals are outgroups (1)"
     , Option "t" ["transversions"] (NoArg  set_transv       ) "Restrict to transversion variants"
-    , Option "x" ["x-chromosome"]  (NoArg  set_xchrom       ) "Analyze X chromsome, not autosomes" ]
+    , Option "x" ["x-chromosome"]  (NoArg  set_xchrom       ) "Analyze X chromsome, not autosomes"
+    , Option "R" ["regions"]       (ReqArg set_rgns   "FILE") "Restrict to regions in bed-file FILE" ]
   where
     set_output a c =                    return $ c { conf_output     =      a }
     set_ref    a c =                    return $ c { conf_reference  = Just a }
@@ -43,6 +46,7 @@ opts_treemix =
     set_nout   a c = readIO a >>= \n -> return $ c { conf_noutgroups =      n }
     set_transv   c =                    return $ c { conf_transv     =   True }
     set_xchrom   c =                    return $ c { conf_chroms     = (22,22)}
+    set_rgns   a c =                    return $ c { conf_regions    = Just a }
 
 main_treemix :: [String] -> IO ()
 main_treemix args = do
@@ -57,7 +61,8 @@ main_treemix args = do
                       return . toSymtab $ map (lookupHef popmap) hefs
         Nothing -> return (map (B.pack . takeBaseName) hefs, length hefs, U.enumFromN 0 (length hefs))
 
-    (_ref,inps) <- decodeMany conf_reference hefs
+    (ref,inps) <- decodeMany conf_reference hefs
+    region_filter <- mkBedFilter conf_regions (either error nrss_chroms ref)
 
     L.writeFile conf_output $ compress $ toLazyByteString $
         foldr (\a k -> byteString a <> char7 ' ' <> k) (char7 '\n') pops <>
@@ -76,7 +81,7 @@ main_treemix args = do
                              in if inRange conf_chroms v_chr && ve .&. 3 /= 0 && ve .&. 12 /= 0 && is_ti
                                then U.foldr show1 (char7 '\n') $ U.zip refcounts altcounts
                                else mempty)
-            (concat $ mergeLumps conf_noutgroups inps)
+            (region_filter $ concat $ mergeLumps conf_noutgroups inps)
 
 
 -- | Reads an individual file.  Returns a map from individual to pop

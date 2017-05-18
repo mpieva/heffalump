@@ -15,6 +15,7 @@ import qualified Data.Vector                     as V
 import qualified Data.Vector.Storable            as S
 import qualified Data.Vector.Unboxed             as U
 
+import Bed
 import Lump
 import NewRef
 import Util
@@ -24,12 +25,13 @@ data Config = Config {
     conf_noutgroups :: Int,
     conf_nrefpanel  :: Int,
     conf_filter     :: Either String NewRefSeqs -> [Variant] -> [Variant],
+    conf_regions    :: Maybe FilePath,
     conf_msg        :: String,
     conf_reference  :: Maybe FilePath,
     conf_nafricans  :: Int }
 
 defaultConfig :: Config
-defaultConfig = Config 5000000 1 1 (const id) "" Nothing
+defaultConfig = Config 5000000 1 1 (const id) Nothing "" Nothing
                        (error "size of reference panel not known")
 
 showPValue :: Double -> ShowS
@@ -190,22 +192,25 @@ opts_kiv =
     [ Option "r" ["reference"] (ReqArg set_ref  "FILE") "Read reference from FILE (.fa)"
     , Option "n" ["numgood"]   (ReqArg set_ngood "NUM") "The first NUM inputs are \"good\" genomes (1)"
     , Option "J" ["blocksize"] (ReqArg set_jack  "NUM") "Set blocksize for Jackknife to NUM bases (5M)"
-    , Option "t" ["transversions"]   (NoArg set_tvonly) "Restrict to transversion sites" ]
+    , Option "t" ["transversions"]   (NoArg set_tvonly) "Restrict to transversion sites"
+    , Option "R" ["regions"]   (ReqArg set_rgns "FILE") "Restrict to regions in bed-file FILE" ]
   where
     set_ref    a c = return $ c { conf_reference = Just a }
     set_ngood  a c = readIO a >>= \n -> return $ c { conf_noutgroups = n }
     set_jack   a c = readNumIO a >>= \n -> return $ c { conf_blocksize = n }
     set_tvonly   c = return $ c { conf_filter = const (filter (isTransversion . v_alt)) }
+    set_rgns   a c = return $ c { conf_regions = Just a }
 
 main_kayvergence :: [String] -> IO ()
 main_kayvergence args = do
     ( hefs, Config{..} ) <- parseOpts True defaultConfig (mk_opts "kayvergence" "[hef-file...]" opts_kiv) args
     (ref,inps) <- decodeMany conf_reference hefs
+    region_filter <- mkBedFilter conf_regions (either error nrss_chroms ref)
 
     let labels = kaylabels conf_noutgroups (map takeBaseName hefs)
         stats  = uncurry gen_stats
                  $ accum_stats conf_blocksize (kayvergence conf_noutgroups)
-                 $ conf_filter ref $ concat $ mergeLumps 0 inps
+                 $ conf_filter ref $ region_filter $ concat $ mergeLumps 0 inps
 
         fmt1 (rn,sn,cn) (SillyStats k n r v _) =
                 [ Left $ "Kiv( " ++ rn ++ "; "
@@ -273,7 +278,8 @@ opts_dstat =
     , Option "k" ["numrefpanel"]  (ReqArg set_nref "NUM") "The next NUM inputs are the reference panel"
     , Option "J" ["blocksize"]    (ReqArg set_jack "NUM") "Set blocksize for Jackknife to NUM bases (5M)"
     , Option "t" ["transversions"]     (NoArg set_tvonly) "Restrict to transversion sites"
-    , Option [ ] ["ignore-cpg"]        (NoArg set_no_cpg) "Ignore GpG sites (according to reference)" ]
+    , Option [ ] ["ignore-cpg"]        (NoArg set_no_cpg) "Ignore GpG sites (according to reference)"
+    , Option "R" ["regions"]     (ReqArg set_rgns "FILE") "Restrict to regions in bed-file FILE" ]
   where
     set_ref    a c =                       return $ c { conf_reference  = Just a }
     set_nout   a c = readIO a    >>= \n -> return $ c { conf_noutgroups =      n }
@@ -281,6 +287,7 @@ opts_dstat =
     set_jack   a c = readNumIO a >>= \n -> return $ c { conf_blocksize  =      n }
     set_no_cpg   c =                       return $ c { conf_filter  = filterCpG }
     set_tvonly   c = return $ c { conf_filter = const (filter (isTransversion . v_alt)) }
+    set_rgns   a c = return $ c { conf_regions = Just a }
 
 filterCpG :: Either String NewRefSeqs -> [Variant] -> [Variant]
 filterCpG (Left  err) = error $ "GpG filtering needs a reference, " ++ err
@@ -312,11 +319,12 @@ main_patterson :: [String] -> IO ()
 main_patterson args = do
     ( hefs, Config{..} ) <- parseOpts True defaultConfig (mk_opts "dstatistics" "[hef-file...]" opts_dstat) args
     (ref,inps) <- decodeMany conf_reference hefs
+    region_filter <- mkBedFilter conf_regions (either error nrss_chroms ref)
 
     let labels = pattersonlbls conf_noutgroups conf_nrefpanel (map takeBaseName hefs)
         stats  = uncurry gen_stats
                  $ accum_stats conf_blocksize (pattersons abbacounts conf_noutgroups conf_nrefpanel)
-                 $ conf_filter ref $ concat $ mergeLumps conf_noutgroups inps
+                 $ conf_filter ref $ region_filter $ concat $ mergeLumps conf_noutgroups inps
 
         fmt1 (sn,cn,r1,r2) (SillyStats k n r v p) =
                 [ Left conf_msg
@@ -412,7 +420,8 @@ opts_yadda =
     , Option "k" ["numafricans"]    (ReqArg set_nafr "NUM") "The next NUM inputs are africans (1)"
     , Option "l" ["numneandertals"] (ReqArg set_nref "NUM") "The next NUM inputs are neanderthals (2)"
     , Option "J" ["blocksize"]      (ReqArg set_jack "NUM") "Set blocksize for Jackknife to NUM bases (5M)"
-    , Option "t" ["transversions"]       (NoArg set_tvonly) "Restrict to transversion sites" ]
+    , Option "t" ["transversions"]       (NoArg set_tvonly) "Restrict to transversion sites"
+    , Option "R" ["regions"]       (ReqArg set_rgns "FILE") "Restrict to regions in bed-file FILE" ]
   where
     set_ref  a c = return $ c { conf_reference = Just a }
     set_nout a c = readIO a >>= \n -> return $ c { conf_noutgroups = n }
@@ -420,17 +429,19 @@ opts_yadda =
     set_nafr a c = readIO a >>= \n -> return $ c { conf_nafricans = n }
     set_jack a c = readNumIO a >>= \n -> return $ c { conf_blocksize = n }
     set_tvonly c = return $ c { conf_filter = const (filter (isTransversion . v_alt)) }
+    set_rgns a c = return $ c { conf_regions = Just a }
 
 main_yaddayadda :: [String] -> IO ()
 main_yaddayadda args = do
     ( hefs, Config{..} ) <- parseOpts True (defaultConfig { conf_nrefpanel = 2 })
                                       (mk_opts "yaddayadda" "[hef-file...]" opts_yadda) args
     (ref,inps) <- decodeMany conf_reference hefs
+    region_filter <- mkBedFilter conf_regions (either error nrss_chroms ref)
 
     let labels = yaddalbls conf_noutgroups conf_nafricans conf_nrefpanel (map takeBaseName hefs)
         stats  = uncurry gen_stats
                  $ accum_stats conf_blocksize (yaddayadda conf_noutgroups conf_nafricans conf_nrefpanel)
-                 $ conf_filter ref $ concat $ mergeLumps (conf_noutgroups+conf_nafricans) inps
+                 $ conf_filter ref $ region_filter $ concat $ mergeLumps (conf_noutgroups+conf_nafricans) inps
 
         fmt1 (cn,an,n1,n2,sn) (SillyStats k n r v p) =
                 [ Left "Y( "

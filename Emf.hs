@@ -1,5 +1,9 @@
 {-# LANGUAGE OverloadedStrings, BangPatterns, ScopedTypeVariables #-}
-module Emf where
+module Emf ( main_emf
+           , Genome
+           , encodeGenome
+           , emptyGenome
+           , parseMaf ) where
 
 -- ^ Getting variant calls from EMF file (Compara EPO whole genome
 -- alignments).  EMF contains a list of blocks, and each block aligns
@@ -228,17 +232,15 @@ scanOneBlock inp = ( EmfBlock tree seqs, drop 1 remainder )
             <*> (A.char ']' *> A.char ':' *> A.double)
 
 
-data Range s = Range { r_seq    ::                !s
-                     , r_pos    :: {-# UNPACK #-} !Int
-                     , r_length :: {-# UNPACK #-} !Int }
+data Range = Range { r_seq    :: {-# UNPACK #-} !B.ByteString
+                   , r_pos    :: {-# UNPACK #-} !Int
+                   , r_length :: {-# UNPACK #-} !Int }
     deriving (Show, Eq, Ord)
 
-type Range' = Range B.ByteString
-
-reverseRange :: Range s -> Range s
+reverseRange :: Range -> Range
 reverseRange (Range sq pos len) = Range sq (-pos-len) len
 
-data Label = Label Int Species Range' deriving Show
+data Label = Label Int Species Range deriving Show
 data Tree label = Branch (Tree label) (Tree label) label | Leaf label deriving Show
 
 relabel :: [Label] -> Tree (B.ByteString, Double) -> Tree Label
@@ -260,9 +262,6 @@ get_short (Label _ (spc,race) (Range chrom pos len)) = B.concat $
                        B.pack (show $ pos+len), "[+]" ]
                 else [ B.pack (show $ 1-pos-len), B.singleton '_',
                        B.pack (show $ -pos), "[-]" ]
-
-data BlockDef = BlockDef { human_label :: !Label
-                         , anc_label   :: !Label }
 
 type Species = (B.ByteString,B.ByteString)
 
@@ -358,11 +357,6 @@ scan_all_emf dir = do
                            go ls = case scanOneBlock ls of (b,ls') -> b : go ls'
                        go . map L.toStrict . C.lines . decompress <$> L.readFile fp)
           (return []) fs
-
-
-apes :: [(B.ByteString, B.ByteString)]
-apes = [("pan","troglodytes"),("gorilla","gorilla"),("pongo","abelii")
-       ,("macaca","mulatta"),("callithrix","jacchus") ]
 
 
 data OptsEmf = OptsEmf {

@@ -1,8 +1,5 @@
 - Do importHetfa and importHetfa' produce identical results?  They should.
 
-- BED file as filter (for the merging part, not for import).  Cannot
-  assume BED is sorted correctly.  :-(
-
 - D-statistics with population definitions (multiple individuals for one
   population, with estimates of allele frequencies)
 
