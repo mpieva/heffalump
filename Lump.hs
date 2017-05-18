@@ -109,9 +109,11 @@ debugLump' c i fl = case unFix fl of
     InsH      s l -> do putStrLn $ shows (c,i) "\tInsH " ++ shows s " " ; debugLump' c i l
 
 
+{-# DEPRECATED concatLumps "use concatLumps'" #-}
 concatLumps :: Foldable t => t (Fix Lump -> Fix Lump) -> Fix Lump
 concatLumps = foldr (\a b -> a $ Fix $ Break b) (Fix Done)
 
+{-# DEPRECATED normalizeLump "use normalizeLump'" #-}
 normalizeLump :: Fix Lump -> Fix Lump
 normalizeLump = ana (go . unFix)
   where

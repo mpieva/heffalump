@@ -1,7 +1,4 @@
-- Bamin should check compatibility of reference (extra reference
-  sequences in the Bam file would be silently ignored, extra sequences
-  in the reference would elicit a warning, no common sequences would be
-  an error)
+- Do importHetfa and importHetfa' produce identical results?  They should.
 
 - BED file as filter (for the merging part, not for import).  Cannot
   assume BED is sorted correctly.  :-(

@@ -56,8 +56,6 @@ main = do
         , z "yaddayadda"  main_yaddayadda         "Compute Yadda-yadda-counts"
         , z "bcfin"      (main_xcf conf_bcf)      "Import BCF"
         , z "vcfin"      (main_xcf conf_vcf)      "Import VCF"
-        , z "debhetfa"    main_debhetfa           "(debugging aid)"
-        -- , z "debmaf"      main_debmaf             "(debugging aid)"
         , z "dumppatch"   main_dumppatch          "(debugging aid)"
         , z "dumplump"    main_dumplump           "(debugging aid)" ]
 
@@ -149,7 +147,7 @@ importHetfa ref smps
                 diff2 (nrss_seqs ref !! i) sq $ Fix (Break (Fix Done))
 
 importHetfa' :: MonadIO m => NewRefSeqs -> Stream (FastaSeq m) m r -> S.ByteString m r
-importHetfa' ref smps = S.mwrap $ do -- ?!
+importHetfa' ref smps = S.mwrap $ do -- ?!  XXX
     (map1,r) <- fold_1 I.empty smps
 
     when (I.null map1) $ error
@@ -227,27 +225,6 @@ main_patch args = do
 
     withFile conf_imp_output WriteMode $ \hdl ->
         patchFasta hdl conf_imp_width (nrss_chroms ref) (nrss_seqs ref) pat
-
--- XXX  B0rk3d.
--- main_debmaf :: [String] -> IO ()
--- main_debmaf [maff] = debugLump . ($ Fix Done) . parseMaf . decomp =<< L.readFile maff
--- main_debmaf      _ = hPutStrLn stderr $ "Usage: debmaf [ref.2bit] [smp.hetfa]"
-
--- This is broken.  Have to do it differently, maybe match the
--- incoming chromosomes against the reference, print the index, dump
--- them one at a time.  Clone some code from importHetfa.
-main_debhetfa :: [String] -> IO ()
-main_debhetfa args = case args of
-    [reff, smpf] -> do ref <- readTwoBit reff
-                       readSampleFa smpf >>= mapM_ (enc1 ref)
-    _            -> hPutStrLn stderr $ "Usage: debhetfa [ref.2bit] [smp.hetfa]"
-  where
-    -- enc1 :: NewRefSeqs -> (B.ByteString, L.ByteString) -> L.ByteString
-    enc1 ref (nm,sq) = {- L.hPut stdout . B.toLazyByteString . encodeLump .-}
-                       debugLump . normalizeLump .
-                       ($ Fix (Break (Fix Done))) .
-                       maybe id (\i -> diff2 (nrss_seqs ref !! i) sq) $
-                       findIndex (nm ==) (nrss_chroms ref)
 
 main_dumplump :: [String] -> IO ()
 main_dumplump [ref,inf] = do rs <- readTwoBit ref

@@ -8,14 +8,17 @@ module Bamin ( main_bam ) where
 import Bio.Bam               hiding ( Ns )
 import Bio.Bam.Pileup
 import Bio.Prelude           hiding ( Ns )
+import Data.ByteString.Builder      ( toLazyByteString )
 import System.Directory             ( renameFile )
 import System.Console.GetOpt
 import System.IO
 import System.Random                ( StdGen, newStdGen, next )
 
-import qualified Streaming                      as Q
+import qualified Data.ByteString.Lazy           as L
 import qualified Data.ByteString.Streaming      as S
+import qualified Data.IntMap.Strict             as I
 import qualified Data.Vector.Unboxed            as U
+import qualified Streaming                      as Q
 
 import Lump
 import NewRef
@@ -71,11 +74,6 @@ opts_bam =
     set_snap    a c = readIO a >>= \b -> return $ c { conf_snap     =   b }
 
 
--- XXX  When importing, check the header.  Any target that matches a
--- sequence in the reference is encoded and stored, we emit them at the
--- end in the correct order.  Unknown targets are skipped, missing
--- references are blanked.  If nothing overlaps, that's an error;
--- anything else is fine.
 main_bam :: [String] -> IO ()
 main_bam args = do
     ( bams, cfg@ConfBam{..} ) <- parseOpts True conf_bam0 (mk_opts "bamin" "[bam-file...]" opts_bam) args
@@ -84,13 +82,13 @@ main_bam args = do
 
     withFile (conf_bam_output ++ "~") WriteMode        $ \hdl ->
         mergeInputs combineCoordinates bams >=> run    $ \hdr ->
-            progressBam "bamin" (meta_refs hdr) 1000000 (hPutStr stderr) =$
+            progressBam "bamin" (meta_refs hdr) 10000 (hPutStr stderr) =$
             filterStream ((>= conf_min_mapq) . b_mapq . unpackBam) =$
             concatMapStream (decompose (DmgToken 0)) =$
             pileup =$
             mapStream (collate_pile cfg) =$
             sample_piles rnd_gen conf_deaminate conf_pick ref =$
-            S.hPut hdl (encode' ref importPile)
+            S.hPut hdl (encodePiles ref (meta_refs hdr))
     renameFile (conf_bam_output ++ "~") conf_bam_output
 
 collate_pile :: ConfBam -> Pile -> Var0
@@ -111,7 +109,11 @@ data Var a = Var { v_refseq  :: !Refseq
                  , v_call    :: a }
     deriving Show
 
+-- This 'Var' stores counts of seen bases in the order "ACGT" on forward
+-- strand, "ACGT" on reverse strand, forward N, reverse N.
 type Var0 = Var (U.Vector Int)
+
+-- Properly called 'Var' in 2bit encoding.
 type Var1 = Var Var2b
 
 sample_piles :: Monad m => StdGen -> Bool -> Pick -> NewRefSeqs -> Enumeratee [ Var0 ] [ Var1 ] m r
@@ -138,6 +140,34 @@ sample_piles g0 deam pick cs0 = eneeCheckIfDone (nextChrom g0 (nrss_seqs cs0) (R
 
             | otherwise
                 -> headStream >> generic g cs NewRefEnd rs (v_loc var1 + 1) k
+
+encodePiles :: NewRefSeqs -> Refs -> S.ByteString (Iteratee [Var1] IO) ()
+encodePiles ref tgts = S.mwrap $ do
+    map1 <- collect I.empty
+
+    when (I.null map1) $ error
+            "Found only unexpected sequences.  Is this the right reference?"
+
+    return $ do S.fromLazy $ toLazyByteString $ encodeHeader ref
+                forM_ [0 .. length (nrss_chroms ref) - 1] $
+                        \i -> S.fromLazy $ unpackLump $ I.findWithDefault noLump i map1
+  where
+    collect :: MonadIO m => IntMap PackedLump -> Iteratee [Var1] m (IntMap PackedLump)
+    collect m = peekStream >>= maybe (return m) (\v -> scan1 m (v_refseq v) >>= collect)
+
+    scan1 :: MonadIO m => IntMap PackedLump -> Refseq -> Iteratee [Var1] m (IntMap PackedLump)
+    scan1 m rs = takeWhileE ((==) rs . v_refseq) >=> lift . run $
+                    let rn = sq_name $ getRef tgts rs
+                    in case findIndex ((==) rn) (nrss_chroms ref) of
+
+                        Nothing -> do liftIO $ hPrintf stderr "\nSkipping %s.\n" (unpack rn)
+                                      m <$ skipToEof
+
+                        Just  i -> do liftIO $ hPrintf stderr "\nTarget %s becomes index %d.\n" (unpack rn) i
+                                      lump Q.:> _ <- encodeLumpToMem $ importPile >> Q.yields (Break ())
+                                      liftIO $ hPrintf stderr "\nTarget %s becomes index %d, %d bytes.\n"
+                                                    (unpack rn) i (L.length $ unpackLump lump)
+                                      return $! I.insert i lump m
 
 importPile :: Monad m => Q.Stream Lump (Iteratee [Var1] m) ()
 importPile = normalizeLump' $ generic (Refseq 0) 0
