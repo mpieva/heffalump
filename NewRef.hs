@@ -37,10 +37,12 @@ module NewRef where
 import BasePrelude
 import Foreign.Storable                     ( peekByteOff )
 import System.Directory                     ( makeAbsolute )
+import System.IO                            ( hPutStrLn, stdout, stderr )
 import System.IO.Posix.MMap                 ( unsafeMMapFile )
 import System.IO.Unsafe                     ( unsafeDupablePerformIO )
 
 import qualified Data.ByteString                as B
+import qualified Data.ByteString.Builder        as B
 import qualified Data.ByteString.Char8          as C
 import qualified Data.ByteString.Lazy.Char8     as L
 import qualified Data.ByteString.Unsafe         as B
@@ -242,4 +244,122 @@ addRef ref = go 0 (nrss_seqs ref)
             | otherwise    = error "expected sorted variants!"
 
 
+
+main_2bitinfo :: [String] -> IO ()
+main_2bitinfo [] = do
+    pn <- getProgName
+    hPutStrLn stderr $ "Usage: " ++ pn ++ " twobitinfo [2bit-file...]\n"
+    exitFailure
+
+main_2bitinfo fs = forM_ fs $ \f -> do
+    ref <- readTwoBit f
+    sequence_ $ zipWith (printf "%s\t%d\n" . C.unpack)
+                        (nrss_chroms ref) (nrss_lengths ref)
+
+
+main_2bittofa :: [String] -> IO ()
+main_2bittofa [] = do
+    pn <- getProgName
+    hPutStrLn stderr $ "Usage: " ++ pn ++ " twobittofa [2bit-file] [region...]\n"
+    exitFailure
+
+main_2bittofa [fp] = do
+    ref <- readTwoBit fp
+    forM_ (nrss_chroms ref `zip` nrss_seqs ref) $ \(ch,sq) ->
+        putStrLn ('>' : C.unpack ch) >> twoBitToFa (sq ())
+
+main_2bittofa (fp:rns) = do
+    ref <- readTwoBit fp
+    forM_ rns $ \rn ->
+        case findIndex ((==) rn . C.unpack) (nrss_chroms ref) of
+            Just i  -> do putStrLn $ '>' : rn
+                          twoBitToFa $ (nrss_seqs ref !! i) ()
+            Nothing -> do let (ch,':':s1) = break ((==) ':') rn
+                          [(start,'-':s2)] <- return $ reads s1
+                          [(end,"")] <- return $ reads s2
+                          Just i <- return $ findIndex ((==) ch . C.unpack) (nrss_chroms ref)
+
+                          printf ">%s:%d-%d\n" ch start end
+                          twoBitToFa $ dropNRS start $ takeNRS end $ (nrss_seqs ref !! i) ()
+
+twoBitToFa :: NewRefSeq -> IO ()
+twoBitToFa = splitLns . unpackNRS
+  where
+    splitLns s
+        | L.null s = return ()
+        | otherwise = case L.splitAt 80 s of { (l,r) -> do
+                            L.hPut stdout l
+                            L.hPut stdout "\n"
+                            splitLns r }
+
+
+main_fato2bit :: [String] -> IO ()
+main_fato2bit [     ] =  do
+        pn <- getProgName
+        hPutStrLn stderr $ "Usage: " ++ pn ++ " fatotwobit [2bit-file] [fasta-file...]\n"
+        exitFailure
+main_fato2bit [  fp ] = L.writeFile fp . faToTwoBit            =<< L.getContents
+main_fato2bit (fp:fs) = L.writeFile fp . faToTwoBit . L.concat =<< mapM L.readFile fs
+
+{-   From https://genome.ucsc.edu/FAQ/FAQformat.html:
+
+.2bit format
+
+A .2bit file stores multiple DNA sequences (up to 4 Gb total) in a
+compact randomly-accessible format. The file contains masking
+information as well as the DNA itself.  The file begins with a 16-byte
+header containing the following fields:
+
+    signature     - the number 0x1A412743 in the architecture of the machine that created the file
+    version       - zero for now. Readers should abort if they see a version number higher than 0.
+    sequenceCount - the number of sequences in the file.
+    reserved      - always zero for now
+
+All fields are 32 bits unless noted. If the signature value is not as
+given, the reader program should byte-swap the signature and check if
+the swapped version matches. If so, all multiple-byte entities in the
+file will have to be byte-swapped. This enables these binary files to be
+used unchanged on different architectures.  The header is followed by a
+file index, which contains one entry for each sequence. Each index entry
+contains three fields:
+
+    nameSize - a byte containing the length of the name field
+    name     - the sequence name itself, of variable length depending on nameSize
+    offset   - the 32-bit offset of the sequence data relative to the start of the file
+
+The index is followed by the sequence records, which contain nine fields:
+
+    dnaSize         - number of bases of DNA in the sequence
+    nBlockCount     - the number of blocks of Ns in the file (representing unknown sequence)
+    nBlockStarts    - an array of length nBlockCount of 32 bit integers indicating the starting position of a block of Ns
+    nBlockSizes     - an array of length nBlockCount of 32 bit integers indicating the length of a block of Ns
+    maskBlockCount  - the number of masked (lower-case) blocks
+    maskBlockStarts - an array of length maskBlockCount of 32 bit integers indicating the starting position of a masked block
+    maskBlockSizes  - an array of length maskBlockCount of 32 bit integers indicating the length of a masked block
+    reserved        - always zero for now
+    packedDna       - the DNA packed to two bits per base, represented as so: T - 00, C - 01, A - 10, G - 11. The first base is in
+                      the most significant 2-bit byte; the last base is in the least significant 2 bits. For example, the sequence
+                      TCAG is represented as 00011011.  -}
+
+
+-- Strategy:  We can oly write the packedDNA after we wrote the nBlocks
+-- and mBlocks.  So packedDNA needs to be buffered.  We have to do three
+-- simultaneous strict folds of the input, all of which result in reasonably
+-- compact structures, which get concatenated at the end.
+--
+-- We also have to buffer everything, since the header with the sequence
+-- names must be written first.  Oh joy.
+
+faToTwoBit :: L.ByteString -> L.ByteString
+faToTwoBit =
+  where
+    get_each s = let s1 = L.dropWhile (/= '>') s
+                     nm = L.takeWhile (not . isSpace) $ L.drop 1 s1
+                     s2 = L.dropWhile (/= '\n') s1
+                 in if L.null s1 then [] else get_one s2
+
+
+    get_one s@(pos,) c | isSpace c = s
+
+    collect_Ns =
 

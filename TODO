@@ -1,5 +1,7 @@
 - Do importHetfa and importHetfa' produce identical results?  They should.
 
+- Write packed geno-whatever instead of Eigenstrat?
+
 - D-statistics with population definitions (multiple individuals for one
   population, with estimates of allele frequencies)
 

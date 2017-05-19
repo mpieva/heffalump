@@ -58,7 +58,10 @@ main = do
         , z "bcfin"      (main_xcf conf_bcf)      "Import BCF"
         , z "vcfin"      (main_xcf conf_vcf)      "Import VCF"
         , z "dumppatch"   main_dumppatch          "(debugging aid)"
-        , z "dumplump"    main_dumplump           "(debugging aid)" ]
+        , z "dumplump"    main_dumplump           "(debugging aid)"
+        , z "twobitinfo"  main_2bitinfo           "list reference sequences"
+        , z "twobittofa"  main_2bittofa           "extract Fasta from 2bit"
+        , z "fatotwobit"  main_fato2bit           "convert Fasta to 2bit" ]
 
 
 data ConfImportGen = ConfImportGen {
