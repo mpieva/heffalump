@@ -66,5 +66,5 @@ executable heffalump
   cc-options:          -O3 -std=c99 -fPIC -ggdb -Wall
   c-sources:           cbits/vcf-scan.c
                        cbits/zlib-helper.c
-  include-dirs:        .
+  include-dirs:        cbits
   extra-libraries:     z
