@@ -9,7 +9,6 @@ import System.IO                        ( hPutStrLn, stderr )
 
 import qualified Data.ByteString                 as B
 import qualified Data.ByteString.Lazy            as L
-import qualified Data.ByteString.Lazy.Char8      as C
 import qualified Data.ByteString.Lazy.Internal   as L ( ByteString(..) )
 import qualified Data.ByteString.Streaming       as SB ( nextByte, cons' )
 import qualified Data.ByteString.Streaming.Char8 as S
@@ -19,8 +18,8 @@ decomp :: L.ByteString -> L.ByteString
 decomp s0 = case L.uncons s0 of
     Just (31, s') -> case L.uncons s' of
         Just (139,_) -> decomp_loop s0
-        _            -> s0
-    _                -> s0
+        _            -> s0 -- no decompression needed
+    _                -> s0 -- no decompression needed
   where
     decomp_loop :: L.ByteString -> L.ByteString
     decomp_loop s = case L.uncons s of
@@ -30,8 +29,10 @@ decomp s0 = case L.uncons s0 of
             _            -> L.empty  -- ignores trailing garbage
         _                -> L.empty  -- ignores trailing garbage
 
--- Check if it is GZip at all, return unchanged if it isn't.  Else run
--- gunzip' from Streaming.Zip and discard the remaining stream.
+-- | Checks if the input is GZip at all, returns it unchanged if it
+-- isn't.  Else runs gunzip' from Streaming.Zip and discards the
+-- remaining stream.  (Some HETFA files appear to have junk at the
+-- end...)
 decomp' :: MonadIO m => S.ByteString m r -> S.ByteString m r
 decomp' s0 = S.mwrap $ SB.nextByte s0 >>= \case
     Right (31, s') -> SB.nextByte s' >>= \case
@@ -60,40 +61,21 @@ parseOpts fileargs def ods args = do
     (,) files <$> foldl (>>=) (return def) opts
 
 
--- Samples in FastA format are treated as diploid.
-{-# DEPRECATED readSampleFa "No good." #-}
-readSampleFa :: FilePath -> IO [( B.ByteString, L.ByteString )]
-readSampleFa fp = parseFasta . decomp <$> L.readFile fp
+data FastaSeq m r = FastaSeq !B.ByteString (S.ByteString m r) deriving Functor
 
-readSampleFa' :: MonadResource m => FilePath -> Stream (FastaSeq m) m ()
-readSampleFa' = parseFasta' . decomp' . S.readFile
+readSampleFa :: MonadResource m => FilePath -> Stream (FastaSeq m) m ()
+readSampleFa = parseFasta . decomp' . S.readFile
 
 -- | Parsing a FastA file results in pairs of sequence names and
 -- sequences.  The sequences are still text with their case preserved.
 -- This assumes that the character '>' does not show up anywhere except
 -- to introduce a header and that downstream can deal with whitespace
--- (especially line breaks).  One chromosome will be kept in memory; all
--- fully lazy versions turned out to leak memory at unpredictable rate.
-{-# DEPRECATED parseFasta "No good." #-}
-parseFasta :: L.ByteString -> [(B.ByteString, L.ByteString)]
-parseFasta  = go . C.dropWhile ('>' /=)
-  where
-    go s | L.null  s = []
-         | otherwise = let (!name,!s1) = C.break isSpace (L.drop 1 s)
-                           (!body,rest) = C.break ('>' ==) $ C.dropWhile ('\n' /=) s1
-                       in ( L.toStrict name, body ) : go rest
+-- (especially line breaks).  Annoying as the use of
+-- streaming-bytestring is here, it completely prevents otherwise
+-- unmanageable memory leaks.
 
-    {- go [    ] = [ ]
-    go (h:ls) = breakey B.empty ls
-      where
-        !name = B.concat . concatMap L.toChunks . take 1 . C.words $ C.drop 1 h -}
-
-data FastaSeq m r = FastaSeq { fs_name :: !B.ByteString
-                             , fs_seq  :: S.ByteString m r }
-    deriving Functor
-
-parseFasta' :: Monad m => S.ByteString m r -> Stream (FastaSeq m) m r
-parseFasta' = go . ignoreBody . S.lines
+parseFasta :: Monad m => S.ByteString m r -> Stream (FastaSeq m) m r
+parseFasta = go . ignoreBody . S.lines
   where
     go :: Monad m => Stream (S.ByteString m) m r -> Stream (FastaSeq m) m r
     go s = effect (inspect s >>= go')

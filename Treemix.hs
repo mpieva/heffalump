@@ -33,7 +33,7 @@ defaultConfTmx = ConfTmx 1 Nothing Nothing Nothing False (0,21)
 opts_treemix :: [ OptDescr (ConfTmx -> IO ConfTmx) ]
 opts_treemix =
     [ Option "o" ["output"]        (ReqArg set_output "FILE") "Write output to FILE (.tmx.gz)"
-    , Option "r" ["reference"]     (ReqArg set_ref    "FILE") "Read reference from FILE (.fa)"
+    , Option "r" ["reference"]     (ReqArg set_ref    "FILE") "Read reference from FILE (.2bit)"
     , Option "i" ["individuals"]   (ReqArg set_indiv  "FILE") "Read individuals from FILE (.ind)"
     , Option "n" ["numoutgroups"]  (ReqArg set_nout    "NUM") "The first NUM individuals are outgroups (1)"
     , Option "t" ["transversions"] (NoArg  set_transv       ) "Restrict to transversion variants"

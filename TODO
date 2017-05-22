@@ -1,4 +1,4 @@
-- Do importHetfa and importHetfa' produce identical results?  They should.
+- Doku:  --mateja, --mateja2;  twobittofa, fatotwobit, twobitinfo
 
 - Write packed geno-whatever instead of Eigenstrat?
 
@@ -7,3 +7,4 @@
 
 - C-library for reading and merging
 
+- Clean the unholy mess of Streamin/Lowlevel.hs, Streamin/Zip.hs, Streamin/Zlib.hs

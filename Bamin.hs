@@ -46,7 +46,7 @@ conf_bam0 = ConfBam (error "no output file specified") (error "no reference file
 opts_bam :: [ OptDescr ( ConfBam -> IO ConfBam ) ]
 opts_bam =
     [ Option "o" ["output"]             (ReqArg set_output  "FILE") "Write output to FILE (.hef)"
-    , Option "r" ["reference"]          (ReqArg set_ref     "FILE") "Read reference from FILE (.fa)"
+    , Option "r" ["reference"]          (ReqArg set_ref     "FILE") "Read reference from FILE (.2bit)"
     , Option "m" ["min-qual"]           (ReqArg set_minqual "QUAL") "Discard bases below quality QUAL"
     , Option "q" ["min-mapq"]           (ReqArg set_minmapq "QUAL") "Discard reads below mapq QUAL"
     , Option [ ] ["deaminate"]          (NoArg       set_deaminate) "Artificially deaminate"

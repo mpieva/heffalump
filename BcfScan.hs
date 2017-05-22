@@ -23,7 +23,8 @@ readBcf :: FilePath -> IO [ RawVariant ]
 readBcf fp = decodeBcf . decomp =<< L.readFile fp
 
 -- Skip over header, for now we won't parse it.  This fails if GT is not
--- the first individual field that's encoded.
+-- the first individual field that's encoded, but that should always be
+-- the case.
 decodeBcf :: L.ByteString -> IO [ RawVariant ]
 decodeBcf str0
     | "BCF\2" == L.take 4 str0 = let l_text     = slow_word32 (L.drop 5 str0)

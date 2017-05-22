@@ -304,47 +304,9 @@ main_fato2bit [     ] =  do
 main_fato2bit [  fp ] = L.writeFile fp . faToTwoBit .                decomp =<< L.getContents
 main_fato2bit (fp:fs) = L.writeFile fp . faToTwoBit . L.concat . map decomp =<< mapM L.readFile fs
 
-{-   From https://genome.ucsc.edu/FAQ/FAQformat.html:
 
-.2bit format
-
-A .2bit file stores multiple DNA sequences (up to 4 Gb total) in a
-compact randomly-accessible format. The file contains masking
-information as well as the DNA itself.  The file begins with a 16-byte
-header containing the following fields:
-
-    signature     - the number 0x1A412743 in the architecture of the machine that created the file
-    version       - zero for now. Readers should abort if they see a version number higher than 0.
-    sequenceCount - the number of sequences in the file.
-    reserved      - always zero for now
-
-All fields are 32 bits unless noted. If the signature value is not as
-given, the reader program should byte-swap the signature and check if
-the swapped version matches. If so, all multiple-byte entities in the
-file will have to be byte-swapped. This enables these binary files to be
-used unchanged on different architectures.  The header is followed by a
-file index, which contains one entry for each sequence. Each index entry
-contains three fields:
-
-    nameSize - a byte containing the length of the name field
-    name     - the sequence name itself, of variable length depending on nameSize
-    offset   - the 32-bit offset of the sequence data relative to the start of the file
-
-The index is followed by the sequence records, which contain nine fields:
-
-    dnaSize         - number of bases of DNA in the sequence
-    nBlockCount     - the number of blocks of Ns in the file (representing unknown sequence)
-    nBlockStarts    - an array of length nBlockCount of 32 bit integers indicating the starting position of a block of Ns
-    nBlockSizes     - an array of length nBlockCount of 32 bit integers indicating the length of a block of Ns
-    maskBlockCount  - the number of masked (lower-case) blocks
-    maskBlockStarts - an array of length maskBlockCount of 32 bit integers indicating the starting position of a masked block
-    maskBlockSizes  - an array of length maskBlockCount of 32 bit integers indicating the length of a masked block
-    reserved        - always zero for now
-    packedDna       - the DNA packed to two bits per base, represented as so: T - 00, C - 01, A - 10, G - 11. The first
-                      base is in the most significant 2-bit byte; the last base is in the least significant 2 bits. For
-                      example, the sequence TCAG is represented as 00011011.  -}
-
-
+-- List of pairs of 'Word32's.  Specialized and unpacked to conserve
+-- space.  Probably overkill...
 data L2i = L2i {-# UNPACK #-} !Word32 {-# UNPACK #-} !Word32 L2i | L2i_Nil
 
 encodeL2i :: L2i -> B.Builder
@@ -366,7 +328,7 @@ faToTwoBit :: L.ByteString -> L.ByteString
 faToTwoBit s0 = L.concat $ B.toLazyByteString header : map snd seqs
   where
     seqs = get_each s0
-        
+
     offset0 = 16 + 5 * length seqs + sum (map (S.length . fst) seqs)
     offsets = scanl (\a b -> a + fromIntegral (L.length b)) offset0 $ map snd seqs
 
@@ -385,26 +347,26 @@ faToTwoBit s0 = L.concat $ B.toLazyByteString header : map snd seqs
                                  (-1 :!: L2i_Nil) (-1 :!: L2i_Nil) (0 :!: 0 :!: []) s2
 
 
-    get_one !nm !pos !_ns !_ms !_bs _s 
+    get_one !nm !pos !_ns !_ms !_bs _s
         | pos .&. 0xFFFFFF == 0 && trace (show (nm,pos)) False = undefined
 
     get_one !nm !pos !ns !ms !bs s = case L.uncons s of
         Nothing -> fin
         Just (c,s')
             | isSpace c -> get_one nm pos ns ms bs s'
-            | c == '>'  -> fin 
+            | c == '>'  -> fin
             | otherwise -> get_one nm (succ pos)
                                    (collect_Ns ns pos c)
                                    (collect_ms ms pos c)
                                    (collect_bases bs c) s'
-      where 
+      where
         fin = let ss' = case bs of (0 :!: _ :!: ss) -> ss
                                    (n :!: w :!: ss) -> B.singleton (w `shiftL` (6-2*n)) : ss
                   raw = B.toLazyByteString $
-                            B.word32LE pos <> 
+                            B.word32LE pos <>
                             encodeL2i (case ns of -1 :!: rs -> rs ; p :!: rs -> L2i p pos rs) <>
                             encodeL2i (case ms of -1 :!: rs -> rs ; p :!: rs -> L2i p pos rs) <>
-                            B.word32LE 0 <> 
+                            B.word32LE 0 <>
                             foldMap B.byteString (reverse ss')
               in L.length raw `seq` (nm, raw) : get_each s
 
@@ -430,19 +392,19 @@ faToTwoBit s0 = L.concat $ B.toLazyByteString header : map snd seqs
     --             so: T - 00, C - 01, A - 10, G - 11. The first base is
     --             in the most significant 2-bit byte; the last base is
     --             in the least significant 2 bits. For example, the
-    --             sequence TCAG is represented as 00011011. 
-    collect_bases (n :!: w :!: ss) c 
+    --             sequence TCAG is represented as 00011011.
+    collect_bases (n :!: w :!: ss) c
         = let code = case c of 'C'->1;'c'->1;'A'->2;'a'->2;'G'->3;'g'->3;_->0
               w' = shiftL w 2 .|. code
           in if n == 3 then 0 :!: 0 :!: put w' ss else succ n :!: w' :!: ss
 
-    -- Keep appending bytes to a collection of 'ByteString's in such a way that the 'ByteString's keep doubling in size.
+    -- Keep appending bytes to a collection of 'ByteString's in such a
+    -- way that the 'ByteString's keep doubling in size.  (XXX  This is
+    -- a recurring problem; could use a reusable solution.)
     put w = go 1 [B.singleton w]
       where
         go l acc (s:ss)
             | B.length s <= l = go (l+B.length s) (s:acc) ss
             | otherwise = let !s' = B.concat acc in s' : s : ss
         go _ acc [    ] = let !s' = B.concat acc in [s']
-
-        
 

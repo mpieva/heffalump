@@ -1,11 +1,24 @@
-module Eigenstrat where
+module Eigenstrat
+        ( ConfMergeGen(..)
+        , defaultMergeConf
+        , opts_eigen
+        , main_eigenstrat
+        ) where
 
 import BasePrelude
+import System.Console.GetOpt
+import System.IO
 
 import qualified Data.Foldable                  as F
 import qualified Data.ByteString.Char8          as B
 import qualified Data.ByteString.Lazy           as LB
 import qualified Data.ByteString.Lazy.Char8     as L
+import qualified Data.Vector.Unboxed            as U
+
+import Bed
+import Lump
+import NewRef
+import Util
 
 -- ^ The Eigenstrat and Ancestrymap exporters.  Includes silly
 -- generation of names and hash functions.
@@ -49,4 +62,74 @@ mkname x y z = enc (4*y + numOf z) [ B.index chars x ]
 
     enc 0 = id
     enc u = (:) (B.index chars (u .&. 31)) . enc (u `shiftR` 5)
+
+data ConfMergeGen = ConfMergeGen {
+    conf_noutgroups :: Int,
+    conf_blocksize  :: Int,
+    conf_all        :: Bool,
+    conf_split      :: Bool,
+    conf_reference  :: Maybe FilePath,
+    conf_regions    :: Maybe FilePath,
+    conf_nrefpanel  :: Int,
+    conf_output     :: FilePath,
+    conf_sample     :: FilePath }
+  deriving Show
+
+defaultMergeConf :: ConfMergeGen
+defaultMergeConf = ConfMergeGen 1 5000000 True True Nothing Nothing
+                                (error "size of reference panel not known")
+                                (error "no output file specified")
+                                (error "no sample file specified")
+
+opts_eigen :: [ OptDescr (ConfMergeGen -> IO ConfMergeGen) ]
+opts_eigen =
+    [ Option "o" ["output"]     (ReqArg set_output "FILE") "Write output to FILE.geno and FILE.snp"
+    , Option "r" ["reference"]     (ReqArg set_ref "FILE") "Read reference from FILE (.2bit)"
+    , Option "n" ["numoutgroups"]  (ReqArg set_nout "NUM") "The first NUM individuals are outgroups (1)"
+    , Option "t" ["only-transversions"] (NoArg set_no_all) "Output only transversion sites"
+    , Option "b" ["only-biallelic"]   (NoArg set_no_split) "Discard, don't split, polyallelic sites"
+    , Option "R" ["regions"]      (ReqArg set_rgns "FILE") "Restrict to regions in bed-file FILE" ]
+  where
+    set_output a c = return $ c { conf_output     =      a }
+    set_ref    a c = return $ c { conf_reference  = Just a }
+    set_nout   a c = (\n ->   c { conf_noutgroups =      n }) <$> readIO a
+    set_no_all   c = return $ c { conf_all        =  False }
+    set_no_split c = return $ c { conf_split      =  False }
+    set_rgns   a c = return $ c { conf_regions    = Just a }
+
+-- merge multiple files with the reference, write Eigenstrat format (geno & snp files)
+main_eigenstrat :: [String] -> IO ()
+main_eigenstrat args = do
+    ( hefs, ConfMergeGen{..} ) <- parseOpts True defaultMergeConf (mk_opts "eigenstrat" "[hef-file...]" opts_eigen) args
+    (refs, inps) <- decodeMany conf_reference hefs
+    region_filter <- mkBedFilter conf_regions (either error nrss_chroms refs)
+
+    withFile (conf_output ++ ".snp") WriteMode $ \hsnp ->
+        withFile (conf_output ++ ".geno") WriteMode $ \hgeno -> do
+            let vars = either (const id) addRef refs $
+                       region_filter $
+                       bool singles_only concat conf_split $
+                       mergeLumps conf_noutgroups inps
+            forM_ vars $ \Variant{..} ->
+                -- samples (not outgroups) must show ref and alt allele at least once
+                let ve = U.foldl' (.|.) 0 $ U.drop conf_noutgroups v_calls
+                    is_ti = conf_all || isTransversion v_alt in
+                when (ve .&. 3 /= 0 && ve .&. 12 /= 0 && is_ti) $ do
+                    hPutStrLn hgeno $ map (B.index "9222011101110111" . fromIntegral) $ U.toList v_calls
+                    hPutStrLn hsnp $ intercalate "\t"
+                        -- 1st column is SNP name
+                        [ mkname v_chr v_pos (toAltCode v_alt v_ref)
+                        -- "2nd column is chromosome.  X chromosome is encoded as 23.
+                        -- Also, Y is encoded as 24, mtDNA is encoded as 90, ..."
+                        , show $ if v_chr == 24 then 90 else v_chr + 1
+                        -- "3rd column is genetic position (in Morgans).
+                        -- If unknown, ok to set to 0.0"
+                        , "0.0"
+                        -- "4th column is physical position (in bases)"
+                        , show (v_pos+1)
+                        -- "Optional 5th and 6th columns are reference and variant alleles"
+                        , [toRefCode v_ref], [toAltCode v_alt v_ref] ]
+  where
+    singles_only = foldr (\xs xss -> case xs of [x] -> x : xss ; _ -> xss) []
+
 

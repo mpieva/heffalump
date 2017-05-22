@@ -41,6 +41,47 @@ import Util ( decomp )
 -- length and a sequence of bases.  Complex alleles (such as two different
 -- alleles) would need to be broken up into separate variants---haven't
 -- thought about the details.
+--
+-- The code we use:
+--
+--      0b00000000: break
+--
+--      0b00000001: transition
+--      0b00000010: complement
+--      0b00000011: trans-complement
+--
+--      0b00000101: ref+trans
+--      0b00000110: trans+trans
+--      0b00000111: ref+compl
+--      0b00001000: trans+compl
+--      0b00001001: compl+compl
+--      0b00001010: ref+tcompl
+--      0b00001011: trans+tcompl
+--      0b00001100: compl+tcompl
+--      0b00001101: tcompl+tcompl
+--
+--      0b0001yxxx: monoallelic indel
+--      0b0010yxxx: heterozygous indel
+--      0b0011yxxx: diallelic indel
+--          if xxx == 0, one length byte follows.
+--          if y == 1, it's an insertion and xxx bases follow (2 bits per base,
+--                     ATGC, padded to full bytes)
+--
+--      0b01xxxxxx: short uncalled stretch
+--      0b10xxxxxx: short monoallelic matches
+--      0b11xxxxxx: short diallelic matches
+--          if xxxxxx == 111111, one length byte follows
+--          if xxxxxx == 111110, two length bytes follow
+--          if xxxxxx == 111101, three length bytes follow
+--          if xxxxxx == 111100, four length bytes follow
+--
+-- We are left with three "reserved" codes (0x04, 0x0E, 0x0F) and three
+-- nonsensical ones (0x40, 0x80, 0xC0).
+--
+-- Note the bases: bit 0 codes for transition, bit 1 for complement.
+-- We might sometimes want to output variants without having a reference
+-- available.  In that case, we code as follows:  I (Identical), O
+-- (transitiOn), P (comPlement), X (trans-complement)
 
 data Lump a
     = Ns !Int a                         -- ^ uncalled stretch
@@ -108,10 +149,6 @@ debugLump' c i fl = case unFix fl of
     Ins2      s l -> do putStrLn $ shows (c,i) "\tIns2 " ++ shows s " " ; debugLump' c i l
     InsH      s l -> do putStrLn $ shows (c,i) "\tInsH " ++ shows s " " ; debugLump' c i l
 
-
-{-# DEPRECATED concatLumps "use concatLumps'" #-}
-concatLumps :: Foldable t => t (Fix Lump -> Fix Lump) -> Fix Lump
-concatLumps = foldr (\a b -> a $ Fix $ Break b) (Fix Done)
 
 {-# DEPRECATED normalizeLump "use normalizeLump'" #-}
 normalizeLump :: Fix Lump -> Fix Lump
@@ -500,49 +537,6 @@ decodeLump = ana decode1
                         , L.head s1 `shiftR` 6 .&. 0x3 ]
 
 
--- 0b00000000: break
---
--- 0b00000001: transition
--- 0b00000010: complement
--- 0b00000011: trans-complement
---
--- 0b00000101: ref+trans
--- 0b00000110: trans+trans
--- 0b00000111: ref+compl
--- 0b00001000: trans+compl
--- 0b00001001: compl+compl
--- 0b00001010: ref+tcompl
--- 0b00001011: trans+tcompl
--- 0b00001100: compl+tcompl
--- 0b00001101: tcompl+tcompl
---
--- 0b0001yxxx: monoallelic indel
--- 0b0010yxxx: heterozygous indel
--- 0b0011yxxx: diallelic indel
---     if xxx == 0, one length byte follows.
---     if y == 1, it's an insertion and xxx bases follow (2 bits per base,
---                ATGC, padded to full bytes)
---
--- 0b01xxxxxx: short uncalled stretch
--- 0b10xxxxxx: short monoallelic matches
--- 0b11xxxxxx: short diallelic matches
---     if xxxxxx == 111111, one length byte follows
---     if xxxxxx == 111110, two length bytes follow
---     if xxxxxx == 111101, three length bytes follow
---     if xxxxxx == 111100, four length bytes follow
---
---
--- We are left with three "reserved" codes (0x04, 0x0E, 0x0F) and three
--- nonsensical ones (0x40, 0x80, 0xC0).  Should the integers maybe be coded
--- similarly to UTF8?  Loses some codes for short stretches, increases the
--- range for the longer codes.  Complicates the decoder, I think.
---
--- Note the bases: bit 0 codes for transition, bit 1 for complement.
--- Possible codes when outputting SNPs without knowledge of the reference
--- base:  I (Identical), O (transitiOn), P (comPlement), X
--- (trans-complement)
-
-
 -- | Merging without access to a reference sequence.  This code doesn't
 -- believe in Indels and skips over them.
 --
@@ -588,7 +582,7 @@ mergeLumps !noutgroups = filter (not . null) . go 0 0
     skipBreak (Break l) =     l
     skipBreak        l  = Fix l
 
-    -- Skip over l sites.
+    -- Skip over exactly l sites.
     skipStretch :: Int -> Lump (Fix Lump) -> Fix Lump
     skipStretch !l           _ | l < 0 || l > 300000000 = error "WTF?!"
 
@@ -832,41 +826,42 @@ gendiff' view = generic
     generic !ref !smp = effect $ case view ref of
             NilRef              -> pure <$> S.effects smp
             l :== ref'          -> ns l ref' (S.drop (fromIntegral l) smp)
-            u :^  ref' | isNN u -> ns 1 ref' (S.drop 1 smp)
+            u :^  ref' | isNN u -> ns 1 ref' (S.drop               1  smp)
             u :^  ref' -> S.nextByte smp >>= \case
                 Left r                 -> return $ pure r
                 Right (x, smp')
                     | x .&. 0x7F <= 32 -> return $ generic ref  smp'
-                    | isN  x           -> ns 1 ref' smp'
+                    | isN  x           -> ns    1 ref' smp'
                     | eq u x           -> eqs_2 1 ref' smp'
                     | otherwise        -> return $ yields (encVar u x smp') >>= generic ref'
 
     eqs_2 !n !ref !smp = case view ref of
-            NilRef              -> S.effects smp >>= \r -> return $ yields (Eqs2 n ()) >> pure r
+            NilRef              -> yields . Eqs2 n <$> S.effects smp
             l :== ref'          -> return $ yields (Eqs2 n (S.drop (fromIntegral l) smp)) >>= effect . ns l ref'
-            u :^  ref' | isNN u -> return $ yields (Eqs2 n (S.drop 1 smp)) >>= effect . ns 1 ref'
+            u :^  ref' | isNN u -> return $ yields (Eqs2 n (S.drop               1  smp)) >>= effect . ns 1 ref'
             u :^  ref'                 -> S.nextByte smp >>= \case
-                Left r                 -> return $ yields (Eqs2 n ()) >> pure r
+                Left r                 -> return $ yields (Eqs2 n r)
                 Right (x, smp')
-                    | x .&. 0x7F <= 32 -> eqs_2 n ref smp'
-                    | isN  x           -> return $ yields (Eqs2 n smp') >>= effect . ns 1 ref'
+                    | x .&. 0x7F <= 32 -> eqs_2       n  ref  smp'
                     | eq u x           -> eqs_2 (succ n) ref' smp'
+                    | isN  x           -> return $ yields (Eqs2 n smp') >>= effect . ns 1 ref'
                     | otherwise        -> return $ yields (Eqs2 n smp') >>= yields . encVar u x >>= generic ref'
 
     ns !n !ref !smp = case view ref of
-            NilRef              -> S.effects smp >>= \r -> return $ yields (Ns n ()) >> pure r
+            NilRef              -> yields . Ns n <$> S.effects smp
             l :== ref'          -> ns (l+n) ref' (S.drop (fromIntegral l) smp)
-            u :^  ref' | isNN u -> ns (1+n) ref' (S.drop 1 smp)
+            u :^  ref' | isNN u -> ns (1+n) ref' (S.drop               1  smp)
             u :^  ref' -> S.nextByte smp >>= \case
-                Left r                 ->  return $ yields (Ns n ()) >> pure r
+                Left r                 -> return $ yields (Ns n r)
                 Right (x, smp')
-                    | x .&. 0x7F <= 32 -> ns n ref smp'
-                    | isN  x           -> ns (n+1) ref' smp'
+                    | x .&. 0x7F <= 32 -> ns       n  ref  smp'
+                    | isN  x           -> ns (succ n) ref' smp'
                     | eq u x           -> return $ yields (Ns n smp') >>= effect . eqs_2 1 ref'
-                    | otherwise        -> return $ yields (Eqs2 n smp') >>= yields . encVar u x >>= generic ref'
+                    | otherwise        -> return $ yields (Ns n smp') >>= yields . encVar u x >>= generic ref'
 
 
-fromAmbCode :: Word8 -> Word8       -- two alleles in bits 0,1 and 2,3
+-- two alleles in bits 0,1 and 2,3
+fromAmbCode :: Word8 -> Word8
 fromAmbCode c | c == c2w 't' =  0
               | c == c2w 'c' =  5
               | c == c2w 'a' = 10
@@ -999,7 +994,8 @@ patch ref (Fix l) = case unconsNRS ref of
             Done          -> Term (Fix Done)
 
 
--- stolen from data-fix
+-- XXX  Stolen from data-fix.  If we migrate completely to streaming,
+-- this isn't needed anymore.
 newtype Fix f = Fix { unFix :: f (Fix f) }
 
 ana :: Functor f => (a -> f a) -> (a -> Fix f)

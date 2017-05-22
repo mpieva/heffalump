@@ -1,6 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
 import BasePrelude
-import Data.ByteString.Builder          ( hPutBuilder )
 import Streaming
 import System.Console.GetOpt
 import System.FilePath                  ( takeBaseName )
@@ -31,7 +30,8 @@ main = do
     as0 <- getArgs
     case as0 of
         [] -> usage
-        a:as -> case [ m | (k,(m,_)) <- mains, a `isPrefixOf` k ] of
+        a:as -> case [ m | (k,(m,_)) <- mains
+                     , map toLower a `isPrefixOf` map toLower k ] of
             [m] -> m as
             _   -> usage
   where
@@ -46,7 +46,6 @@ main = do
         [ z "eigenstrat"  main_eigenstrat         "Merge heffalumps into Eigenstrat format"
         , z "vcfexport"   main_vcfout             "Merge heffalumps into VCF"
         , z "hetfa"       main_hetfa              "Import hetfa file"
-        , z "het2fa"      main_hetfa'             "Import hetfa file (new)"
         , z "bamin"       main_bam                "Import BAM file"
         , z "maf"         main_maf                "Import two-species maf"
         , z "emf"         main_emf                "Import one genome from emf (Compara)"
@@ -65,35 +64,16 @@ main = do
 
 
 data ConfImportGen = ConfImportGen {
-    conf_imp_width      :: Int64,           -- only for FastA output
     conf_imp_reference  :: FilePath,
     conf_imp_output     :: FilePath,
     conf_imp_sample     :: FilePath }
   deriving Show
 
 defaultImportConf :: ConfImportGen
-defaultImportConf = ConfImportGen 50 (error "no reference specified")
-                                     (error "no output file specified")
-                                     (error "no sample file specified")
+defaultImportConf = ConfImportGen (error "no reference specified")
+                                  (error "no output file specified")
+                                  (error "no sample file specified")
 
-
-data ConfMergeGen = ConfMergeGen {
-    conf_noutgroups :: Int,
-    conf_blocksize  :: Int,
-    conf_all        :: Bool,
-    conf_split      :: Bool,
-    conf_reference  :: Maybe FilePath,
-    conf_regions    :: Maybe FilePath,
-    conf_nrefpanel  :: Int,
-    conf_output     :: FilePath,
-    conf_sample     :: FilePath }
-  deriving Show
-
-defaultMergeConf :: ConfMergeGen
-defaultMergeConf = ConfMergeGen 1 5000000 True True Nothing Nothing
-                                (error "size of reference panel not known")
-                                (error "no output file specified")
-                                (error "no sample file specified")
 
 opts_hetfa :: [ OptDescr (ConfImportGen -> IO ConfImportGen) ]
 opts_hetfa =
@@ -110,49 +90,22 @@ main_hetfa :: [String] -> IO ()
 main_hetfa args = do
     ( _, ConfImportGen{..} ) <- parseOpts False defaultImportConf (mk_opts "hetfa" [] opts_hetfa) args
     refs <- readTwoBit conf_imp_reference
-    smp  <- readSampleFa conf_imp_sample
-
-    withFile conf_imp_output WriteMode $ \hdl ->
-        hPutBuilder hdl $ importHetfa refs smp
-
-main_hetfa' :: [String] -> IO ()
-main_hetfa' args = do
-    ( _, ConfImportGen{..} ) <- parseOpts False defaultImportConf (mk_opts "hetfa" [] opts_hetfa) args
-    refs <- readTwoBit conf_imp_reference
 
     runResourceT $ S.writeFile conf_imp_output $
-            importHetfa' refs $ readSampleFa' conf_imp_sample
+            importHetfa refs $ readSampleFa conf_imp_sample
 
--- Import Hetfa by diffing it against a reference.  We must read the
+
+-- | Import Hetfa by diffing it against a reference.  We must read the
 -- Hetfa in the order of the file (Fasta doesn't have an index), but
 -- write it in the order of the reference.  So we parse a chromosome at
 -- a time, sort in memory and dump it at the end.
 --
 -- Chromosomes in input that don't have match in the reference are
 -- silently ignored.  Chromsomes that don't show up in the input are
--- emitted as empty sequences.  If no sequence matches, we produce a
--- warning message.
-importHetfa :: NewRefSeqs -> [( B.ByteString, L.ByteString )] -> B.Builder
-importHetfa ref smps
-    | I.null map1 = error "Found only unexpected sequences.  Is this the right reference?"
-    | otherwise   = encodeHeader ref <>
-                    -- a single 0 is the encoding of an empty chromosome (just the 'Break')
-                    foldMap (\i -> maybe (B.word8 0) B.lazyByteString  $ I.lookup i map1)
-                            [0 .. length (nrss_chroms ref) - 1]
-  where
-    map1 :: I.IntMap L.ByteString
-    map1 = foldl' enc1 I.empty smps
-
-    enc1 :: I.IntMap L.ByteString -> (B.ByteString, L.ByteString) -> I.IntMap L.ByteString
-    enc1 im (nm,sq) = maybe im (\i -> let !l = enc2 i sq in trace (show (i, L.length l)) (I.insert i l im))
-                      $ findIndex (nm ==) (nrss_chroms ref)
-
-    enc2 :: Int -> L.ByteString -> L.ByteString
-    enc2 i sq = B.toLazyByteString . encodeLump . normalizeLump .
-                diff2 (nrss_seqs ref !! i) sq $ Fix (Break (Fix Done))
-
-importHetfa' :: MonadIO m => NewRefSeqs -> Stream (FastaSeq m) m r -> S.ByteString m r
-importHetfa' ref smps = S.mwrap $ do -- ?!  XXX
+-- emitted as empty sequences.  Only f no sequence matches, we produce
+-- an error message.
+importHetfa :: MonadIO m => NewRefSeqs -> Stream (FastaSeq m) m r -> S.ByteString m r
+importHetfa ref smps = S.mwrap $ do
     (map1,r) <- fold_1 I.empty smps
 
     when (I.null map1) $ error
@@ -210,84 +163,46 @@ main_maf args = do
                  emptyGenome maffs
 
 
-opts_patch :: [ OptDescr (ConfImportGen -> IO ConfImportGen) ]
+data ConfPatch = ConfPatch {
+    conf_patch_width      :: Int64,
+    conf_patch_reference  :: Either String FilePath,
+    conf_patch_output     :: FilePath,
+    conf_patch_sample     :: FilePath }
+  deriving Show
+
+defaultPatchConf :: ConfPatch
+defaultPatchConf = ConfPatch 50 (Left    "no reference specified")
+                                (error "no output file specified")
+                                (error "no sample file specified")
+
+
+opts_patch :: [ OptDescr (ConfPatch -> IO ConfPatch) ]
 opts_patch =
     [ Option "o" ["output"] (ReqArg set_output "FILE") "Write output to FILE (.hetfa)"
-    , Option "r" ["reference"] (ReqArg set_ref "FILE") "Read reference from FILE (.fa)"
+    , Option "r" ["reference"] (ReqArg set_ref "FILE") "Read reference from FILE (.2bit)"
     , Option "s" ["sample"] (ReqArg set_sample "FILE") "Read sample from FILE (.hef)"
     , Option "w" ["width"]  (ReqArg  set_width  "NUM") "Set width of FastA to NUM (50)" ]
   where
-    set_output a c = return $ c { conf_imp_output    = a }
-    set_ref    a c = return $ c { conf_imp_reference = a }
-    set_sample a c = return $ c { conf_imp_sample    = a }
-    set_width  a c = (\n   -> c { conf_imp_width     = n }) <$> readIO a
+    set_output a c = return $ c { conf_patch_output    =       a }
+    set_ref    a c = return $ c { conf_patch_reference = Right a }
+    set_sample a c = return $ c { conf_patch_sample    =       a }
+    set_width  a c = (\n   -> c { conf_patch_width     =       n }) <$> readIO a
 
 main_patch :: [String] -> IO ()
 main_patch args = do
-    ( _, ConfImportGen{..} ) <- parseOpts False defaultImportConf (mk_opts "patch" [] opts_patch) args
-    ref <- readTwoBit conf_imp_reference
-    pat <- decode (Right ref) . decomp <$> L.readFile conf_imp_sample
+    ( _, ConfPatch{..} ) <- parseOpts False defaultPatchConf (mk_opts "patch" [] opts_patch) args
+    raw <- decomp <$> L.readFile conf_patch_sample
+    ref <- readTwoBit $ either (\e -> fromMaybe e $ getRefPath raw) id conf_patch_reference
 
-    withFile conf_imp_output WriteMode $ \hdl ->
-        patchFasta hdl conf_imp_width (nrss_chroms ref) (nrss_seqs ref) pat
+    withFile conf_patch_output WriteMode $ \hdl ->
+        patchFasta hdl conf_patch_width (nrss_chroms ref)
+                   (nrss_seqs ref) (decode (Right ref) raw)
 
 main_dumplump :: [String] -> IO ()
 main_dumplump [ref,inf] = do rs <- readTwoBit ref
                              debugLump . decode (Right rs) . decomp =<< L.readFile inf
 main_dumplump [  inf  ] =    debugLump . decode (Left "no reference given") . decomp =<< L.readFile inf
 main_dumplump     _     =    hPutStrLn stderr "Usage: dumplump [foo.hef]"
-
-opts_eigen :: [ OptDescr (ConfMergeGen -> IO ConfMergeGen) ]
-opts_eigen =
-    [ Option "o" ["output"]     (ReqArg set_output "FILE") "Write output to FILE.geno and FILE.snp"
-    , Option "r" ["reference"]     (ReqArg set_ref "FILE") "Read reference from FILE (.fa)"
-    , Option "n" ["numoutgroups"]  (ReqArg set_nout "NUM") "The first NUM individuals are outgroups (1)"
-    , Option "t" ["only-transversions"] (NoArg set_no_all) "Output only transversion sites"
-    , Option "b" ["only-biallelic"]   (NoArg set_no_split) "Discard, don't split, polyallelic sites"
-    , Option "R" ["regions"]      (ReqArg set_rgns "FILE") "Restrict to regions in bed-file FILE" ]
-  where
-    set_output a c = return $ c { conf_output     =      a }
-    set_ref    a c = return $ c { conf_reference  = Just a }
-    set_nout   a c = (\n ->   c { conf_noutgroups =      n }) <$> readIO a
-    set_no_all   c = return $ c { conf_all        =  False }
-    set_no_split c = return $ c { conf_split      =  False }
-    set_rgns   a c = return $ c { conf_regions    = Just a }
-
--- merge multiple files with the reference, write Eigenstrat format (geno & snp files)
-main_eigenstrat :: [String] -> IO ()
-main_eigenstrat args = do
-    ( hefs, ConfMergeGen{..} ) <- parseOpts True defaultMergeConf (mk_opts "eigenstrat" "[hef-file...]" opts_eigen) args
-    (refs, inps) <- decodeMany conf_reference hefs
-    region_filter <- mkBedFilter conf_regions (either error nrss_chroms refs)
-
-    withFile (conf_output ++ ".snp") WriteMode $ \hsnp ->
-        withFile (conf_output ++ ".geno") WriteMode $ \hgeno -> do
-            let vars = either (const id) addRef refs $
-                       region_filter $
-                       bool singles_only concat conf_split $
-                       mergeLumps conf_noutgroups inps
-            forM_ vars $ \Variant{..} ->
-                -- samples (not outgroups) must show ref and alt allele at least once
-                let ve = U.foldl' (.|.) 0 $ U.drop conf_noutgroups v_calls
-                    is_ti = conf_all || isTransversion v_alt in
-                when (ve .&. 3 /= 0 && ve .&. 12 /= 0 && is_ti) $ do
-                    hPutStrLn hgeno $ map (B.index "9222011101110111" . fromIntegral) $ U.toList v_calls
-                    hPutStrLn hsnp $ intercalate "\t"
-                        -- 1st column is SNP name
-                        [ mkname v_chr v_pos (toAltCode v_alt v_ref)
-                        -- "2nd column is chromosome.  X chromosome is encoded as 23.
-                        -- Also, Y is encoded as 24, mtDNA is encoded as 90, ..."
-                        , show $ if v_chr == 24 then 90 else v_chr + 1
-                        -- "3rd column is genetic position (in Morgans).
-                        -- If unknown, ok to set to 0.0"
-                        , "0.0"
-                        -- "4th column is physical position (in bases)"
-                        , show (v_pos+1)
-                        -- "Optional 5th and 6th columns are reference and variant alleles"
-                        , [toRefCode v_ref], [toAltCode v_alt v_ref] ]
-  where
-    singles_only = foldr (\xs xss -> case xs of [x] -> x : xss ; _ -> xss) []
-
 
 -- VCF output, this time going through 'Lump' instead of 'Stretch'
 main_vcfout :: [String] -> IO ()
@@ -354,20 +269,4 @@ patchFasta hdl wd = p1
     p2 k l (Long  s f) = case L.splitAt (wd-l) s of
             _ | L.null s -> p2 k l f
             (u,v)        -> L.hPutStr hdl u >> p2 k (l + L.length u) (Long v f)
-
-
--- Our FastA files don't run exactly parallel (some samples are
--- truncated, it appears).  Therefore, we have to parse the FastA input
--- to some extent.  We shall also guard against messed up chromosome
--- order, just to be safe.  To this end, we pass the list of desired
--- chromosomes in.  The parser looks for the correct header, then
--- extracts the sequence (concatenated, no line feeds).  If the header
--- isn't found (this may happen after a while if the sorting is messed
--- up), a hard error is caused.  Unexpected sequences are skipped.  This
--- function doesn't care about the alphabet, so it would work for hetfa
--- and even protein FastA.  Input is ordered list of chromosomes and
--- lines of input.
---
--- Note that we turn small letters into capital letters in the
--- sequences.  Saves us from dealing with them later.
 

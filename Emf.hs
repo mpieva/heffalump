@@ -3,7 +3,8 @@ module Emf ( main_emf
            , Genome
            , encodeGenome
            , emptyGenome
-           , parseMaf ) where
+           , parseMaf
+           ) where
 
 -- ^ Getting variant calls from EMF file (Compara EPO whole genome
 -- alignments).  EMF contains a list of blocks, and each block aligns
@@ -397,13 +398,6 @@ main_emf args = do
     !genome <- foldM (collectTrees (nrss_chroms ref) emf_select) emptyGenome
                =<< scan_all_emf emf_input
 
-    hPutStrLn stderr "I survived!"
-    case genome of { Genome m1 -> do
-        hPrint stderr $ sum $ fmap I.size m1
-        hPrint stderr $ sum $ fmap (sum . fmap fst) m1 }
-
     withFile emf_output WriteMode $ \hdl ->
         L.hPut hdl $ encodeGenome genome
-
-    hPutStrLn stderr "All done!"
 

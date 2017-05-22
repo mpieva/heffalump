@@ -162,8 +162,7 @@ kayvergence ngood callz = S.fromListN nstats
     | ref <- [0 .. ngood-1]             -- pick from ref and good genomes, but not the last
     , outg <- [ref+1..ngood]            -- pick another good genome
     , smp <- [0 .. ntot-1]              -- pick sample
-    , smp /= ref && smp /= outg ]       -- must be different ]
-
+    , smp /= ref && smp /= outg ]       -- must be different
   where
     at i = case callz' U.! i of w -> (fromIntegral $ w .&. 0x3, fromIntegral $ w `shiftR` 2 .&. 0x3)
 
@@ -189,7 +188,7 @@ kaycounts (u1,v1) (u2,v2) (u3,v3) = if nn > 0 then TwoD (aa/nn) ((aa+bb)/nn) els
 
 opts_kiv :: [ OptDescr (Config -> IO Config) ]
 opts_kiv =
-    [ Option "r" ["reference"] (ReqArg set_ref  "FILE") "Read reference from FILE (.fa)"
+    [ Option "r" ["reference"] (ReqArg set_ref  "FILE") "Read reference from FILE (.2bit)"
     , Option "n" ["numgood"]   (ReqArg set_ngood "NUM") "The first NUM inputs are \"good\" genomes (1)"
     , Option "J" ["blocksize"] (ReqArg set_jack  "NUM") "Set blocksize for Jackknife to NUM bases (5M)"
     , Option "t" ["transversions"]   (NoArg set_tvonly) "Restrict to transversion sites"
@@ -273,7 +272,7 @@ abbacounts (u1,v1) (u2,v2) (u3,v3) (u4,v4) = if nn > 0 then TwoD (baba/nn) ((abb
 
 opts_dstat :: [ OptDescr (Config -> IO Config) ]
 opts_dstat =
-    [ Option "r" ["reference"]    (ReqArg set_ref "FILE") "Read reference from FILE (.fa)"
+    [ Option "r" ["reference"]    (ReqArg set_ref "FILE") "Read reference from FILE (.2bit)"
     , Option "n" ["numoutgroups"] (ReqArg set_nout "NUM") "The first NUM inputs are outgroups (1)"
     , Option "k" ["numrefpanel"]  (ReqArg set_nref "NUM") "The next NUM inputs are the reference panel"
     , Option "J" ["blocksize"]    (ReqArg set_jack "NUM") "Set blocksize for Jackknife to NUM bases (5M)"
@@ -415,7 +414,7 @@ yaddacounts (u1,v1) (u2,v2) (u3,v3) (u4,v4) (u5,v5) = if nn > 0 then TwoD (aa/nn
 
 opts_yadda :: [ OptDescr (Config -> IO Config) ]
 opts_yadda =
-    [ Option "r" ["reference"]      (ReqArg set_ref "FILE") "Read reference from FILE (.fa)"
+    [ Option "r" ["reference"]      (ReqArg set_ref "FILE") "Read reference from FILE (.2bit)"
     , Option "n" ["numoutgroups"]   (ReqArg set_nout "NUM") "The first NUM inputs are outgroups (1)"
     , Option "k" ["numafricans"]    (ReqArg set_nafr "NUM") "The next NUM inputs are africans (1)"
     , Option "l" ["numneandertals"] (ReqArg set_nref "NUM") "The next NUM inputs are neanderthals (2)"
