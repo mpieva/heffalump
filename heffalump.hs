@@ -1,5 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
 import BasePrelude
+import Paths_heffalump                  ( version )
 import Streaming
 import System.Console.GetOpt
 import System.FilePath                  ( takeBaseName )
@@ -60,8 +61,11 @@ main = do
         , z "dumplump"    main_dumplump           "(debugging aid)"
         , z "twobitinfo"  main_2bitinfo           "list reference sequences"
         , z "twobittofa"  main_2bittofa           "extract Fasta from 2bit"
-        , z "fatotwobit"  main_fato2bit           "convert Fasta to 2bit" ]
+        , z "fatotwobit"  main_fato2bit           "convert Fasta to 2bit"
+        , z "--version"   main_version            "print version and exit" ]
 
+main_version :: [String] -> IO ()
+main_version _ = hPutStrLn stderr $ showVersion version
 
 data ConfImportGen = ConfImportGen {
     conf_imp_reference  :: FilePath,

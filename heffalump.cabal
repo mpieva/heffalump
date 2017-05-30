@@ -18,6 +18,7 @@ executable heffalump
                        Emf,
                        Lump,
                        NewRef,
+                       Paths_heffalump,
                        SillyStats,
                        Streaming.Lowlevel,
                        Streaming.Zip,
