@@ -294,11 +294,11 @@ noLump = PackLump (L.singleton 0)
 
 {-# INLINE encodeLumpToMem #-}
 encodeLumpToMem :: MonadIO m => Stream Lump m r -> m (Of PackedLump r)
-encodeLumpToMem = fmap (mapOf PackLump) . S.toLazy . encodeLump' . normalizeLump'
+encodeLumpToMem = fmap (mapOf PackLump) . S.toLazy . encodeLump . normalizeLump'
 
-{-# INLINE encodeLump' #-}
-encodeLump' :: MonadIO m => Stream Lump m r -> S.ByteString m r
-encodeLump' = go
+{-# INLINE encodeLump #-}
+encodeLump :: MonadIO m => Stream Lump m r -> S.ByteString m r
+encodeLump = go
   where
     go s = S.mwrap $ do p <- liftIO $ mallocBytes 0x8000
                         (o,r) <- fill p 0x8000 s 0
@@ -383,74 +383,6 @@ encodeLump' = go
                                  >> seqOf (U.unsafeDrop 4 sq) (oo+1)
 
         wrd8 w = liftIO $ pokeElemOff p o w >> return (o+1)
-
-{-# INLINE encodeLump #-}
-encodeLump :: Fix Lump -> Builder
-encodeLump = cata encode1
-  where
-    encode1 (Ns n b)                           = stretchOf 0x40 n <> b
-    encode1 (Eqs1 n b)                         = stretchOf 0x80 n <> b
-    encode1 (Trans1 b)                         = word8 0x01 <> b
-    encode1 (Compl1 b)                         = word8 0x02 <> b
-    encode1 (TCompl1 b)                        = word8 0x03 <> b
-
-    encode1 (Eqs2 n b)                         = stretchOf 0xC0 n <> b
-    encode1 (RefTrans b)                       = word8 0x05 <> b
-    encode1 (Trans2 b)                         = word8 0x06 <> b
-    encode1 (RefCompl b)                       = word8 0x07 <> b
-    encode1 (TransCompl b)                     = word8 0x08 <> b
-    encode1 (Compl2 b)                         = word8 0x09 <> b
-    encode1 (RefTCompl b)                      = word8 0x0A <> b
-    encode1 (TransTCompl b)                    = word8 0x0B <> b
-    encode1 (ComplTCompl b)                    = word8 0x0C <> b
-    encode1 (TCompl2 b)                        = word8 0x0D <> b
-
-    encode1 (Del1 n b)                         = indelOf 0x10 n <> b
-    encode1 (DelH n b)                         = indelOf 0x20 n <> b
-    encode1 (Del2 n b)                         = indelOf 0x30 n <> b
-
-    encode1 (Ins1 s b)                         = indelOf 0x18 (U.length s) <> seqOf s <> b
-    encode1 (InsH s b)                         = indelOf 0x28 (U.length s) <> seqOf s <> b
-    encode1 (Ins2 s b)                         = indelOf 0x38 (U.length s) <> seqOf s <> b
-
-    encode1 (Break b)                          = word8 0x00 <> b
-    encode1  Done                              = mempty
-
-    stretchOf :: Word8 -> Int -> Builder
-    stretchOf k n
-        | n < 0x3C                             = word8 (k .|. fromIntegral n)
-        | n < 0x100                            = word8 (k .|. 0x3F) <> word8 (fromIntegral  n)
-        | n < 0x10000                          = word8 (k .|. 0x3E) <> word8 (fromIntegral (n             .&. 0xff))
-                                                                    <> word8 (fromIntegral (n `shiftR`  8 .&. 0xff))
-        | n < 0x1000000                        = word8 (k .|. 0x3D) <> word8 (fromIntegral (n             .&. 0xff))
-                                                                    <> word8 (fromIntegral (n `shiftR`  8 .&. 0xff))
-                                                                    <> word8 (fromIntegral (n `shiftR` 16 .&. 0xff))
-        | otherwise                            = word8 (k .|. 0x3C) <> word8 (fromIntegral (n             .&. 0xff))
-                                                                    <> word8 (fromIntegral (n `shiftR`  8 .&. 0xff))
-                                                                    <> word8 (fromIntegral (n `shiftR` 16 .&. 0xff))
-                                                                    <> word8 (fromIntegral (n `shiftR` 24 .&. 0xff))
-    indelOf :: Word8 -> Int -> Builder
-    indelOf k n
-        | n == 0        = error "empty indel"
-        | n < 8         = word8 (k .|. fromIntegral n)
-        | n < 0x100     = word8 k <> word8 (fromIntegral n)
-        | otherwise     = error $ "long indel: " ++ show n
-
-    seqOf :: U.Vector Word8 -> Builder
-    seqOf s
-        | U.length s == 0 = mempty
-        | U.length s == 1 = word8 (U.unsafeIndex s 0)
-        | U.length s == 2 = word8 (U.unsafeIndex s 0 .|.
-                                   U.unsafeIndex s 1 `shiftL` 2)
-        | U.length s == 3 = word8 (U.unsafeIndex s 0 .|.
-                                   U.unsafeIndex s 1 `shiftL` 2 .|.
-                                   U.unsafeIndex s 2 `shiftL` 4)
-        | otherwise       = word8 (U.unsafeIndex s 0 .|.
-                                   U.unsafeIndex s 1 `shiftL` 2 .|.
-                                   U.unsafeIndex s 2 `shiftL` 4 .|.
-                                   U.unsafeIndex s 3 `shiftL` 6)
-                            <> seqOf (U.unsafeDrop 4 s)
-
 
 decodeLump :: L.ByteString -> Fix Lump
 decodeLump = ana decode1
@@ -750,9 +682,6 @@ decode (Right  r) str | "HEF\0"  `L.isPrefixOf` str = stretchToLump r $ decode_d
               else error "Incompatible reference genome."
 
 
-
-
-
 getRefPath :: L.ByteString -> Maybe FilePath
 getRefPath str | "HEF\3" `L.isPrefixOf` str = Just . C.unpack . L.takeWhile (/= 0) $ L.drop 4 str
                | otherwise                  = Nothing
@@ -775,12 +704,9 @@ decodeMany mrs fs = do
 -- | Encode a 'Lump' and enough information about the 'NewRefSeqs' to be
 -- (1) able to find it again and (2) to make sure we got the right one
 -- when operating on a 'Lump'.
-encode :: NewRefSeqs -> Fix Lump -> Builder
-encode r s = encodeHeader r <> encodeLump s
-
-encode' :: MonadIO m => NewRefSeqs -> Stream Lump m r -> S.ByteString m r
-encode' r s = do S.toStreamingByteString (encodeHeader r)
-                 encodeLump' s
+encode :: MonadIO m => NewRefSeqs -> Stream Lump m r -> S.ByteString m r
+encode r s = do S.toStreamingByteString (encodeHeader r)
+                encodeLump s
 
 encodeHeader :: NewRefSeqs -> Builder
 encodeHeader r = byteString "HEF\3" <>
@@ -811,7 +737,7 @@ gendiff view = generic
 
 -- | Generic diff between two aligned strings using "streaming" code.
 --
--- XXX  We should deal with gaps, not that we can actually encode them
+-- XXX  We should deal with gaps, now that we can actually encode them
 {-# INLINE gendiff' #-}
 gendiff' :: Monad m => (a -> RefSeqView a) -> a -> S.ByteString m r -> Stream Lump m r
 gendiff' view = generic
@@ -1000,7 +926,4 @@ newtype Fix f = Fix { unFix :: f (Fix f) }
 
 ana :: Functor f => (a -> f a) -> (a -> Fix f)
 ana f = Fix . fmap (ana f) . f
-
-cata :: Functor f => (f a -> a) -> (Fix f -> a)
-cata f = f . fmap (cata f) . unFix
 

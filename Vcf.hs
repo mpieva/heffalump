@@ -64,7 +64,7 @@ main_xcf conf0 args = do
                              in parseOpts True conf0 opts args
     ref <- readTwoBit conf_ref
     withFile conf_output WriteMode $ \hdl ->
-        S.hPut hdl . encode' ref . conf_ploidy
+        S.hPut hdl . encode ref . conf_ploidy
         . importVcf conf_density (nrss_chroms ref)
         . progress conf_output . dedupVcf . conf_clean . cleanVcf
         . concat =<< mapM conf_reader vcfs
