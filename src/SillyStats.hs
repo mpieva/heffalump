@@ -4,9 +4,7 @@ module SillyStats (
     main_yaddayadda
                   ) where
 
-import BasePrelude
-import Foreign.Ptr
-import Foreign.Storable
+import Bio.Prelude
 import Numeric.SpecFunctions            ( incompleteBeta )
 import System.Console.GetOpt
 import System.FilePath                  ( takeBaseName )
@@ -101,11 +99,6 @@ gen_stats full_counts blockstats = final_vals
       where ab = recip (8*v) - 0.5
 
 
-data Pair a b = !a :!: !b deriving (Read, Show, Eq, Ord, Bounded)
-
-infixl 2 :!:
-
-
 -- Block Jackknife for estimating ratios.  The bias corrected estimator
 -- reduces to the plain estimator, so we skip this.  We estimate
 -- variance by applying the "Delete-m Jackknife for Unequal m".
@@ -192,12 +185,14 @@ opts_kiv =
     , Option "n" ["numgood"]   (ReqArg set_ngood "NUM") "The first NUM inputs are \"good\" genomes (1)"
     , Option "J" ["blocksize"] (ReqArg set_jack  "NUM") "Set blocksize for Jackknife to NUM bases (5M)"
     , Option "t" ["transversions"]   (NoArg set_tvonly) "Restrict to transversion sites"
+    , Option [ ] ["ignore-cpg"]        (NoArg set_no_cpg) "Ignore GpG sites (according to reference)"
     , Option "R" ["regions"]   (ReqArg set_rgns "FILE") "Restrict to regions in bed-file FILE" ]
   where
     set_ref    a c = return $ c { conf_reference = Just a }
     set_ngood  a c = readIO a >>= \n -> return $ c { conf_noutgroups = n }
     set_jack   a c = readNumIO a >>= \n -> return $ c { conf_blocksize = n }
     set_tvonly   c = return $ c { conf_filter = const (filter (isTransversion . v_alt)) }
+    set_no_cpg   c = return $ c { conf_filter  = filterCpG }
     set_rgns   a c = return $ c { conf_regions = Just a }
 
 main_kayvergence :: [String] -> IO ()
@@ -207,9 +202,9 @@ main_kayvergence args = do
     region_filter <- mkBedFilter conf_regions (either error nrss_chroms ref)
 
     let labels = kaylabels conf_noutgroups (map takeBaseName hefs)
-        stats  = uncurry gen_stats
-                 $ accum_stats conf_blocksize (kayvergence conf_noutgroups)
-                 $ conf_filter ref $ region_filter $ concat $ mergeLumps 0 inps
+        stats  = uncurry gen_stats $
+                 accum_stats conf_blocksize (kayvergence conf_noutgroups) $
+                 conf_filter ref $ region_filter $ concat $ mergeLumps 0 inps
 
         fmt1 (rn,sn,cn) (SillyStats k n r v _) =
                 [ Left $ "Kiv( " ++ rn ++ "; "

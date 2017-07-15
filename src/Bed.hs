@@ -1,6 +1,6 @@
 module Bed where
 
-import BasePrelude
+import Bio.Prelude
 
 import qualified Data.ByteString                as B
 import qualified Data.ByteString.Lazy.Char8     as L

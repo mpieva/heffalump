@@ -1,13 +1,11 @@
 {-# LANGUAGE OverloadedLists, LambdaCase #-}
 module Lump where
 
-import BasePrelude
+import Bio.Prelude                   hiding ( Ns )
 import Data.ByteString.Builder
 import Data.ByteString.Internal             ( c2w )
 import Data.Hashable                        ( hash )
 import Foreign.Marshal.Alloc                ( mallocBytes )
-import Foreign.Ptr                          ( castPtr )
-import Foreign.Storable                     ( pokeElemOff )
 import Streaming
 import Streaming.Prelude                    ( mapOf )
 import System.Directory                     ( doesFileExist )
@@ -676,8 +674,8 @@ decode (Right  r) str | "HEF\0"  `L.isPrefixOf` str = stretchToLump r $ decode_d
                       | otherwise                   = error "File format not recognized?"
   where
     go s = let (hs,s') = L.splitAt 4 . L.drop 1 . L.dropWhile (/= 0) $ s
-               hv = L.foldr (\b a -> fromIntegral b .|. shiftL a 8) 0 hs
-           in if hv == 0xFFFFFFFF .&. hash (nrss_chroms r, nrss_lengths r)
+               hv = L.foldr (\b a -> fromIntegral b .|. shiftL a 8) 0 hs :: Word32
+           in if hv == fromIntegral (hash (nrss_chroms r, nrss_lengths r))
               then decodeLump s'
               else error "Incompatible reference genome."
 

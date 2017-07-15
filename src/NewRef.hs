@@ -28,15 +28,16 @@ module NewRef where
 --   D-stats, Treemix:  reference is no longer needed!
 --
 --   Eigenstrat:  can be done without the reference (but will look
---                ridiculous).  Output of proper SNP files required the
---                reference.
+--                ridiculous).  Output of proper SNP files
+--                requires the reference.
 --
---   VCF:  clearly requires the reference
+--   VCF:  clearly requires the reference.
 
 
-import Bio.Prelude hiding ( Ns )
-import Data.ByteString.Short hiding ( length )
+import Bio.Prelude                   hiding ( Ns )
+import Data.ByteString.Short         hiding ( length, null )
 import Foreign.Storable                     ( peekByteOff )
+import System.Console.GetOpt
 import System.Directory                     ( makeAbsolute )
 import System.IO                            ( hPutStrLn, stdout, stderr )
 import System.IO.Posix.MMap                 ( unsafeMMapFile )
@@ -50,7 +51,7 @@ import qualified Data.ByteString.Short          as S
 import qualified Data.ByteString.Unsafe         as B
 import qualified Data.Vector.Unboxed            as U
 
-import Util ( decomp )
+import Util ( decomp, mk_opts, parseOpts )
 
 -- | This is a reference sequence.  It consists of stretches of Ns and
 -- sequence.  Invariant:  the lengths for 'ManyNs' and 'SomeSeq' are
@@ -247,43 +248,52 @@ addRef ref = go 0 (nrss_seqs ref)
             | otherwise    = error "expected sorted variants!"
 
 
+has_help :: [String] -> Bool
+has_help args = null args || any (`elem` h_opts) (takeWhile (/= "--") args)
+  where
+    h_opts = ["-h","--help","-?","--usage"]
+
+eff_args :: [String] -> [String]
+eff_args args = case break (== "--") args of (l,r) -> l ++ drop 1 r
 
 main_2bitinfo :: [String] -> IO ()
-main_2bitinfo [] = do
-    pn <- getProgName
-    hPutStrLn stderr $ "Usage: " ++ pn ++ " twobitinfo [2bit-file...]\n"
-    exitFailure
+main_2bitinfo fs
+    | has_help fs = do
+        pn <- getProgName
+        hPutStrLn stderr $ "Usage: " ++ pn ++ " twobitinfo [2bit-file...]\n"
+        exitFailure
 
-main_2bitinfo fs = forM_ fs $ \f -> do
-    ref <- readTwoBit f
-    sequence_ $ zipWith (printf "%s\t%d\n" . C.unpack)
-                        (nrss_chroms ref) (nrss_lengths ref)
-
+    | otherwise = forM_ (eff_args fs) $ \f -> do
+        ref <- readTwoBit f
+        sequence_ $ zipWith (printf "%s\t%d\n" . C.unpack)
+                            (nrss_chroms ref) (nrss_lengths ref)
 
 main_2bittofa :: [String] -> IO ()
-main_2bittofa [] = do
-    pn <- getProgName
-    hPutStrLn stderr $ "Usage: " ++ pn ++ " twobittofa [2bit-file] [region...]\n"
-    exitFailure
+main_2bittofa fs = case eff_args fs of
+    _ | has_help fs -> do
+            pn <- getProgName
+            hPutStrLn stderr $ "Usage: " ++ pn ++
+                " twobittofa [2bit-file] [[name|name:start-end]...]\n"
+            exitFailure
 
-main_2bittofa [fp] = do
-    ref <- readTwoBit fp
-    forM_ (nrss_chroms ref `zip` nrss_seqs ref) $ \(ch,sq) ->
-        putStrLn ('>' : C.unpack ch) >> twoBitToFa (sq ())
+    [] -> return () -- can't happen
 
-main_2bittofa (fp:rns) = do
-    ref <- readTwoBit fp
-    forM_ rns $ \rn ->
-        case findIndex ((==) rn . C.unpack) (nrss_chroms ref) of
-            Just i  -> do putStrLn $ '>' : rn
-                          twoBitToFa $ (nrss_seqs ref !! i) ()
-            Nothing -> do let (ch,':':s1) = break ((==) ':') rn
-                          [(start,'-':s2)] <- return $ reads s1
-                          [(end,"")] <- return $ reads s2
-                          Just i <- return $ findIndex ((==) ch . C.unpack) (nrss_chroms ref)
+    [fp] -> do ref <- readTwoBit fp
+               forM_ (nrss_chroms ref `zip` nrss_seqs ref) $ \(ch,sq) ->
+                    putStrLn ('>' : C.unpack ch) >> twoBitToFa (sq ())
 
-                          printf ">%s:%d-%d\n" ch start end
-                          twoBitToFa $ dropNRS start $ takeNRS end $ (nrss_seqs ref !! i) ()
+    (fp:rns) -> do ref <- readTwoBit fp
+                   forM_ rns $ \rn ->
+                        case findIndex ((==) rn . C.unpack) (nrss_chroms ref) of
+                            Just i  -> do putStrLn $ '>' : rn
+                                          twoBitToFa $ (nrss_seqs ref !! i) ()
+                            Nothing -> do let (ch,':':s1) = break ((==) ':') rn
+                                          [(start,'-':s2)] <- return $ reads s1
+                                          [(end,"")] <- return $ reads s2
+                                          Just i <- return $ findIndex ((==) ch . C.unpack) (nrss_chroms ref)
+
+                                          printf ">%s:%d-%d\n" ch start end
+                                          twoBitToFa $ dropNRS start $ takeNRS end $ (nrss_seqs ref !! i) ()
 
 twoBitToFa :: NewRefSeq -> IO ()
 twoBitToFa = splitLns . unpackNRS
@@ -295,14 +305,19 @@ twoBitToFa = splitLns . unpackNRS
                             L.hPut stdout "\n"
                             splitLns r }
 
+opts_fato2bit :: [ OptDescr (FilePath -> IO FilePath) ]
+opts_fato2bit = [ Option "o" ["output"] (ReqArg (\a _ -> return a) "FILE") "Write output to FILE" ]
 
 main_fato2bit :: [String] -> IO ()
-main_fato2bit [     ] =  do
-        pn <- getProgName
-        hPutStrLn stderr $ "Usage: " ++ pn ++ " fatotwobit [2bit-file] [fasta-file...]\n"
-        exitFailure
-main_fato2bit [  fp ] = L.writeFile fp . faToTwoBit .                decomp =<< L.getContents
-main_fato2bit (fp:fs) = L.writeFile fp . faToTwoBit . L.concat . map decomp =<< mapM L.readFile fs
+main_fato2bit args = do
+    ( fs, fp ) <- parseOpts True (error "no output file given")
+                            (mk_opts "fatotwobit" "[fasta-file...]" opts_fato2bit) args
+
+    L.writeFile fp . faToTwoBit . L.concat . map decomp =<<
+        mapM l'readFile (if null fs then ["-"] else fs)
+  where
+    l'readFile "-" = L.getContents
+    l'readFile  f  = L.readFile f
 
 
 -- List of pairs of 'Word32's.  Specialized and unpacked to conserve

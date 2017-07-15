@@ -2,7 +2,7 @@ module Vcf ( main_xcf, conf_vcf, conf_bcf ) where
 
 -- ^ Stuff related to Vcf and Bcf
 
-import BasePrelude
+import Bio.Prelude hiding ( Ns )
 import Streaming
 import System.Console.GetOpt
 import System.IO

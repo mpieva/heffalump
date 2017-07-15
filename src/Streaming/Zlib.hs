@@ -43,14 +43,13 @@ module Streaming.Zlib
     , PopperRes (..)
     ) where
 
-import BasePrelude
+import Bio.Prelude
 import Codec.Compression.Zlib (WindowBits(WindowBits), defaultWindowBits)
 import Control.Exception (Exception)
 import Data.ByteString.Lazy.Internal (defaultChunkSize)
 import Data.ByteString.Unsafe
 import Data.Typeable (Typeable)
 import Foreign.C.Types
-import Foreign.ForeignPtr
 import qualified Data.ByteString as S
 import Streaming.Lowlevel
 

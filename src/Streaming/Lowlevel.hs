@@ -23,10 +23,9 @@ module Streaming.Lowlevel
     , c_call_inflate_set_dictionary
     ) where
 
-import BasePrelude
-import Foreign.C
-import Foreign.Ptr
+import Bio.Prelude
 import Codec.Compression.Zlib (WindowBits (WindowBits))
+import Foreign.C.Types
 
 data ZStreamStruct
 type ZStream' = Ptr ZStreamStruct

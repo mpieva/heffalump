@@ -6,7 +6,7 @@ module Stretch (
         main_dumppatch
     ) where
 
-import BasePrelude
+import Bio.Prelude               hiding ( Ns )
 import System.IO                        ( stderr )
 
 import qualified Data.ByteString.Char8          as B

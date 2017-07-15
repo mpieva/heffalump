@@ -1,7 +1,7 @@
 {-# LANGUAGE LambdaCase #-}
 module Util where
 
-import BasePrelude
+import Bio.Prelude
 import Streaming
 import Streaming.Zip                    ( gunzip )
 import System.Console.GetOpt

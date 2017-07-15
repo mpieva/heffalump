@@ -20,7 +20,7 @@ module Emf ( main_emf
 -- least one column maps to it and all such columns agree.
 
 
-import BasePrelude
+import Bio.Prelude               hiding ( compl )
 import Codec.Compression.GZip
 import Data.ByteString.Streaming        ( fromLazy )
 import Streaming
@@ -214,7 +214,7 @@ scanOneBlock inp = ( EmfBlock tree seqs, drop 1 remainder )
     (datalns, remainder) = span ("//" /=) inp2
     seqs = B.transpose . map (B.map toUpper) $ datalns
 
-    parse_seq_name i s = Label i (spc, B.drop 1 race) (str $ Range sqn (beg-1) (end-beg+1))
+    parse_seq_name i s = Label i (spc, B.drop 1 race) (str $ Range (Pos sqn (beg-1)) (end-beg+1))
       where
         ("SEQ":sr:sqn:beg':end':str':_) = B.words s
         (spc,race) = B.break ('_' ==) sr
@@ -232,15 +232,6 @@ scanOneBlock inp = ( EmfBlock tree seqs, drop 1 remainder )
             <*> (A.char '[' *> (A.char '+' <|> A.char '-'))
             <*> (A.char ']' *> A.char ':' *> A.double)
 
-
-data Range = Range { r_seq    :: {-# UNPACK #-} !B.ByteString
-                   , r_pos    :: {-# UNPACK #-} !Int
-                   , r_length :: {-# UNPACK #-} !Int }
-    deriving (Show, Eq, Ord)
-
-reverseRange :: Range -> Range
-reverseRange (Range sq pos len) = Range sq (-pos-len) len
-
 data Label = Label Int Species Range deriving Show
 data Tree label = Branch (Tree label) (Tree label) label | Leaf label deriving Show
 
@@ -255,7 +246,7 @@ find_label lbl ls = case filter ((==) lbl . get_short) ls of
     _   -> error $ "WTF?  " ++ show lbl ++ " in " ++ show ls
 
 get_short :: Label -> B.ByteString
-get_short (Label _ (spc,race) (Range chrom pos len)) = B.concat $
+get_short (Label _ (spc,race) (Range (Pos chrom pos) len)) = B.concat $
     [ B.map toUpper (B.take 1 spc),
       B.take 3 race, B.singleton '_',
       chrom, B.singleton '_' ] ++
@@ -310,19 +301,20 @@ collectTrees :: [B.ByteString] -> ( Tree Label -> [(Label, [Label])] ) -> Genome
 collectTrees chrs select genome block
     = foldlM (\g f -> f g) genome
             [ \g -> do plump :> _ <- encodeLumpToMem $ diff' ref_seq (fromLazy smp_seq)
-                       let (w,g') = insertGenome g ref_idx (r_pos rref) (r_length rref) plump
+                       let (w,g') = insertGenome g ref_idx (p_start (r_pos rref)) (r_length rref) plump
                        hPutStrLn stderr $ "Inserted " ++ shows ref_idx ":" ++
-                            shows (r_pos rref) "-" ++ shows (r_pos rref + r_length rref) ", " ++
+                            shows (p_start (r_pos rref)) "-" ++
+                            shows (p_start (r_pos rref) + r_length rref) ", " ++
                             shows (L.length (unpackLump plump)) " bytes."
                        unless (null w) $ hPutStrLn stderr $ "Warning: " ++ w
                        return $! g'
             | (Label iref _ rref_, tgt_lbls) <- select $ emf_tree block
-            , ref_idx <- maybeToList $ findIndex (r_seq rref_ ==) chrs
+            , ref_idx <- maybeToList $ findIndex (p_seq (r_pos rref_) ==) chrs
             , let ref_seq_ = emf_seqs block !! iref
             , let smp_seq_ = consensus_seq
                       [ emf_seqs block !! itgt | Label itgt _ _ <- tgt_lbls ]
             , let (rref, ref_seq, smp_seq) =
-                    if r_pos rref_ >= 0
+                    if p_start (r_pos rref_) >= 0
                     then (             rref_,            L.fromStrict ref_seq_,            L.fromStrict smp_seq_)
                     else (reverseRange rref_, revcompl $ L.fromStrict ref_seq_, revcompl $ L.fromStrict smp_seq_) ]
 
@@ -350,9 +342,8 @@ consensus_seq (x:xs)
 -- | Scans a directory with gzipped EMF files in arbitrary order.  (The
 -- files are not sorted internally, so there is no point in trying any
 -- particular order.)
-scan_all_emf :: FilePath -> IO [EmfBlock]
-scan_all_emf dir = do
-    fs <- map (dir </>) . filter (".emf.gz" `isSuffixOf`) <$> getDirectoryContents dir
+scan_all_emf :: [FilePath] -> IO [EmfBlock]
+scan_all_emf fs = do
     foldr (\fp k -> do bs  <- unsafeInterleaveIO k
                        let go [] = bs
                            go ls = case scanOneBlock ls of (b,ls') -> b : go ls'
@@ -362,41 +353,47 @@ scan_all_emf dir = do
 
 data OptsEmf = OptsEmf {
     emf_output :: FilePath,
-    emf_input  :: FilePath,
     emf_reference :: FilePath,
-    emf_select :: Tree Label -> [(Label, [Label])] }
+    emf_ref_species :: Species,
+    emf_select :: Species -> Tree Label -> [(Label, [Label])] }
 
 opts_emf_default :: OptsEmf
 opts_emf_default = OptsEmf
     (error "no output specified")
-    "/mnt/expressions/martin/sequence_db/epo/epo_6_primate_v66"
     (error "no reference specified")
-    (ancestor_to_species ("homo","sapiens") ("pan","troglodytes"))
+    ("homo","sapiens")
+    (flip ancestor_to_species ("pan","troglodytes"))
 
 opts_emf :: [ OptDescr ( OptsEmf -> IO OptsEmf ) ]
 opts_emf =
-    [ Option "o" ["output"] (ReqArg set_output "FILE") "Write output to FILE (.hef)"
-    , Option "e" ["emf"] (ReqArg set_emf "PATH") "Compara alignments are at PATH"
-    , Option "r" ["reference"] (ReqArg set_ref "FILE") "Read reference from FILE (.2bit)"
-    , Option "s" ["species"] (ReqArg set_species "NAME") "Import species NAME"
-    , Option "a" ["ancestor"] (ReqArg set_anc "NAME") "Import ancestor with species NAME" ]
+    [ Option "o" ["output"]         (ReqArg set_output  "FILE") "Write output to FILE (.hef)"
+    , Option "r" ["reference"]      (ReqArg set_ref     "FILE") "Read reference from FILE (.2bit)"
+    , Option "R" ["ref-species"]    (ReqArg set_ref_sp  "NAME") "Set reference species to NAME"
+    , Option "S" ["sample-species"] (ReqArg set_species "NAME") "Import species NAME"
+    , Option "A" ["ancestor-of"]    (ReqArg set_anc     "NAME") "Import ancestor with species NAME" ]
   where
     set_output  a c = return $ c { emf_output = a }
-    set_emf     a c = return $ c { emf_input  = a }
     set_ref     a c = return $ c { emf_reference  = a }
-    set_species a c = return $ c { emf_select = species_to_species  ("homo","sapiens") (w2 a) }
-    set_anc     a c = return $ c { emf_select = ancestor_to_species ("homo","sapiens") (w2 a) }
+    set_ref_sp  a c = return $ c { emf_ref_species = w2 a }
+    set_species a c = return $ c { emf_select = flip species_to_species  (w2 a) }
+    set_anc     a c = return $ c { emf_select = flip ancestor_to_species (w2 a) }
 
-    w2 s = case B.words (B.pack s) of a:b:_ -> (a,b) ; a:_ -> (a,B.empty) ; _ -> (B.empty,B.empty)
+    w2 s = case B.split ',' (B.pack (map toLower s)) of a:b:_ -> (a,b) ; a:_ -> (a,B.empty) ; _ -> (B.empty,B.empty)
 
 
 main_emf :: [String] -> IO ()
 main_emf args = do
-    ( _, OptsEmf{..} ) <- parseOpts False opts_emf_default (mk_opts "emf" "[emf-file...]" opts_emf) args
+    ( emfs, OptsEmf{..} ) <- parseOpts True opts_emf_default (mk_opts "emf" "[emf-file...]" opts_emf) args
     ref <- readTwoBit emf_reference
 
-    !genome <- foldM (collectTrees (nrss_chroms ref) emf_select) emptyGenome
-               =<< scan_all_emf emf_input
+    !genome <- foldM (collectTrees (nrss_chroms ref) (emf_select emf_ref_species)) emptyGenome
+               =<< scan_all_emf
+               -- this is just so the one path at MPI that makes sense
+               -- doesn't need to be typed over and over
+               =<< case emfs of
+                    [] -> let dir = "/mnt/expressions/martin/sequence_db/epo/epo_6_primate_v66"
+                          in map (dir </>) . filter (".emf.gz" `isSuffixOf`) <$> getDirectoryContents dir
+                    _  -> return emfs
 
     withFile emf_output WriteMode $ \hdl ->
         L.hPut hdl $ encodeGenome genome

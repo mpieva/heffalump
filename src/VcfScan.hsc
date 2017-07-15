@@ -1,9 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 module VcfScan where
 
-import BasePrelude
-import Foreign
-import Foreign.C
+import Bio.Prelude
+import Foreign.C.String
+import Foreign.C.Types
+import Foreign.Marshal.Alloc ( mallocBytes, allocaBytes )
+import Foreign.Marshal.Utils ( moveBytes )
 import System.IO
 
 import qualified Data.ByteString        as BB
@@ -111,7 +113,6 @@ fillWork psc hdl = do
     wbuf <- #{ peek scanner, working_buffer } psc
     wnext <- #{ peek scanner, next_work } psc
     wlast <- #{ peek scanner, last_work } psc
-    -- hPutStrLn stderr $ "moving " ++ show (wlast `minusPtr` wnext) ++ " bytes in working buffer."
     moveBytes wbuf wnext (wlast `minusPtr` wnext)
     (#{ poke scanner, next_work } psc wbuf)
     (#{ poke scanner, last_work } psc (wbuf `plusPtr` (wlast `minusPtr` wnext)))

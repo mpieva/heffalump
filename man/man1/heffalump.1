@@ -1,29 +1,84 @@
 .\" Process this file with
 .\" groff -man -Tascii bam-rmdup.1
 .\"
-.TH HEFFALUMP 1 "JUNE 2016" Applications "User Manuals"
+.TH HEFFALUMP 1 "JULY 2017" Applications "User Manuals"
 .SH NAME
 heffalump \- compact storage of genotypes
 .SH SYNOPSIS
 
-.B heffalump eigenstrat 
-.IR "-o OUTPUT -r REF.FA -n NOUTGROUPS" [ HEF-FILE ]...
+.B heffalump --help
+
+.B heffalump --version
 
 .B heffalump hetfa
-.IR "-o OUTPUT.HEF -r REF.FA -s SAMPLE.HETFA
+\fB\-o\fR \fIoutput.hef\fR
+\fB\-r\fR \fIref.2bit\fR
+\fB\-s\fR \fIsample.hetfa\fR
 
-.B heffalump maf
-.IR "-o OUTPUT.REF [ MAF-FILE ]...
+.BR heffalump " [" maf "|" emf "]"
+\fB\-o\fR \fIoutput.hef\fR
+\fB\-r\fR \fIref.2bit\fR
+\fB\-R\fR \fIref-name\fR
+\fB\-S\fR \fIsample-name\fR
+\fIinput-file\fR ...
+
+.BR heffalump " [" bcfin "|" vcfin ]
+\fB\-o\fR \fIoutput.hef\fR
+\fB\-r\fR \fIref.2bit\fR
+[\fB\-D\fR|\fB-S\fR] [\fB-L\fR|\fB-H\fR]
+\fIinput-file\fR...
+
+.B heffalump bamin
+\fB\-o\fR \fIoutput.hef\fR
+\fB\-r\fR \fIref.2bit\fR
+[\fB\-m\fR \fImin-base-qual\fR]
+[\fB\-q\fR \fImin-map-qual\fR]
+[\fB--snip\fR=\fIcut-length-left\fR]
+[\fB--snap\fR=\fIcut-length-right\fR]
+[\fB--deaminate\fR]
+[\fB--stranded\fR]
+\fIinput.bam\fR...
 
 .B heffalump patch
-.IR "-o OUTPUT.HETFA -r REF.FA -s SAMPLE.HEF
+[\fB\-w\fR \fIwidth\fR]
+[\fB\-o\fR \fIoutput.hef\fR]
+[\fB\-r\fR \fIref.2bit\fR]
+\fB\-s\fR \fIsample.hef\fR
 
 .B heffalump treemix
-.IR "-o OUTPUT.TMX -r REF.FA -i INDIVIDUALS.IND -n NOUTGROUPS"
+[\fB\-o\fR \fIoutput.hef\fR]
+[\fB\-r\fR \fIref.2bit\fR]
+\fB\-i\fR \fIindividuals.ind\fR
+[\fB\-n\fR \fInumoutgroups\fR]
+[\fB\-t\fR] [\fB-x\fR]
+[\fB\-R\fR \fIregions.bed\fR]
 
-.B heffalump " [ vcfhc | vcflc ] "
-.IR "-o OUTPUT.HEF " [ VCF-FILE ]...
+.B heffalump eigenstrat 
+\fB\-o\fR \fIoutput\fR [\fB-r\fR \fIref.2bit\fR]
+[\fB\-n\fR \fInumoutgroups\fR] [\fB-t\fR] [\fB-b\fR] 
+[\fB\-R\fR \fIregions.bed\fR] \fIinput.hef\fR...
 
+.B heffalump vcfexport 
+[\fB\-r\fR \fIref.2bit\fR]
+[\fB\-n\fR \fInumoutgroups\fR] [\fB-t\fR] [\fB-b\fR] 
+[\fB\-R\fR \fIregions.bed\fR] \fIinput.hef\fR...
+
+.B heffalump kayvergence
+[\fB\-r\fR \fIref.2bit\fR]
+[\fB\-n\fR \fInumgood\fR]
+[\fB\-J\fR \fIblocksize\fR]
+[\fB\-x\fR]
+[\fB\-R\fR \fIregions.bed\fR]
+\fIinput.hef\fR...
+
+.B heffalump dstatistics
+[\fB\-r\fR \fIref.2bit\fR]
+[\fB\-n\fR \fInumoutgroups\fR]
+[\fB\-k\fR \fInumrefpanel\fR]
+[\fB\-J\fR \fIblocksize\fR]
+[\fB\-x\fR] [\fB--ignore-cpg\fR]
+[\fB\-R\fR \fIregions.bed\fR]
+\fIinput.hef\fR...
 
 .SH DESCRIPTION
 .B heffalump
@@ -34,82 +89,506 @@ losing the distinction between
 
 The
 .B heffalump
-file format can serve as the primary storage format, multiple files can
-be merged into the input for population genetic analysis programs
-relatively quickly.
+file format can serve as the primary storage format for a collection of
+genomes;  multiple files can be merged into the input for population
+genetic analysis programs relatively quickly.
 
 The functions
-.BR hetfa ", " maf ", " vcfhc " and " vcflc
+.BR hetfa ", " maf ", " emf ", " bcfin ", " vcfin " and " bamin
 serve to import individuals in the formats \fIhetfa\fR (e.g. Simons
-Foundation diversity panel), \fImaf\fR (e.g. whole genome alignments of
-apes), high coverage \fIVCF\fR (genotype-called individuals, treated as
-diploid), and low coverage \fIVCF\fR (sampled raw reads from
-individuals, treated as haploid), respectively.
+Foundation diversity panel), \fImaf\fR or \fIemf\fR (e.g. whole genome
+alignments of apes), high coverage \fIvcf\fR or \fIbcf\fR
+(genotype-called individuals, treated as diploid), and low coverage
+\fIvcf\fR or \fIbcf\fR (sampled raw reads from individuals, treated as
+haploid), respectively.
 
 The functions 
-.BR eigenstrat " and " treemix
+.BR treemix ", " eigenstrat " and " vcfexport
 merge multiple
 .I hef
 files into one dataset useful as input for 
-.BR Eigensoft " and " Treemix ", respectively."
+.BR Eigensoft ", " Treemix
+and a multitude of other tools, respectively.
 
+The functions
+.BR kayvergence " and " dstatistics
+compute two simple kinds of relevant statistics on the fly.
 
 .SH OPTIONS
-.IP "-o, --output file"
-Specifies the output file for most operations.  For \fBheffalump
-eigenstrat\fR, it specifies the output prefix and \fBheffalump\fR will
-write both \fIfile.geno\fR and \fIfile.snp\fR.
 
-.IP "-r, --reference file"
-Specifies a fasta file, optionally compressed using gzip or bgzip, that
-contains the reference sequence.  The reference is needed by
-\fBheffalump hetfa\fR to compute a list of differences as an efficient
-representation, and by \fBheffalump eigenstrat\fR, \fBheffalump
-treemix\fR, and \fBheffalump patch\fR to reverse this process.
+\fBheffalump\fI is called with a command, and different commands accept
+different options, see below.  Commands are case-insensitive and a
+prefix is accepted as long as it is unambiguous.  A few options are
+global or recurring:
 
-.IP "-s, --sample file"
-Specifies the file containing a sample to be imported for \fBheffalump
-hetfa\fR or the sample to be exported for \fBheffalump patch\fR.
+.TP
+.B --version
+Prints the version number and exits.
 
-.IP "-i, --individuals file"
-Applies only to \fBheffalump treemix\fR.  It specifies an individual
-file, as used for \fBEigenstrat\fR, which lists individual and the
-populations they belong to.  \fBheffalump\fI will search the current
-directory for \fIhef\fR files for the individuals, and it will produce
-one column in the output for each distinct pupolation.
+.TP
+.B --help
+Prints the list of available commands;  the list of commands is also
+printed if an unknown, ambigous or no command at all is given.  The
+valid subcommands also accept
+.B --help
+and print appropriate usage information.  Some commands come without
+documentation;  these should be treated a dangerous and/or bad ideas.
 
-.IP "-n, --numoutgroups num"
-Specifies that the first \fInum\fR individuals are outgroups.  Outgroups
-never create variants, but if some other individual creates a variant
-the outgroup's state is added.  In typical usage, there will be exactly
-one outgroup, which is probably the Chimpanzee.
+.TP
+\fB\-r\fR, \fB--reference\fR \fIfile.2bit\fR
+Specifies a \fI2bit\fR file containing the reference genome.  A
+reference genome is always needed when importing anything into \fIhef\fR
+format, and the location of the reference is remembered.   When
+operating on \fIhef\fR files, the same reference is needed, and then
+\fB\-r\fR needs to be specified explicitly only if the reference isn't
+found automatically.  Only \fIhef\fR files created with respect to the
+same reference can be processed together.
 
+\fBheffalump\fR stores genomes as a list of difference to a reference.
+When importing things like \fIhetfa\fR, the reference is clearly need to
+find differences.  Other formats like \fImaf\fR have the reference built
+in, but \fBheffalump\fR still needs a reference genome to establish the
+correct order of reference scaffolds.  For \fIbam\fR, even the order is
+implied, but here \fBheffalump\fR needs the reference to remove unwanted
+scaffolds and to provide rudimentary error detection.
+
+.TP
+\fB\-n\fR, \fB--numoutgroups\fR \fInum\fR
+Specifies the number of outgroups.  This option is common to operations
+that merge multiple \fIhef\fR files and produce a set of variants.  It
+states that the first \fInum\fR inputs are to be treated as outgroups,
+and the default is one outgroup.  A site where only outgroups, but no
+other samples, differ from the reference, does not constitute a variant
+and is omitted from the output.  (Specifying the correct number of
+outgroups is not merely of cosmetic effect, it tends to save a
+substantial amount of time, too.)
+
+
+.SH COMMANDS
+
+.SS Hetfa
+
+\fBheffalump hetfa\fR
+\fB\-o\fR \fIoutput.hef\fR
+\fB\-r\fR \fIref.2bit\fR
+\fB\-s\fR \fIsample.hetfa\fR
+
+Imports one \fIhetfa\fR file into \fIhef\fR format.
+
+.TP
+\fB\-o\fR, \fB--output\fR=\fIfile.hef\fR
+Write output to \fIfile.hef\fR.
+
+.TP
+\fB\-r\fR, \fB--reference\fR=\fIref.2bit\fR
+Read the reference genome from \fIref.2bit\fR.
+
+.TP
+\fB\-s\fR, \fB--sample\fR=\fIsample.hfa\fR
+Read the sample from \fIsample.hfa\fR.  The input must be in hetfa
+format (nucleotide fasta, with IUPAC ambiguity codes for heterozygous
+calls, Ns or dashes for uncalled sites, optionally Qs for sites that
+match te reference) and can optionally be compressed with \fBgzip\fR or
+\fBbgzip\fR.
+
+.SS Maf/Emf
+
+\fBheffalump\fR [\fBmaf\fR|\fBemf\fR]
+\fB\-o\fR \fIoutput.hef\fR
+\fB\-r\fR \fIref.2bit\fR
+\fB\-R\fR \fIreference-species\fR
+[\fB\-S\fR \fIsample-species\fR|\fB\-A\fR \fIsample-species\fR]
+\fIinput-file\fR...
+
+Imports one genome from a set of \fImaf\fR or \fIemf\fR files into
+\fIhef\fR format.  The input files can appear in any order and the
+fragments extracted from them are reordered and sanity checked.
+Duplicated or inconsistent fragments elicit warnings, but
+\fBheffalump\fR still imports them by resolving ambiguities arbitrarily.
+
+.TP
+\fB\-o\fR, \fB--output\fR=\fIfile.hef\fR
+Write output to \fIfile.hef\fR.
+
+.TP
+\fB\-r\fR, \fB--reference\fR=\fIref.2bit\fR
+Read the reference genome from \fIref.2bit\fR.
+
+.TP
+\fB\-R\fR, \fB--ref-species\fR=\fIname\fR
+Sets the name of the reference species to \fIname\fR; this should be the
+same species whose genome is supplied as reference.  For \fImaf\fR, the
+\fIname\fR must be spelled exactly as it appears in the input files.  For
+\fIemf\fR, it must be the scientific name, written like "homo,sapiens".
+
+.TP
+\fB\-S\fR, \fB--sample-species\fR=\fIname\fR
+Sets the name of the species to be imported to \fIname\fR, see above for
+the correct spelling.
+
+.TP
+\fB\-A\fR, \fB--ancestor-of\fR=\fIname\fR
+Imports the ancestor of the reference species and species \fIname\fR,
+see above for the correct spelling.  Only \fIemf\fR files contain
+(inferred) ancestral information, so this option is invalid when
+importing \fImaf\fR.
+
+.SS Bcfin/Vcfin
+
+\fBheffalump\fR [\fBbcfin\fR|\fBvcfin\fR]
+\fB\-o\fR \fIoutput.hef\fR
+\fB\-r\fR \fIref.2bit\fR
+[\fB\-D\fR|\fB\-S\fR] [\fB\-L\fR|\fB\-H\fR] 
+\fIinput-file\fR...
+
+Imports the first individual from a set of \fIbcf\fR or bgzip-compressed
+\fIvcf\fR files.  The input files are concatenated, so they must be
+sorted and appear in the correct order.  The only difference between
+\fIbcf\fR and \fIvcf\fR is that \fIbcf\fR is markedly more robust and
+efficient.
+
+.TP
+\fB\-o\fR, \fB--output\fR=\fIfile.hef\fR
+Write output to \fIfile.hef\fR.
+
+.TP
+\fB\-r\fR, \fB--reference\fR=\fIref.2bit\fR
+Read the reference genome from \fIref.2bit\fR.
+
+.TP
+\fB\-D\fR, \fB--dense\fR
+The input is "dense", meaning it is expected to contain a record for
+every site.  Sites absent from the input are assumed to be uncalled,
+that is, missing data.
+
+.TP
+\fB\-S\fR, \fB--sparse\fR
+The input is "sparse", meaning it is expected to contain only records
+for variant sites.  Sites absent from the input are assumed to match the
+reference.
+
+.TP
+\fB\-H\fR, \fB--high\fR
+The input is of "high coverage", meaning it is expected that genotype
+calling is reliable.  Such input is imported unmodified.  This is the
+default mode.
+
+.TP
+\fB\-L\fR, \fB--low\fR
+The input is of "low coverage", meaning it is not expected that both
+alleles of the samples could be observed.  The homozygous diploid calls
+in such input are transformed into haploid calls to reflect the low
+information content.
+
+.SS Bamin
+
+\fBheffalump bamin\fR
+\fB\-o\fR \fIoutput.hef\fR
+\fB\-r\fR \fIref.2bit\fR
+[\fB\-q\fR, \fB--min-qual\fR=\fIqual\fR]
+[\fB\-m\fR, \fB--min-mapq\fR=\fImapq\fR]
+[\fB--snip\fR \fIsnip\fR]
+[\fB--snap\fR \fIsnap\fR]
+[\fB--stranded\fR]
+\fIinput.bam\fR...
+
+Crudely imports a set of \fIbam\fR files into \fIhef\fR format by
+randomly selecting one of the crossing reads at each site and using its
+raw base as the haploid call.  Input files must be sorted and are
+merged.
+
+A multitude of sampling schemes is available and was used in preliminary
+experiments, but none is fit for actual use.  Please refer to the source
+code to figure out what exactly they do.
+
+.TP
+\fB\-o\fR, \fB--output\fR=\fIfile.hef\fR
+Write output to \fIfile.hef\fR.
+
+.TP
+\fB\-r\fR, \fB--reference\fR=\fIref.2bit\fR
+Read the reference genome from \fIref.2bit\fR.  Only scaffolds present
+in the reference are imported and arranged into the correct order,
+missing scaffolds are stored as uncalled.  It is reported as an error if
+no scaffold could be imported.
+
+.TP
+\fB\-q\fR, \fB--min-qual\fR=\fIqual\fR
+Ignore bases with a quality score below \fIqual\fR.
+
+.TP
+\fB\-m\fR, \fB--min-mapq\fR=\fImapq\fR
+Ignore reads with a map quality below \fImapq\fR.
+
+.TP
+\fB--stranded\fR
+Apply "strand sensitive sampling":  sample only As and Gs from reads
+aligning in the forward direction, sample only Ts and Cs from reads
+aligning in the reverse direction.  This is expected to remove the
+effect of deamination without introducing any bias.
+
+.SS Patch
+
+\fBheffalump patch\fR
+[\fB\-o\fR \fIoutput.hfa\fR]
+[\fB\-r\fR \fIref.2bit\fR]
+\fB\-s\fR \fIsample.hef\fR
+
+Applies the variants in one \fIhef\fR file to the reference, thus
+regenerating the original \fIhetfa\fR file.
+
+.TP
+\fB\-o\fR, \fB--output\fR=\fIfile.hfa\fR
+Write output to \fIfile.hfa\fR.  By default, output is written to
+\fIstdout\fR.
+
+.TP
+\fB\-r\fR, \fB--reference\fR=\fIref.2bit\fR
+Read the reference genome from \fIref.2bit\fR.
+
+.TP
+\fB\-s\fR, \fB--sample\fR=\fIsample.hef\fR
+Read the sample from \fIsample.hef\fR.
+
+.TP
+\fB\-w\fR, \fB--width\fR=\fInum\fR
+Break output lines after \fInum\fR columns.  The default is 50.
+
+.SS Treemix
+
+\fBheffalump treemix\fR
+[\fB\-o\fR \fIoutput.tmx.gz\fR]
+[\fB\-r\fR \fIref.2bit\fR]
+\fB\-i\fR \fIindividuals.ind\fR
+[\fB\-n\fR \fInumoutgroups\fR]
+[\fB\-R\fR \fIregions.bed\fR]
+[\fB\-t\fR] [\fB\-a\fR|\fB\-x\fR|\fB\-y\fR]
+\fIinput.hef\fR...
+
+Merges multiple \fIhef\fR files, splits the resulting variants into
+biallelic variants, collates observations by population, and prints the
+result in a format digestible by \fBtreemix\fR.
+
+.TP
+\fB\-o\fR, \fB--output\fR=\fIfile.tmx.gz\fR
+Write output to \fIfile.tmx.gz\fR in gzip compressed treemix format.  By
+default, output is written to \fIstdout\fR.
+
+.TP
+\fB\-r\fR, \fB--reference\fR=\fIref.2bit\fR
+Read the reference genome from \fIref.2bit\fR.
+
+.TP 
+\fB\-i\fR, \fB--individuals\fR=\fIfile.ind\fR
+Read individuals from \fIfile.ind\fR,  which lists individual and the
+populations they belong to in the same format as used by
+\fBEigenstrat\fR.  \fBheffalump\fI will search the list of input files
+for those whose base names match the individual names, and it will
+produce one column in the output for each distinct pupolation.
+
+.TP
+\fB\-n\fR, \fB--numoutgroups\fR=\fInum\fR
+The first \fInum\fR inputs (on the command line, not in the individuals
+file) are outgroups.
+
+.TP
+\fB\-t\fR, \fB--transversions\fR
+Output only transversion variants.
+
+.TP
+\fB\-a\fR, \fB--autosomes\fR
+Process only the autosomes.  This works only if the reference is the
+human genome; otherwise, use an appropriate \fIbed\fR file.
+
+.TP
+\fB\-x\fR, \fB--x-chromosome\fR
+Process only the X chromosome.  This works only if the reference is the
+human genome; otherwise, use an appropriate \fIbed\fR file.
+
+.TP
+\fB\-y\fR, \fB--y-chromosome\fR
+Process only the Y chromosome.  This works only if the reference is the
+human genome; otherwise, use an appropriate \fIbed\fR file.
+
+.TP
+\fB\-R\fR, \fB--regions\fR=\fIregions.bed\fR
+Restrict output to variants in the regions found in \fIregions.bed\fR,
+which should be a \fIbed\fR file.
+
+.SS Eigenstrat/Vcfexport
+
+\fBheffalump\fR [\fBeigenstrat\fR|\fBvcfexport\fR]
+[\fB\-o\fR \fIoutput\fR]
+[\fB\-r\fR \fIref.2bit\fR]
+[\fB\-n\fR \fInumoutgroups\fR]
+[\fB\-R\fR \fIregions.bed\fR]
+[\fB\-t\fR] [\fB\-b\fR]
+\fIinput.hef\fR...
+
+Merges multiple \fIhef\fR files, splits the resulting variants into
+biallelic variants, and prints the result in \fIeigenstrat\fR or
+\fIvcf\fR format, respectively.
+
+.TP
+\fB\-o\fR, \fB--output\fR=\fIbasename\fR
+For \fBeigenstrat\fR, write output to \fIbasename.geno\fR and
+\fIbasename.snp\fR.  Streaming or compressing this format is not
+possible due to the confused design of the \fBEigenstrat\fR package.
+For \fBvcfexport\fR, output is always written to stdout.
+
+.TP
+\fB\-r\fR, \fB--reference\fR=\fIref.2bit\fR
+Read the reference genome from \fIref.2bit\fR.
+
+.TP
+\fB\-n\fR, \fB--numoutgroups\fR=\fInum\fR
+The first \fInum\fR inputs are outgroups.
+
+.TP
+\fB\-t\fR, \fB--only-transversions\fR
+Output only transversion variants.
+
+.TP
+\fB\-b\fR, \fB--only-biallelic\fR
+Output only biallelic variants.  Multi-allelic variants are always split
+into multiple biallelic variants, this options only decides whether to
+output them.
+
+.TP
+\fB\-R\fR, \fB--regions\fR=\fIregions.bed\fR
+Restrict output to variants in the regions found in \fIregions.bed\fR,
+which should be a \fIbed\fR file.
+
+.SS Kayvergence/Dstatistics
+
+\fBheffalump\fR [\fBkayvergence\fR|\fBdstatistics\fR]
+[\fB\-r\fR \fIref.2bit\fR]
+[\fB\-n\fR \fInumoutgroups\fR]
+[\fB\-k\fR \fInumrefpanel\fR]
+[\fB\-R\fR \fIregions.bed\fR]
+[\fB\-J\fR \fIblocksize\fR]
+[\fB\-t\fR] [\fB\--ignore-cpg\fR]
+\fIinput.hef\fR...
+
+Merges multiple \fIhef\fR files and computes either "Kayvergence ratios"
+or "D-statistics" on suitable combinations of the inputs.  Output is
+formatted as a human readable table and sent to stdout.
+
+"Kayvergence ratio" is a crude estimate of population history computed
+from shared variants.  \fBheffalump\fR computes the "kayvergence ratio"
+for any combination of two "good genomes" and one "bad genome" from the
+input; the reference itself counts as an additional "good genome".  A
+formal test is performed whether the "bad genome" is an outgroup to the
+two "good genomes".
+
+"D-statistics" is a formal test whether the allele sharing of four
+populations is consistent with a clean tree shaped history.
+\fBheffalump\fR computes the "D-statistics" for any combination of one
+"outgroup", two individuals from the "reference panel" and one "sample"
+from the input.
+
+.TP
+\fB\-r\fR, \fB--reference\fR=\fIref.2bit\fR
+Read the reference genome from \fIref.2bit\fR.
+
+.TP
+\fB\-n\fR, \fB--numgood\fR=, \fB--numoutgroups\fR=\fInum\fR
+Set the number of "good genomes" or "outgroups" to \fInum\fR.  For
+\fBkayvergence\fR, the option is named \fBnumgood\fR and the input files
+must be listed in the order "good genomes", then samples.  For
+\fBdstatistics\fR, the option is named \fBnumoutgroups\fR and the input
+files must be listed in the order outgroups, reference panel, then
+samples.  The default value is 1.
+
+.TP
+\fB\-k\fR, \fB--numrefpanel\fR=\fInum\fR
+Only for \fBdstatistics\fR, set the size of the "reference panel" to
+\fInum\fR.  The input files must be listed in the order outgroups,
+reference panel, then samples.  The default value is 2.
+
+.TP
+\fB\-t\fR, \fB--transversions\fR
+Count only transversion variants.
+
+.TP
+\fB--ignore-cpg\fR
+Ignore variants that fall on a CpG site in the reference genome.
+
+.TP
+\fB\-R\fR, \fB--regions\fR=\fIregions.bed\fR
+Restrict analysis to the regions found in \fIregions.bed\fR,
+which should be a \fIbed\fR file.
+
+.TP
+\fB\-J\fR, \fB--blocksize\fR=\fInum\fR
+The variance and significance values are obtained from block Jackknifing
+the relevant statistics.  This option sets the block size to \fInum\fR
+bases (not variants).  Block will contain different numbers of
+informative sites, but this is automatically taken care of.  The exact
+size is uncritical as long as it large enough to overcome linkage
+between variants.  The default size of 5M is usually a good choice.
+
+.SS TwobitInfo
+\fBheffalump twobitinfo\fR \fIgenome.2bit\fR...
+
+For each of the input files, prints a table of the reference scaffolds
+together with their lengths.
+
+.SS TwobitToFa
+\fBheffalump twobittofa\fR \fIgenome.2bit\fR [\fIregion\fR...]
+
+Extracts sequences from \fIgenome.2bit\fR and prints them in FastA
+format to stdout.  If no \fIregion\fR is given, each reference scaffold
+is extracted in order, otherwise, each \fIregion\fR is extracted in
+turn.  If \fIregion\fR is the exact name of a scaffold, that scaffold is
+extracted.  Else, \fIregion\fR must be of the form
+\fIname\fB:\fIstart\fB-\fIend\fR, where \fIname\fR is the name of a
+scaffold, \fIstart\fR is the zero-based start position of the desired
+region and \fIend\fR is the zero-based position just past the end of the
+desired region.  The extracted sequence will be named
+\fIname\fB:\fIstart\fB-\fIend\fR.
+
+.SS FaToTwobit
+\fBheffalump fatotwobit -o\fR \fIoutput.2bit\fR [\fIfasta-file\fR...]
+
+Reads a set of files in \fIFastA\fR format and converts them to a
+\fI2bit\fR file that can be used as reference genome in other
+\fBheffalump\fR commands.  If no input file is given, \fIstdin\fR is
+read instead.  The file name "-" refers to standard input.  Input files
+can optionally be compressed with \fBgzip\fR or \fBbgzip\fR.
+
+.TP
+\fB\-o\fR, \fB--output\fR=\fIname\fR
+Write output in \fI2bit\fR to \fIname\fR.
 
 .SH NOTES
 
 Currently, \fBheffalump\fR represents only SNPs, not Indels.  This is
-not a hard technical limitation, but rather a conscious design decision.
-Since the primary input is the SGDP dataset, which doesn't contain Indel
-information, and the primary output is Eigenstrat, which can't
-represent Indels, support for Indels would have been borrowing trouble.
+not a hard technical limitation, but mostly due to lack of both time and
+demand.  Since the primary input is the SGDP dataset, which doesn't
+contain Indel information, and the primary output is Eigenstrat, which
+can't represent Indels, support for Indels would have been borrowing
+trouble.
 
-Individuals are either diploid or haploid.  It would make sense to
-support \fIopportunistic genotype calling\fR, where some sites have two
-called alleles and some have only one.  This is \fIalmost\fR supported,
-some work still needs to be done.
+\fBheffalump\fR dintinguishes between diploid and haploid calls.  In
+theory, it supports \fIopportunistic genotype calling\fR, where some
+sites have two called alleles and some have only one.  In practice, no
+suitable input files have been seen in the wild.
 
-Some functions, notably \fBtreemix\fR need the reference, even though
-they don't care for the actual reference allele.  This could be
-eliminated by changing the representation of \fIheffalumps\fR.  While
-aesthecially pleasing, this change has low priority.
+When reading \fIbcf/vcf\fR, only the first individual can be imported.
+This is annoying, but also rather difficult to fix right now.  Something
+like \fBbcftools\fR can be used to preprocess more complicated input.
+\fBbcftools\fR can also be used to transform plain \fIvcf\fR or gzip
+compressed \fIvcf\fR into \fIbcf\fR; the separate \fBvcfin\fR command
+for bgzip compressed \fIvcf\fR only exists to import legacy files that
+are too broken for digestion by \fBbcftools\fR.
 
-The list of chromosomes to use and their order is hardcoded right now.
-This might prove to be an annoyance, but right now it serves well to
-guard against badly formatted input files.
-
-Even when reading VCF, only one individual can be imported.  This is
-annoying, but also rather difficult to fix right now.
+Reference genomes are stored in the same \fI2bit\fR format used by
+\fBblat\fR and the UCSC Genome Browser.  These files can be manipulated
+by Jim Kent's tools.  \fBheffalump\fR replicates some of this
+functionality, but does not currently support masking (i.e. lower case
+letters) when converting back to FastA.
 
 .SH AUTHOR
-Udo Stenzel <udo_stenzel@eva.mpg.de>
 
+Udo Stenzel <udo_stenzel@eva.mpg.de>

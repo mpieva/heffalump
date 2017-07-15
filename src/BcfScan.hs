@@ -4,7 +4,7 @@ module BcfScan ( readBcf, decodeBcf ) where
 -- Minimalistic BCF reader.  We only care about the genotype of the
 -- first individual.  Should allow for a handful of shortcuts...
 
-import BasePrelude
+import Bio.Prelude
 import Util                     ( decomp )
 import VcfScan                  ( RawVariant(..), hashChrom )
 

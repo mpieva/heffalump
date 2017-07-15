@@ -5,7 +5,7 @@ module Eigenstrat
         , main_eigenstrat
         ) where
 
-import BasePrelude
+import Bio.Prelude
 import System.Console.GetOpt
 import System.IO
 

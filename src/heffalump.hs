@@ -1,5 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
-import BasePrelude
+import Bio.Prelude
 import Paths_heffalump                  ( version )
 import Streaming
 import System.Console.GetOpt
@@ -44,24 +44,25 @@ main = do
                 "  "++pn++' ':k++replicate (kl-length k) ' '++"  -- "++h
 
     mains = let z a b c = (a,(b,c)) in
-        [ z "eigenstrat"  main_eigenstrat         "Merge heffalumps into Eigenstrat format"
-        , z "vcfexport"   main_vcfout             "Merge heffalumps into VCF"
-        , z "hetfa"       main_hetfa              "Import hetfa file"
-        , z "bamin"       main_bam                "Import BAM file"
-        , z "maf"         main_maf                "Import two-species maf"
+        [ z "hetfa"       main_hetfa              "Import hetfa file"
+        , z "maf"         main_maf                "Import one genome from maf files"
         , z "emf"         main_emf                "Import one genome from emf (Compara)"
+        , z "bcfin"      (main_xcf conf_bcf)      "Import one genome from bcf files"
+        , z "vcfin"      (main_xcf conf_vcf)      "Import one genome from vcf files"
+        , z "bamin"       main_bam                "Import crudely from bam files"
         , z "patch"       main_patch              "Make a hetfa file by patching the reference"
         , z "treemix"     main_treemix            "Merge heffalumps into Treemix format"
+        , z "eigenstrat"  main_eigenstrat         "Merge heffalumps into Eigenstrat format"
+        , z "vcfexport"   main_vcfout             "Merge heffalumps into vcf format"
+        , z "twobitinfo"  main_2bitinfo           "List reference sequences"
+        , z "twobittofa"  main_2bittofa           "Extract Fasta from 2bit"
+        , z "fatotwobit"  main_fato2bit           "Convert Fasta to 2bit"
         , z "kayvergence" main_kayvergence        "Compute Kayvergence ratios"
         , z "dstatistics" main_patterson          "Compute Patterson's D"
-        , z "yaddayadda"  main_yaddayadda         "Compute Yadda-yadda-counts"
-        , z "bcfin"      (main_xcf conf_bcf)      "Import BCF"
-        , z "vcfin"      (main_xcf conf_vcf)      "Import VCF"
+        , z "yaddayadda"  main_yaddayadda         "Compute Yadda-Yadda-counts"
         , z "dumppatch"   main_dumppatch          "(debugging aid)"
         , z "dumplump"    main_dumplump           "(debugging aid)"
-        , z "twobitinfo"  main_2bitinfo           "list reference sequences"
-        , z "twobittofa"  main_2bittofa           "extract Fasta from 2bit"
-        , z "fatotwobit"  main_fato2bit           "convert Fasta to 2bit"
+        , z "--help"     (const usage)            "list commands and exit"
         , z "--version"   main_version            "print version and exit" ]
 
 main_version :: [String] -> IO ()
@@ -169,15 +170,14 @@ main_maf args = do
 
 data ConfPatch = ConfPatch {
     conf_patch_width      :: Int64,
+    conf_patch_output     :: (Handle -> IO ()) -> IO (),
     conf_patch_reference  :: Either String FilePath,
-    conf_patch_output     :: FilePath,
     conf_patch_sample     :: FilePath }
-  deriving Show
 
 defaultPatchConf :: ConfPatch
-defaultPatchConf = ConfPatch 50 (Left    "no reference specified")
-                                (error "no output file specified")
-                                (error "no sample file specified")
+defaultPatchConf = ConfPatch 50 ($ stdout)
+                             (Left    "no reference specified")
+                             (error "no sample file specified")
 
 
 opts_patch :: [ OptDescr (ConfPatch -> IO ConfPatch) ]
@@ -187,10 +187,11 @@ opts_patch =
     , Option "s" ["sample"] (ReqArg set_sample "FILE") "Read sample from FILE (.hef)"
     , Option "w" ["width"]  (ReqArg  set_width  "NUM") "Set width of FastA to NUM (50)" ]
   where
-    set_output a c = return $ c { conf_patch_output    =       a }
-    set_ref    a c = return $ c { conf_patch_reference = Right a }
-    set_sample a c = return $ c { conf_patch_sample    =       a }
-    set_width  a c = (\n   -> c { conf_patch_width     =       n }) <$> readIO a
+    set_output "-" c = return $ c { conf_patch_output    = ($ stdout) }
+    set_output  a  c = return $ c { conf_patch_output    = withFile a WriteMode }
+    set_ref     a  c = return $ c { conf_patch_reference = Right a }
+    set_sample  a  c = return $ c { conf_patch_sample    =       a }
+    set_width   a  c = (\n   -> c { conf_patch_width     =       n }) <$> readIO a
 
 main_patch :: [String] -> IO ()
 main_patch args = do
@@ -198,7 +199,7 @@ main_patch args = do
     raw <- decomp <$> L.readFile conf_patch_sample
     ref <- readTwoBit $ either (\e -> fromMaybe e $ getRefPath raw) id conf_patch_reference
 
-    withFile conf_patch_output WriteMode $ \hdl ->
+    conf_patch_output $ \hdl ->
         patchFasta hdl conf_patch_width (nrss_chroms ref)
                    (nrss_seqs ref) (decode (Right ref) raw)
 
@@ -223,7 +224,10 @@ main_vcfout args = do
                mconcat [ '\t' `B.cons` B.pack (takeBaseName f) | f <- hefs ] <>
                B.singleton '\n'
 
-    let the_vars = addRef (either error id refs) $ region_filter $ concat $ mergeLumps conf_noutgroups inps
+    let the_vars = addRef (either error id refs) $
+                   region_filter $
+                   bool singles_only concat conf_split $
+                   mergeLumps conf_noutgroups inps
 
     forM_ the_vars $ \Variant{..} ->
         -- samples (not outgroups) must show alt allele at least once
@@ -238,6 +242,8 @@ main_vcfout args = do
                 U.foldr ((<>) . B.byteString . (V.!) gts . fromIntegral) mempty v_calls <>
                 B.char8 '\n'
   where
+    singles_only = foldr (\xs xss -> case xs of [x] -> x : xss ; _ -> xss) []
+
     gts :: V.Vector B.ByteString
     gts = V.fromList [ "\t./."      -- 0, N
                      , "\t0"        -- 1, 1xref

@@ -25,7 +25,7 @@ module Streaming.Zip (
     , windowBits
     ) where
 
-import BasePrelude                   hiding (for,loop)
+import Bio.Prelude                   hiding (for,loop)
 import Control.Exception                    (throwIO)
 import Control.Monad                        (unless)
 import Data.ByteString.Streaming

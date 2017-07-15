@@ -8,8 +8,7 @@
 // buffer, a small working buffer and a structure to put the output in.
 // We scan until the working buffer is empty, then unzip a BGZF block,
 // keep scanning.  We return when either the input buffer is
-// sufficiently empty or we managed to produce a record.  (How do we
-// signal to the Haskell world?)
+// sufficiently empty or we managed to produce a record.
 
 #define inc() { ++p ; if( p == pe ) return 0 ; }
 #define skip() { while( *p != '\t' ) inc() ; inc() ; }
