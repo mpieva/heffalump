@@ -364,7 +364,7 @@ faToTwoBit s0 = L.concat $ B.toLazyByteString header : map snd seqs
                      s2 = L.dropWhile (/= '\n') s1
                  in if L.null s1 then []
                     else get_one (toShort $ L.toStrict nm) 0
-                                 (-1 :!: L2i_Nil) (-1 :!: L2i_Nil) (0 :!: 0 :!: []) s2
+                                 (maxBound :!: L2i_Nil) (maxBound :!: L2i_Nil) (0 :!: 0 :!: []) s2
 
 
     get_one !nm !pos !_ns !_ms !_bs _s
@@ -384,27 +384,23 @@ faToTwoBit s0 = L.concat $ B.toLazyByteString header : map snd seqs
                                    (n :!: w :!: ss) -> B.singleton (w `shiftL` (6-2*n)) : ss
                   raw = B.toLazyByteString $
                             B.word32LE pos <>
-                            encodeL2i (case ns of -1 :!: rs -> rs ; p :!: rs -> L2i p pos rs) <>
-                            encodeL2i (case ms of -1 :!: rs -> rs ; p :!: rs -> L2i p pos rs) <>
+                            encodeL2i (case ns of p :!: rs | p == maxBound -> rs ; p :!: rs -> L2i p pos rs) <>
+                            encodeL2i (case ms of p :!: rs | p == maxBound -> rs ; p :!: rs -> L2i p pos rs) <>
                             B.word32LE 0 <>
                             foldMap B.byteString (reverse ss')
               in L.length raw `seq` (nm, raw) : get_each s
 
-    collect_Ns (-1 :!: rs) pos c
-        | c `C.elem` "ACGTacgt" =  -1 :!: rs
-        | otherwise             = pos :!: rs
-
     collect_Ns (spos :!: rs) pos c
-        | c `C.elem` "ACGTacgt" =  -1  :!: L2i spos pos rs
-        | otherwise             = spos :!: rs
-
-    collect_ms (-1 :!: rs) pos c
-        | isUpper c = -1 :!: rs
-        | otherwise = pos :!: rs
+        | spos == maxBound && c `C.elem` "ACGTacgt" = maxBound :!: rs
+        | spos == maxBound                          =      pos :!: rs
+        |                     c `C.elem` "ACGTacgt" = maxBound :!: L2i spos pos rs
+        | otherwise                                 =     spos :!: rs
 
     collect_ms (spos :!: rs) pos c
-        | isUpper c = -1 :!: L2i spos pos rs
-        | otherwise = spos :!: rs
+        | spos == maxBound && isUpper c = maxBound :!: rs
+        | spos == maxBound              =      pos :!: rs
+        |                     isUpper c = maxBound :!: L2i spos pos rs
+        | otherwise                     =     spos :!: rs
 
     -- collect 4 bases in w, then collect bytes in a list of byte
     -- strings of increasing length
