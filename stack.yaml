@@ -1,0 +1,17 @@
+flags: {}
+user-message: ! 'Warning (added by new or init): Some packages were found to be incompatible
+  with the resolver and have been left commented out in the packages section.
+
+  You can suppress this message by removing it from stack.yaml
+
+'
+extra-package-dbs: []
+packages:
+- '.'
+- location:
+    git: https://ustenzel@bitbucket.org/ustenzel/biohazard.git
+    commit: 15f7b87fc5803d36236a18c3e8f781a4306b65ca
+extra-deps:
+- aeson-1.0.2.1
+- bytestring-mmap-0.2.2
+resolver: lts-9.1

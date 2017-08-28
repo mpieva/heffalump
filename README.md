@@ -14,6 +14,8 @@ Heffalump imports common file formats (VCF, BCF, Bam by picking from an arbitrar
   https://bitbucket.org/ustenzel/biohazard/get/master.tar.gz
   https://bitbucket.org/ustenzel/heffalump/get/master.tar.gz`
 
+* if you prefer stack:
+* run `stack build`
 ## Homepage ##
 
 https://bioinf.eva.mpg.de/heffalump/
