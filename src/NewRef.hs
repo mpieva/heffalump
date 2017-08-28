@@ -1,4 +1,4 @@
-{-# LANGUAGE BangPatterns, OverloadedStrings #-}
+{-# LANGUAGE BangPatterns, OverloadedStrings, CPP #-}
 module NewRef where
 
 -- ^ We'll use a 2bit file as reference.  Chromosomes in the file will
@@ -40,8 +40,13 @@ import Foreign.Storable                     ( peekByteOff )
 import System.Console.GetOpt
 import System.Directory                     ( makeAbsolute )
 import System.IO                            ( hPutStrLn, stdout, stderr )
-import System.IO.Posix.MMap                 ( unsafeMMapFile )
 import System.IO.Unsafe                     ( unsafeDupablePerformIO )
+
+#if MIN_VERSION_biohazard(0,6,16)
+import Bio.Util.MMap                        ( unsafeMMapFile )
+#else
+import System.IO.Posix.MMap                 ( unsafeMMapFile )
+#endif
 
 import qualified Data.ByteString                as B
 import qualified Data.ByteString.Builder        as B

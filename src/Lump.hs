@@ -514,7 +514,7 @@ mergeLumps !noutgroups = filter (not . null) . go 0 0
 
     -- Skip over exactly l sites.
     skipStretch :: Int -> Lump (Fix Lump) -> Fix Lump
-    skipStretch !l           _ | l < 0 || l > 300000000 = error "WTF?!"
+    skipStretch !l _ | l < 0  = error "WTF?!"
 
     skipStretch !l (Del1 _ s) = skipStretch l (unFix s)
     skipStretch !l (Del2 _ s) = skipStretch l (unFix s)
