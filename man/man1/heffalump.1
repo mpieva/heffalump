@@ -51,6 +51,7 @@ heffalump \- compact storage of genotypes
 [\fB\-i\fR \fIindividuals.ind\fR]
 [\fB\-n\fR \fInumoutgroups\fR]
 [\fB\-t\fR] [\fB-a\fR|\fB-x\fR|\fB-y\fR]
+[\fB\-c\fR \fIchroms\fR]
 [\fB\-R\fR \fIregions.bed\fR]
 
 .B heffalump eigenstrat 
@@ -138,14 +139,16 @@ documentation;  these should be treated a dangerous and/or bad ideas.
 \fB\-r\fR, \fB--reference\fR \fIfile.2bit\fR
 Specifies a \fI2bit\fR file containing the reference genome.  A
 reference genome is always needed when importing anything into \fIhef\fR
-format, and the location of the reference is remembered.   When
-operating on \fIhef\fR files, the same reference is needed, and then
-\fB\-r\fR needs to be specified explicitly only if the reference isn't
-found automatically.  Only \fIhef\fR files created with respect to the
-same reference can be processed together.
+format, and the location of the reference is remembered.  Only \fIhef\fR
+files created with respect to the same reference can be processed
+together.  When operating on \fIhef\fR files, the same reference is
+usually needed, and then \fB\-r\fR needs to be specified explicitly only
+if the reference isn't found automatically.  A few operations (plain
+\fItreemix\fR output, \fIdstatistics\fR) can work without access to the
+reference.
 
 \fBheffalump\fR stores genomes as a list of difference to a reference.
-When importing things like \fIhetfa\fR, the reference is clearly need to
+When importing things like \fIhetfa\fR, the reference is clearly needed to
 find differences.  Other formats like \fImaf\fR have the reference built
 in, but \fBheffalump\fR still needs a reference genome to establish the
 correct order of reference scaffolds.  For \fIbam\fR, even the order is
@@ -363,6 +366,7 @@ Break output lines after \fInum\fR columns.  The default is 50.
 [\fB\-n\fR \fInumoutgroups\fR]
 [\fB\-R\fR \fIregions.bed\fR]
 [\fB\-t\fR] [\fB\-a\fR|\fB\-x\fR|\fB\-y\fR]
+[\fB\-c\fR \fIchroms\fR]
 \fIinput.hef\fR...
 
 Merges multiple \fIhef\fR files, splits the resulting variants into
@@ -376,10 +380,11 @@ default, output is written to \fIstdout\fR.
 
 .TP
 \fB\-r\fR, \fB--reference\fR=\fIref.2bit\fR
-Read the reference genome from \fIref.2bit\fR.  The reference is only
-needed if all of the input files is in the legacy format.  If some
-inputs are in the legacy format, the reference is needed, but usually
-found automatically.
+Read the reference genome from \fIref.2bit\fR.  The reference is needed
+to decode the legacy \fIheffalump\fR format and to implement the
+\fB\-R\fR, \fB\-a\fR, \fB\-x\fR, \fB\-y\fR, and \fB\-c\fR options.
+Usually, the reference is found automatically without explicitly
+specifying it.
 
 .TP 
 \fB\-i\fR, \fB--individuals\fR=\fIfile.ind\fR
@@ -402,23 +407,30 @@ Output only transversion variants.
 
 .TP
 \fB\-a\fR, \fB--autosomes\fR
-Process only the autosomes.  This works only if the reference is the
-human genome; otherwise, use an appropriate \fIbed\fR file.
+Process only the autosomes, i.e. everything that matches 
+.IR ^(chr)?[0-9]+[a-z]?$ .
 
 .TP
 \fB\-x\fR, \fB--x-chromosome\fR
-Process only the X chromosome.  This works only if the reference is the
-human genome; otherwise, use an appropriate \fIbed\fR file.
+Process only the X chromosome, i.e. everything that matches 
+.IR ^(chr)?X$ .
 
 .TP
 \fB\-y\fR, \fB--y-chromosome\fR
-Process only the Y chromosome.  This works only if the reference is the
-human genome; otherwise, use an appropriate \fIbed\fR file.
+Process only the Y chromosome, i.e. everything that matches 
+.IR ^(chr)?Y$ .
+
+.TP
+\fB\-c\fR, \fB--chromosomes\fR=\fIregex\fR
+Process only target sequences that match \fIregex\fR.
 
 .TP
 \fB\-R\fR, \fB--regions\fR=\fIregions.bed\fR
 Restrict output to variants in the regions found in \fIregions.bed\fR,
-which should be a \fIbed\fR file.
+which should be a \fIbed\fR file.  If both the \fB\-R\fR option and one
+of the \fB\-a\fR, \fB\-x\fR, \fB\-y\fR, or \fB\-c\fR options are given,
+only variants in the bed file's regions on the selected chromosomes are
+processed.
 
 .SS Eigenstrat/Vcfexport
 
