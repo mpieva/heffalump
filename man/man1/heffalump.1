@@ -48,9 +48,9 @@ heffalump \- compact storage of genotypes
 .B heffalump treemix
 [\fB\-o\fR \fIoutput.hef\fR]
 [\fB\-r\fR \fIref.2bit\fR]
-\fB\-i\fR \fIindividuals.ind\fR
+[\fB\-i\fR \fIindividuals.ind\fR]
 [\fB\-n\fR \fInumoutgroups\fR]
-[\fB\-t\fR] [\fB-x\fR]
+[\fB\-t\fR] [\fB-a\fR|\fB-x\fR|\fB-y\fR]
 [\fB\-R\fR \fIregions.bed\fR]
 
 .B heffalump eigenstrat 
@@ -359,7 +359,7 @@ Break output lines after \fInum\fR columns.  The default is 50.
 \fBheffalump treemix\fR
 [\fB\-o\fR \fIoutput.tmx.gz\fR]
 [\fB\-r\fR \fIref.2bit\fR]
-\fB\-i\fR \fIindividuals.ind\fR
+[\fB\-i\fR \fIindividuals.ind\fR]
 [\fB\-n\fR \fInumoutgroups\fR]
 [\fB\-R\fR \fIregions.bed\fR]
 [\fB\-t\fR] [\fB\-a\fR|\fB\-x\fR|\fB\-y\fR]
@@ -367,7 +367,7 @@ Break output lines after \fInum\fR columns.  The default is 50.
 
 Merges multiple \fIhef\fR files, splits the resulting variants into
 biallelic variants, collates observations by population, and prints the
-result in a format digestible by \fBtreemix\fR.
+result in a format digestible by \fBtreemix\fR.  
 
 .TP
 \fB\-o\fR, \fB--output\fR=\fIfile.tmx.gz\fR
@@ -376,15 +376,20 @@ default, output is written to \fIstdout\fR.
 
 .TP
 \fB\-r\fR, \fB--reference\fR=\fIref.2bit\fR
-Read the reference genome from \fIref.2bit\fR.
+Read the reference genome from \fIref.2bit\fR.  The reference is only
+needed if all of the input files is in the legacy format.  If some
+inputs are in the legacy format, the reference is needed, but usually
+found automatically.
 
 .TP 
 \fB\-i\fR, \fB--individuals\fR=\fIfile.ind\fR
-Read individuals from \fIfile.ind\fR,  which lists individual and the
+Read individuals from \fIfile.ind\fR,  which lists individuals and the
 populations they belong to in the same format as used by
 \fBEigenstrat\fR.  \fBheffalump\fI will search the list of input files
 for those whose base names match the individual names, and it will
-produce one column in the output for each distinct pupolation.
+produce one column in the output for each distinct population.  If no
+individual file is specified, each individual becomes a singleton
+population.
 
 .TP
 \fB\-n\fR, \fB--numoutgroups\fR=\fInum\fR

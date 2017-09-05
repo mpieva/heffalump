@@ -57,8 +57,8 @@ main_treemix args = do
     ( hefs, ConfTmx{..} ) <- parseOpts True defaultConfTmx (mk_opts "treemix" [] opts_treemix) args
 
     -- We read and merge all the HEF files (shell trickery is suggested
-    -- to assemble the horrible command line).  We use the IND file to
-    -- map them to populations.
+    -- to assemble the horrible command line).  We use the optional IND
+    -- file to map them to populations.
 
     (pops, npops, popixs) <- case conf_indivs of
         Just fp -> do popmap <- readIndFile <$> B.readFile fp
