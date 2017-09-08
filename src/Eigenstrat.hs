@@ -76,7 +76,7 @@ data ConfMergeGen = ConfMergeGen {
   deriving Show
 
 defaultMergeConf :: ConfMergeGen
-defaultMergeConf = ConfMergeGen 1 5000000 True True Nothing Nothing
+defaultMergeConf = ConfMergeGen 0 5000000 True True Nothing Nothing
                                 (error "size of reference panel not known")
                                 (error "no output file specified")
                                 (error "no sample file specified")
@@ -85,7 +85,7 @@ opts_eigen :: [ OptDescr (ConfMergeGen -> IO ConfMergeGen) ]
 opts_eigen =
     [ Option "o" ["output"]     (ReqArg set_output "FILE") "Write output to FILE.geno and FILE.snp"
     , Option "r" ["reference"]     (ReqArg set_ref "FILE") "Read reference from FILE (.2bit)"
-    , Option "n" ["numoutgroups"]  (ReqArg set_nout "NUM") "The first NUM individuals are outgroups (1)"
+    , Option "n" ["numoutgroups"]  (ReqArg set_nout "NUM") "The first NUM individuals are outgroups (0)"
     , Option "t" ["only-transversions"] (NoArg set_no_all) "Output only transversion sites"
     , Option "b" ["only-biallelic"]   (NoArg set_no_split) "Discard, don't split, polyallelic sites"
     , Option "R" ["regions"]      (ReqArg set_rgns "FILE") "Restrict to regions in bed-file FILE" ]

@@ -212,7 +212,7 @@ main_dumplump     _     =    hPutStrLn stderr "Usage: dumplump [foo.hef]"
 -- VCF output, this time going through 'Lump' instead of 'Stretch'
 main_vcfout :: [String] -> IO ()
 main_vcfout args = do
-    ( hefs, ConfMergeGen{..} ) <- parseOpts True defaultMergeConf { conf_noutgroups = 0 }
+    ( hefs, ConfMergeGen{..} ) <- parseOpts True defaultMergeConf
                                             (mk_opts "vcfexport" "[hef-file...]" (tail opts_eigen)) args
     (refs, inps) <- decodeMany conf_reference hefs
     region_filter <- mkBedFilter conf_regions (either error nrss_chroms refs)
