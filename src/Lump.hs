@@ -473,7 +473,51 @@ decodeLump = ana decode1
 -- 'noutgroups':  number of outgroups
 
 mergeLumps :: Int -> V.Vector (Fix Lump) -> [[Variant]]
-mergeLumps !noutgroups = filter (not . null) . go 0 0
+mergeLumps !noutgroups =
+    filter (not . null) .
+    -- it's only a variant if at least one alt called
+    map (filter (U.any has_alt . U.drop noutgroups . v_calls)) .
+    mergeLumpsWith (V.minimum . V.map (skiplen . unFix) . V.drop noutgroups)
+  where
+    has_alt c = c .&. 0xC /= 0
+
+    skiplen (Ns   n _) = n
+    skiplen (Eqs1 n _) = n
+    skiplen (Eqs2 n _) = n
+    skiplen (Break  _) = maxBound
+    skiplen  Done      = maxBound
+    skiplen  _         = 0
+
+-- Like mergeLumps, but produces at least one SNP record for each site.
+-- Since all variants are produced (and then some), outgroups need no
+-- special treatment.
+mergeLumpsDense :: V.Vector (Fix Lump) -> [[Variant]]
+mergeLumpsDense =
+    -- XXX  The filtering needs some redesign...
+    map (\vs -> case filter (U.any has_alt . v_calls) vs of
+        -- no real variant in here, turn the first into pseudo-var
+        [ ] -> [ (head vs) { v_alt = V2b 255 } ]
+        -- at least one real var, keep all
+        vs' -> vs' ) .
+    filter (not . null) .  -- shouldn't even happen
+    mergeLumpsWith (V.minimum . V.map (skiplen . unFix))
+  where
+    has_alt c = c .&. 0xC /= 0
+
+    -- Don't skip over equal stretches.  This will cause the code in
+    -- mergeLumpsWith to attempt to create four variants at each
+    -- position, unless all samples have no calls.  (This neatly skips
+    -- over N stretches in the reference.)
+    skiplen (Ns   n _) = n
+    skiplen (Eqs1 _ _) = 0
+    skiplen (Eqs2 _ _) = 0
+    skiplen (Break  _) = maxBound
+    skiplen  Done      = maxBound
+    skiplen  _         = 0
+
+
+mergeLumpsWith :: (V.Vector (Fix Lump) -> Int) -> V.Vector (Fix Lump) -> [[Variant]]
+mergeLumpsWith skipLen = go 0 0
     -- Merging stretches.  We define a 'Variant' as anything that is
     -- different from the reference.  Therefore, 'Eqs' ('Eqs1') and 'Ns'
     -- never create a 'Variant' and we can skip forwards.  A 'Done' is
@@ -492,7 +536,7 @@ mergeLumps !noutgroups = filter (not . null) . go 0 0
         -- We ignore outgroups in computing the longest stretch.  That
         -- way, outgroups don't get to define variants, but participate
         -- in variants found in another way.
-        | otherwise = case longestStretch $ V.drop noutgroups smps of
+        | otherwise = case skipLen smps of
 
             -- no stretch, have to look for vars
             0 -> mkVar ix    pos                                            smps $
@@ -552,27 +596,13 @@ mergeLumps !noutgroups = filter (not . null) . go 0 0
     skipStretch !l (ComplTCompl s) = skipStretch (l-1) (unFix s)
     skipStretch !l (TCompl2     s) = skipStretch (l-1) (unFix s)
 
-
-    longestStretch :: V.Vector (Fix Lump) -> Int
-    longestStretch = V.minimum . V.map (get_stretch_len . unFix)
-      where
-        get_stretch_len (Ns   n _) = n
-        get_stretch_len (Eqs1 n _) = n
-        get_stretch_len (Eqs2 n _) = n
-        get_stretch_len (Break  _) = maxBound
-        get_stretch_len  Done      = maxBound
-        get_stretch_len  _         = 0
-
-
     -- Find all the variants, anchored on the reference allele, and
     -- split them.  Misfitting alleles are not counted.
     mkVar :: Int -> Int -> V.Vector (Fix Lump) -> [[Variant]] -> [[Variant]]
     mkVar ix pos ss = (:)
             [ Variant ix pos ref_indet (V2b alt) calls
             | (alt, ct) <- zip [1..3] [ct_trans, ct_compl, ct_tcompl]
-            , let calls = V.convert $ V.map (ct . unFix) ss
-            -- it's only a variant if at least one alt called
-            , U.any (\c -> c .&. 0xC /= 0) (U.drop noutgroups calls) ]
+            , let calls = V.convert $ V.map (ct . unFix) ss ]
 
     ref_indet = N2b 255
 

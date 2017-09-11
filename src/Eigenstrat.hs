@@ -1,9 +1,4 @@
-module Eigenstrat
-        ( ConfMergeGen(..)
-        , defaultMergeConf
-        , opts_eigen
-        , main_eigenstrat
-        ) where
+module Eigenstrat ( main_eigenstrat ) where
 
 import Bio.Prelude
 import System.Console.GetOpt
@@ -63,7 +58,7 @@ mkname x y z = enc (4*y + numOf z) [ B.index chars x ]
     enc 0 = id
     enc u = (:) (B.index chars (u .&. 31)) . enc (u `shiftR` 5)
 
-data ConfMergeGen = ConfMergeGen {
+data ConfEigen = ConfEigen {
     conf_noutgroups :: Int,
     conf_blocksize  :: Int,
     conf_all        :: Bool,
@@ -75,13 +70,13 @@ data ConfMergeGen = ConfMergeGen {
     conf_sample     :: FilePath }
   deriving Show
 
-defaultMergeConf :: ConfMergeGen
-defaultMergeConf = ConfMergeGen 0 5000000 True True Nothing Nothing
+defaultConfEigen :: ConfEigen
+defaultConfEigen = ConfEigen 0 5000000 True True Nothing Nothing
                                 (error "size of reference panel not known")
                                 (error "no output file specified")
                                 (error "no sample file specified")
 
-opts_eigen :: [ OptDescr (ConfMergeGen -> IO ConfMergeGen) ]
+opts_eigen :: [ OptDescr (ConfEigen -> IO ConfEigen) ]
 opts_eigen =
     [ Option "o" ["output"]     (ReqArg set_output "FILE") "Write output to FILE.geno and FILE.snp"
     , Option "r" ["reference"]     (ReqArg set_ref "FILE") "Read reference from FILE (.2bit)"
@@ -100,7 +95,7 @@ opts_eigen =
 -- merge multiple files with the reference, write Eigenstrat format (geno & snp files)
 main_eigenstrat :: [String] -> IO ()
 main_eigenstrat args = do
-    ( hefs, ConfMergeGen{..} ) <- parseOpts True defaultMergeConf (mk_opts "eigenstrat" "[hef-file...]" opts_eigen) args
+    ( hefs, ConfEigen{..} ) <- parseOpts True defaultConfEigen (mk_opts "eigenstrat" "[hef-file...]" opts_eigen) args
     (refs, inps) <- decodeMany conf_reference hefs
     region_filter <- mkBedFilter conf_regions (either error nrss_chroms refs)
 
