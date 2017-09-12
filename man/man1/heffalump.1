@@ -61,7 +61,7 @@ heffalump \- compact storage of genotypes
 
 .B heffalump vcfexport 
 [\fB\-r\fR \fIref.2bit\fR]
-[\fB\-n\fR \fInumoutgroups\fR] [\fB-t\fR] [\fB-b\fR] 
+[\fB\-n\fR \fInumoutgroups\fR|\fB\-D\fR] [\fB-t\fR] [\fB-b\fR] 
 [\fB\-R\fR \fIregions.bed\fR] \fIinput.hef\fR...
 
 .B heffalump kayvergence
@@ -437,7 +437,7 @@ processed.
 \fBheffalump\fR [\fBeigenstrat\fR|\fBvcfexport\fR]
 [\fB\-o\fR \fIoutput\fR]
 [\fB\-r\fR \fIref.2bit\fR]
-[\fB\-n\fR \fInumoutgroups\fR]
+[\fB\-n\fR \fInumoutgroups\fR|\fB\-D\fR]
 [\fB\-R\fR \fIregions.bed\fR]
 [\fB\-t\fR] [\fB\-b\fR]
 \fIinput.hef\fR...
@@ -459,7 +459,14 @@ Read the reference genome from \fIref.2bit\fR.
 
 .TP
 \fB\-n\fR, \fB--numoutgroups\fR=\fInum\fR
-The first \fInum\fR inputs are outgroups.
+The first \fInum\fR inputs are outgroups.  The output is "sparse" in the
+sense that it will contain only sites with variants.
+
+.TP
+\fB\-D\fR, \fB--dense\fR
+Produce a "dense" output file which will contain at least one record for
+each site, even if no individual has a variant.  The only sites
+suppressed from the output are those where no individual is called.
 
 .TP
 \fB\-t\fR, \fB--only-transversions\fR
