@@ -23,9 +23,6 @@ executable heffalump
                        NewRef,
                        Paths_heffalump,
                        SillyStats,
-                       Streaming.Lowlevel,
-                       Streaming.Zip,
-                       Streaming.Zlib,
                        Stretch,
                        Treemix,
                        Util,
@@ -75,6 +72,5 @@ executable heffalump
   cc-options:          -O3 -std=c99 -fPIC -ggdb -Wall
   hs-source-dirs:      src
   c-sources:           cbits/vcf-scan.c
-                       cbits/zlib-helper.c
   include-dirs:        cbits
   extra-libraries:     z

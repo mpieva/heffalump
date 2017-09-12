@@ -3,7 +3,6 @@ module Util where
 
 import Bio.Prelude
 import Streaming
-import Streaming.Zip                    ( gunzip )
 import System.Console.GetOpt
 import System.IO                        ( hPutStrLn, stderr )
 
@@ -30,17 +29,37 @@ decomp s0 = case L.uncons s0 of
         _                -> L.empty  -- ignores trailing garbage
 
 -- | Checks if the input is GZip at all, returns it unchanged if it
--- isn't.  Else runs gunzip' from Streaming.Zip and discards the
--- remaining stream.  (Some HETFA files appear to have junk at the
--- end...)
+-- isn't.  Else runs gunzip and discards the remaining stream.  (Some
+-- HETFA files appear to have junk at the end...)
 decomp' :: MonadIO m => S.ByteString m r -> S.ByteString m r
 decomp' s0 = S.mwrap $ SB.nextByte s0 >>= \case
     Right (31, s') -> SB.nextByte s' >>= \case
-        Right (139,s'') -> return $ gunzip (SB.cons' 31 (SB.cons' 139 s''))
+        Right (139,s'') -> return . S.drained $ gunzip (SB.cons' 31 (SB.cons' 139 s''))
         Right ( c, s'') -> return $ SB.cons' 31 (SB.cons' c s'')
         Left     r      -> return $ SB.cons' 31 (pure r)
     Right ( c, s') -> return $ SB.cons' c s'
     Left     r     -> return $ pure r
+
+gunzip :: MonadIO m => S.ByteString m r -> S.ByteString m (S.ByteString m r)
+gunzip = go $ Z.decompressIO Z.gzipOrZlibFormat Z.defaultDecompressParams
+  where
+    -- get next chunk, make sure it is empty iff the input ended
+    go (Z.DecompressInputRequired next) inp =
+        lift (S.nextChunk inp) >>= \case
+            Left r          -> liftIO (next B.empty) >>= flip go (pure r)
+            Right (ck,inp')
+                | B.null ck -> go (Z.DecompressInputRequired next) inp'
+                | otherwise -> liftIO (next ck) >>= flip go inp'
+
+    go (Z.DecompressOutputAvailable outchunk next) inp =
+        S.chunk outchunk >> liftIO next >>= flip go inp
+
+    go (Z.DecompressStreamEnd inchunk) inp =
+        pure (S.chunk inchunk >> inp)
+
+    go (Z.DecompressStreamError derr) _inp =
+        liftIO (throwM derr)
+
 
 mk_opts :: String -> String -> [OptDescr (b -> IO b)] -> [OptDescr (b -> IO b)]
 mk_opts cmd moreopts ods = ods'
