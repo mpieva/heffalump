@@ -29,18 +29,28 @@ decomp s0 = case L.uncons s0 of
         _                -> L.empty  -- ignores trailing garbage
 
 -- | Checks if the input is GZip at all, returns it unchanged if it
--- isn't.  Else runs gunzip and discards the remaining stream.  (Some
--- HETFA files appear to have junk at the end...)
+-- isn't.  Else runs gunzip.
 decomp' :: MonadIO m => S.ByteString m r -> S.ByteString m r
-decomp' s0 = S.mwrap $ SB.nextByte s0 >>= \case
+decomp' = decompWith return
+
+-- | Checks if the input is GZip at all, and runs gunzip if it is.  If
+-- it isn't, it runs 'k' on the input.
+decompWith :: MonadIO m
+           => (S.ByteString m r -> m (S.ByteString m r))
+           -> S.ByteString m r -> S.ByteString m r
+decompWith k s0 = S.mwrap $ SB.nextByte s0 >>= \case
     Right (31, s') -> SB.nextByte s' >>= \case
-        Right (139,s'') -> return . S.drained $ gunzip (SB.cons' 31 (SB.cons' 139 s''))
+        Right (139,s'') -> return $ gunzip (SB.cons' 31 (SB.cons' 139 s''))
         Right ( c, s'') -> return $ SB.cons' 31 (SB.cons' c s'')
         Left     r      -> return $ SB.cons' 31 (pure r)
-    Right ( c, s') -> return $ SB.cons' c s'
-    Left     r     -> return $ pure r
+    Right ( c, s') -> k $ SB.cons' c s'
+    Left     r     -> k $ pure r
 
-gunzip :: MonadIO m => S.ByteString m r -> S.ByteString m (S.ByteString m r)
+-- | Decompresses a gzip stream.  If the leftovers look like another
+-- gzip stream, it recurses (some files look like gzip and contain
+-- bgzip).  Otherwise, the leftover are discarded (some HETFA files
+-- appear to have junk at the end).
+gunzip :: MonadIO m => S.ByteString m r -> S.ByteString m r
 gunzip = go $ Z.decompressIO Z.gzipOrZlibFormat Z.defaultDecompressParams
   where
     -- get next chunk, make sure it is empty iff the input ended
@@ -55,11 +65,11 @@ gunzip = go $ Z.decompressIO Z.gzipOrZlibFormat Z.defaultDecompressParams
         S.chunk outchunk >> liftIO next >>= flip go inp
 
     go (Z.DecompressStreamEnd inchunk) inp =
-        pure (S.chunk inchunk >> inp)
+        -- decompress leftovers if possible, else discard
+        decompWith (fmap pure . S.effects) (S.chunk inchunk >> inp)
 
     go (Z.DecompressStreamError derr) _inp =
         liftIO (throwM derr)
-
 
 mk_opts :: String -> String -> [OptDescr (b -> IO b)] -> [OptDescr (b -> IO b)]
 mk_opts cmd moreopts ods = ods'
