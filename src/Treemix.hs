@@ -6,6 +6,7 @@ import Data.ByteString.Builder          ( toLazyByteString, intDec, char7, byteS
 import System.Console.GetOpt
 import System.FilePath                  ( takeBaseName )
 import System.IO                        ( stdout )
+import Text.Regex.Posix
 
 import qualified Data.ByteString.Char8           as B
 import qualified Data.ByteString.Lazy.Char8      as L
@@ -23,42 +24,47 @@ data ConfTmx = ConfTmx {
     conf_reference  :: Maybe FilePath,
     conf_regions    :: Maybe FilePath,
     conf_transv     :: Bool,
-    conf_chroms     :: (Int,Int),
+    conf_chroms     :: Maybe Regex,
     conf_output     :: L.ByteString -> IO () }
 
 defaultConfTmx :: ConfTmx
-defaultConfTmx = ConfTmx 1 Nothing Nothing Nothing False (0,maxBound) (L.hPut stdout)
+defaultConfTmx = ConfTmx 0 Nothing Nothing Nothing False Nothing (L.hPut stdout)
 
 opts_treemix :: [ OptDescr (ConfTmx -> IO ConfTmx) ]
 opts_treemix =
     [ Option "o" ["output"]        (ReqArg set_output "FILE") "Write output to FILE (.tmx.gz)"
     , Option "r" ["reference"]     (ReqArg set_ref    "FILE") "Read reference from FILE (.2bit)"
     , Option "i" ["individuals"]   (ReqArg set_indiv  "FILE") "Read individuals from FILE (.ind)"
-    , Option "n" ["numoutgroups"]  (ReqArg set_nout    "NUM") "The first NUM individuals are outgroups (1)"
+    , Option "n" ["numoutgroups"]  (ReqArg set_nout    "NUM") "The first NUM individuals are outgroups (0)"
     , Option "t" ["transversions"] (NoArg  set_transv       ) "Restrict to transversion variants"
-    , Option "a" ["autosomes"]     (NoArg  set_autosomes    ) "Analyze only (human) autosomes"
-    , Option "x" ["x-chromosome"]  (NoArg  set_xchrom       ) "Analyze only (human) X chromsome"
-    , Option "y" ["y-chromosome"]  (NoArg  set_ychrom       ) "Analyze only (human) Y chromsome"
+    , Option "c" ["chromosomes"]   (ReqArg set_chrs "REGEX" ) "Analyze subset of chromosomes"
+    , Option "a" ["autosomes"]     (NoArg  set_autosomes    ) "Analyze only autosomes"
+    , Option "x" ["x-chromosome"]  (NoArg  set_xchrom       ) "Analyze only X chromsome"
+    , Option "y" ["y-chromosome"]  (NoArg  set_ychrom       ) "Analyze only Y chromsome"
     , Option "R" ["regions"]       (ReqArg set_rgns   "FILE") "Restrict to regions in bed-file FILE" ]
   where
-    set_output "-" c =                    return $ c { conf_output     = L.hPut stdout }
-    set_output  a  c =                    return $ c { conf_output     = L.writeFile a }
-    set_ref     a  c =                    return $ c { conf_reference  =        Just a }
-    set_indiv   a  c =                    return $ c { conf_indivs     =        Just a }
-    set_nout    a  c = readIO a >>= \n -> return $ c { conf_noutgroups =             n }
-    set_transv     c =                    return $ c { conf_transv     =          True }
-    set_autosomes  c =                    return $ c { conf_chroms     =        (0,21) }
-    set_xchrom     c =                    return $ c { conf_chroms     =       (22,22) }
-    set_ychrom     c =                    return $ c { conf_chroms     =       (23,23) }
-    set_rgns    a  c =                    return $ c { conf_regions    =        Just a }
+    set_output "-" c =                    return $ c { conf_output     =  L.hPut stdout }
+    set_output  a  c =                    return $ c { conf_output     =  L.writeFile a }
+    set_ref     a  c =                    return $ c { conf_reference  =         Just a }
+    set_indiv   a  c =                    return $ c { conf_indivs     =         Just a }
+    set_nout    a  c = readIO a >>= \n -> return $ c { conf_noutgroups =              n }
+    set_transv     c =                    return $ c { conf_transv     =           True }
+    set_chrs    a  c =                    return $ c { conf_chroms     =           re a }
+    set_autosomes  c =             return $ c { conf_chroms = re "^(chr)?[0-9]+[a-z]?$" }
+    set_xchrom     c =                    return $ c { conf_chroms     = re "^(chr)?X$" }
+    set_ychrom     c =                    return $ c { conf_chroms     = re "^(chr)?Y$" }
+    set_rgns    a  c =                    return $ c { conf_regions    =         Just a }
+
+    re :: String -> Maybe Regex
+    re = Just . makeRegex
 
 main_treemix :: [String] -> IO ()
 main_treemix args = do
     ( hefs, ConfTmx{..} ) <- parseOpts True defaultConfTmx (mk_opts "treemix" [] opts_treemix) args
 
     -- We read and merge all the HEF files (shell trickery is suggested
-    -- to assemble the horrible command line).  We use the IND file to
-    -- map them to populations.
+    -- to assemble the horrible command line).  We use the optional IND
+    -- file to map them to populations.
 
     (pops, npops, popixs) <- case conf_indivs of
         Just fp -> do popmap <- readIndFile <$> B.readFile fp
@@ -82,11 +88,25 @@ main_treemix args = do
                                  show1 (a,b) k = intDec a <> char7 ',' <> intDec b <> char7 ' ' <> k
 
                              -- samples (not outgroups) must show ref and alt allele at least once
-                             in if inRange conf_chroms v_chr && ve .&. 3 /= 0 && ve .&. 12 /= 0 && is_ti
+                             in if {-inRange conf_chroms v_chr &&-}  ve .&. 3 /= 0 && ve .&. 12 /= 0 && is_ti
                                then U.foldr show1 (char7 '\n') $ U.zip refcounts altcounts
                                else mempty)
-            (region_filter $ concat $ mergeLumps conf_noutgroups inps)
+            (region_filter $
+             chrom_filter (either error nrss_chroms ref) conf_chroms $
+             concat $ mergeLumps conf_noutgroups inps)
 
+chrom_filter :: [B.ByteString] -> Maybe Regex -> [Variant] -> [Variant]
+chrom_filter _chroms  Nothing  = id
+chrom_filter  chroms (Just re) = go [ i | (i,chrom) <- zip [0..] chroms, matchTest re chrom ]
+  where
+    go [    ] = const []
+    go (c:cs) = go1
+      where
+        go1 [    ] = []
+        go1 (v:vs)
+            | c < v_chr v = go cs (v:vs)
+            | c > v_chr v = go1 vs
+            | otherwise   = v : go1 vs
 
 -- | Reads an individual file.  Returns a map from individual to pop
 -- population number.
