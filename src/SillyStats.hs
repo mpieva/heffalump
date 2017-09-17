@@ -22,15 +22,14 @@ data Config = Config {
     conf_blocksize  :: Int,
     conf_noutgroups :: Int,
     conf_nrefpanel  :: Int,
+    conf_nafricans  :: Int,
     conf_filter     :: Either String NewRefSeqs -> [Variant] -> [Variant],
     conf_regions    :: Maybe FilePath,
     conf_msg        :: String,
-    conf_reference  :: Maybe FilePath,
-    conf_nafricans  :: Int }
+    conf_reference  :: Maybe FilePath }
 
 defaultConfig :: Config
-defaultConfig = Config 5000000 1 1 (const id) Nothing "" Nothing
-                       (error "size of reference panel not known")
+defaultConfig = Config 5000000 1 2 1 (const id) Nothing "" Nothing
 
 showPValue :: Double -> ShowS
 showPValue x | x >= 0.002 = showFFloat (Just 3) x
@@ -269,7 +268,7 @@ opts_dstat :: [ OptDescr (Config -> IO Config) ]
 opts_dstat =
     [ Option "r" ["reference"]    (ReqArg set_ref "FILE") "Read reference from FILE (.2bit)"
     , Option "n" ["numoutgroups"] (ReqArg set_nout "NUM") "The first NUM inputs are outgroups (1)"
-    , Option "k" ["numrefpanel"]  (ReqArg set_nref "NUM") "The next NUM inputs are the reference panel"
+    , Option "k" ["numrefpanel"]  (ReqArg set_nref "NUM") "The next NUM inputs are the reference panel (2)"
     , Option "J" ["blocksize"]    (ReqArg set_jack "NUM") "Set blocksize for Jackknife to NUM bases (5M)"
     , Option "t" ["transversions"]     (NoArg set_tvonly) "Restrict to transversion sites"
     , Option [ ] ["ignore-cpg"]        (NoArg set_no_cpg) "Ignore GpG sites (according to reference)"
@@ -427,7 +426,7 @@ opts_yadda =
 
 main_yaddayadda :: [String] -> IO ()
 main_yaddayadda args = do
-    ( hefs, Config{..} ) <- parseOpts True (defaultConfig { conf_nrefpanel = 2 })
+    ( hefs, Config{..} ) <- parseOpts True defaultConfig
                                       (mk_opts "yaddayadda" "[hef-file...]" opts_yadda) args
     (ref,inps) <- decodeMany conf_reference hefs
     region_filter <- mkBedFilter conf_regions (either error nrss_chroms ref)

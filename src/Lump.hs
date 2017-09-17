@@ -955,3 +955,10 @@ newtype Fix f = Fix { unFix :: f (Fix f) }
 ana :: Functor f => (a -> f a) -> (a -> Fix f)
 ana f = Fix . fmap (ana f) . f
 
+-- adapter until we can get rid of it...
+-- (specialized to IO so we can unsafeInterleaveIO it)
+stream2fix :: Traversable f => (r -> Fix f) -> Stream f IO r -> IO (Fix f)
+stream2fix end = inspect >=> \case
+    Left   r -> return $ end r
+    Right fs -> fmap Fix $ mapM (unsafeInterleaveIO . stream2fix end) fs
+

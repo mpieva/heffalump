@@ -1,3 +1,7 @@
+- Support indels where it makes sense ([bv]cf, bam, emf/maf)
+
+- Retain phasing information ([bv]cf only?)
+
 - Write packed geno-whatever instead of Eigenstrat?
 
 - D-statistics with population definitions (multiple individuals for one
