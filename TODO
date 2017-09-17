@@ -5,4 +5,4 @@
 
 - C-library for reading and merging
 
-- Clean the unholy mess of Streamin/Lowlevel.hs, Streamin/Zip.hs, Streamin/Zlib.hs
+- Uniformly replace 'Fix' with 'Stream'
