@@ -70,6 +70,23 @@ gunzip = go $ Z.decompressIO Z.gzipOrZlibFormat Z.defaultDecompressParams
     go (Z.DecompressStreamError derr) _inp =
         liftIO (throwM derr)
 
+gzip :: MonadIO m => S.ByteString m r -> S.ByteString m r
+gzip = go $ Z.compressIO Z.gzipFormat Z.defaultCompressParams
+  where
+    -- get next chunk, make sure it is empty iff the input ended
+    go (Z.CompressInputRequired next) inp =
+        lift (S.nextChunk inp) >>= \case
+            Left r          -> liftIO (next B.empty) >>= flip go (pure r)
+            Right (ck,inp')
+                | B.null ck -> go (Z.CompressInputRequired next) inp'
+                | otherwise -> liftIO (next ck) >>= flip go inp'
+
+    go (Z.CompressOutputAvailable outchunk next) inp =
+        S.chunk outchunk >> liftIO next >>= flip go inp
+
+    go Z.CompressStreamEnd inp = lift (S.effects inp)
+
+
 mk_opts :: String -> String -> [OptDescr (b -> IO b)] -> [OptDescr (b -> IO b)]
 mk_opts cmd moreopts ods = ods'
   where

@@ -1,17 +1,15 @@
 module Treemix( main_treemix ) where
 
 import Bio.Prelude
-import Codec.Compression.GZip           ( compress )
-import Data.ByteString.Builder          ( toLazyByteString, intDec, char7, byteString )
-import Data.ByteString.Streaming        ( concatBuilders )
+import Data.ByteString.Builder          ( intDec, char7, byteString )
+import Data.ByteString.Streaming        ( concatBuilders, toHandle, toStreamingByteString )
 import Streaming
 import System.Console.GetOpt
 import System.FilePath                  ( takeBaseName )
-import System.IO                        ( stdout )
+import System.IO                        ( stdout, withFile, IOMode(..) )
 import Text.Regex.Posix
 
 import qualified Data.ByteString.Char8           as B
-import qualified Data.ByteString.Lazy.Char8      as L
 import qualified Data.HashMap.Strict             as H
 import qualified Data.Vector.Unboxed             as U
 import qualified Streaming.Prelude               as Q
@@ -28,10 +26,10 @@ data ConfTmx = ConfTmx {
     conf_regions    :: Maybe FilePath,
     conf_transv     :: Bool,
     conf_chroms     :: Maybe Regex,
-    conf_output     :: L.ByteString -> IO () }
+    conf_output     :: (Handle -> IO ()) -> IO () }
 
 defaultConfTmx :: ConfTmx
-defaultConfTmx = ConfTmx 0 Nothing Nothing Nothing False Nothing (L.hPut stdout)
+defaultConfTmx = ConfTmx 0 Nothing Nothing Nothing False Nothing ($ stdout)
 
 opts_treemix :: [ OptDescr (ConfTmx -> IO ConfTmx) ]
 opts_treemix =
@@ -46,8 +44,8 @@ opts_treemix =
     , Option "y" ["y-chromosome"]  (NoArg  set_ychrom       ) "Analyze only Y chromsome"
     , Option "R" ["regions"]       (ReqArg set_rgns   "FILE") "Restrict to regions in bed-file FILE" ]
   where
-    set_output "-" c =                    return $ c { conf_output     =  L.hPut stdout }
-    set_output  a  c =                    return $ c { conf_output     =  L.writeFile a }
+    set_output "-" c =                    return $ c { conf_output     =     ($ stdout) }
+    set_output  a  c =                    return $ c { conf_output     = withFile a WriteMode }
     set_ref     a  c =                    return $ c { conf_reference  =         Just a }
     set_indiv   a  c =                    return $ c { conf_indivs     =         Just a }
     set_nout    a  c = readIO a >>= \n -> return $ c { conf_noutgroups =              n }
@@ -77,12 +75,11 @@ main_treemix args = do
     (ref,inps) <- decodeMany conf_reference hefs
     region_filter <- mkBedFilter conf_regions (either error nrss_chroms ref)
 
-    -- XXX  going through Builder and lazy Bytestring... workable, but
-    -- not elegant.
-    conf_output $ compress $ toLazyByteString $
+    conf_output $ \hdl ->
+        toHandle hdl $ gzip $ toStreamingByteString $
+
         (<> foldr (\a k -> byteString a <> char7 ' ' <> k) (char7 '\n') pops) $
-        concatBuilders $
-        Q.map
+        concatBuilders $ Q.map
             (\Variant{..} -> let ve = U.foldl' (.|.) 0 $ U.drop conf_noutgroups v_calls
                                  is_ti = not conf_transv || isTransversion v_alt
 
@@ -97,8 +94,7 @@ main_treemix args = do
                              in if ve .&. 3 /= 0 && ve .&. 12 /= 0 && is_ti
                                then U.foldr show1 (char7 '\n') $ U.zip refcounts altcounts
                                else mempty) $
-        region_filter $
-        chrom_filter (either error nrss_chroms ref) conf_chroms $
+        region_filter $ chrom_filter (either error nrss_chroms ref) conf_chroms $
         Q.concat $ mergeLumps conf_noutgroups inps
 
 chrom_filter :: Monad m => [B.ByteString] -> Maybe Regex -> Stream (Of Variant) m r -> Stream (Of Variant) m r
