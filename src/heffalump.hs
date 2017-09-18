@@ -198,29 +198,32 @@ main_patch args = do
 
     conf_patch_output $ \hdl ->
         patchFasta hdl conf_patch_width (nrss_chroms ref)
-                   (nrss_seqs ref) (decode (Right ref) raw)
+                   (nrss_seqs ref) (fix2stream isDone $ decode (Right ref) raw)
 
 main_dumplump :: [String] -> IO ()
 main_dumplump [ref,inf] = do rs <- readTwoBit ref
-                             debugLump . decode (Right rs) . decomp =<< L.readFile inf
-main_dumplump [  inf  ] =    debugLump . decode (Left "no reference given") . decomp =<< L.readFile inf
+                             debugLump . fix2stream isDone . decode (Right rs) . decomp =<< L.readFile inf
+main_dumplump [  inf  ] =    debugLump . fix2stream isDone . decode (Left "no reference given") . decomp =<< L.readFile inf
 main_dumplump     _     =    hPutStrLn stderr "Usage: dumplump [foo.hef]"
 
 
-patchFasta :: Handle -> Int64 -> [B.ByteString] -> [() -> NewRefSeq] -> Fix Lump -> IO ()
+patchFasta :: Handle -> Int64 -> [B.ByteString] -> [() -> NewRefSeq] -> Stream Lump IO r -> IO r
 patchFasta hdl wd = p1
   where
-    p1 :: [B.ByteString] -> [() -> NewRefSeq] -> Fix Lump -> IO ()
-    p1 [    ]     _  _ = return ()
-    p1      _ [    ] _ = return ()
+    -- p1 :: [B.ByteString] -> [() -> NewRefSeq] -> Stream Lump IO r -> IO r
+    p1 [    ]     _  p = mapsM_ (foldr (\a _ -> return a) undefined) p
+    p1      _ [    ] p = mapsM_ (foldr (\a _ -> return a) undefined) p
     p1 (c:cs) (r:rs) p = do hPutStrLn hdl $ '>' : B.unpack c
                             p2 (p1 cs rs) 0 (patch (r ()) p)
 
-    p2 :: (Fix Lump -> IO ()) -> Int64 -> Frag -> IO ()
-    p2 k l f | l == wd = L.hPutStrLn hdl L.empty >> p2 k 0 f
-    p2 k l (Term p)    = when (l>0) (L.hPutStrLn hdl L.empty) >> k p
-    p2 k l (Short c f) = hPutChar hdl c >> p2 k (succ l) f
-    p2 k l (Long  s f) = case L.splitAt (wd-l) s of
-            _ | L.null s -> p2 k l f
-            (u,v)        -> L.hPutStr hdl u >> p2 k (l + L.length u) (Long v f)
+    -- p2 :: (Stream Lump IO r -> IO r) -> Int64 -> Stream Frag IO (Stream Lump IO r) -> IO r
+    p2 k l | l == wd = \f -> L.hPutStrLn hdl L.empty >> p2 k 0 f
+    p2 k l = inspect >=> \case
+        Left p            -> when (l>0) (L.hPutStrLn hdl L.empty) >> k p
+        Right (Short c f) -> hPutChar hdl c >> p2 k (succ l) f
+        Right (Long  s f) -> p3 k l s f
+
+    p3 k l s f = case L.splitAt (wd-l) s of
+        _ | L.null s  -> p2 k l f
+        (u,v)         -> L.hPutStr hdl u >> p3 k (l + L.length u) v f
 

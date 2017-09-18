@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedLists, LambdaCase #-}
+{-# LANGUAGE OverloadedLists, LambdaCase, DeriveFoldable, DeriveTraversable #-}
 module Lump where
 
 import Bio.Prelude                   hiding ( Ns )
@@ -110,42 +110,48 @@ data Lump a
 
     | Break a                           -- ^ break marker (end-of-chromosome)
     | Done                              -- ^ end of data stream
-  deriving (Functor, Show)
+  deriving (Functor, Show, Foldable, Traversable)
+
+{-# DEPRECATED isDone "get rid fo Done already!" #-}
+isDone :: Lump a -> Bool
+isDone Done = True
+isDone _    = False
 
 type Seq1 = U.Vector Word8
 
-debugLump :: Fix Lump -> IO ()
+debugLump :: Stream Lump IO r -> IO r
 debugLump = debugLump' 0 0
 
-debugLump' :: Int -> Int -> Fix Lump -> IO ()
-debugLump' c i fl = case unFix fl of
-    Done          -> return ()
-    Break       l -> do putStrLn $ shows (c,i) "\tBreak" ;           debugLump' (c+1) 0 l
-    Ns        n l -> do putStrLn $ shows (c,i) "\tNs   " ++ show n ; debugLump' c (i+n) l
-    Eqs1      n l -> do putStrLn $ shows (c,i) "\tEqs1 " ++ show n ; debugLump' c (i+n) l
-    Eqs2      n l -> do putStrLn $ shows (c,i) "\tEqs2 " ++ show n ; debugLump' c (i+n) l
+debugLump' :: Int -> Int -> Stream Lump IO r -> IO r
+debugLump' c i = inspect >=> \case
+    Left r -> return r
+    Right lump -> case lump of
+        Break       l -> do putStrLn $ shows (c,i) "\tBreak" ;           debugLump' (c+1) 0 l
+        Ns        n l -> do putStrLn $ shows (c,i) "\tNs   " ++ show n ; debugLump' c (i+n) l
+        Eqs1      n l -> do putStrLn $ shows (c,i) "\tEqs1 " ++ show n ; debugLump' c (i+n) l
+        Eqs2      n l -> do putStrLn $ shows (c,i) "\tEqs2 " ++ show n ; debugLump' c (i+n) l
 
-    Trans1      l -> do putStrLn $ shows (c,i) "\tTrans1 " ;      debugLump' c (i+1) l
-    Compl1      l -> do putStrLn $ shows (c,i) "\tCompl1 " ;      debugLump' c (i+1) l
-    TCompl1     l -> do putStrLn $ shows (c,i) "\tTCompl1 " ;     debugLump' c (i+1) l
+        Trans1      l -> do putStrLn $ shows (c,i) "\tTrans1 " ;      debugLump' c (i+1) l
+        Compl1      l -> do putStrLn $ shows (c,i) "\tCompl1 " ;      debugLump' c (i+1) l
+        TCompl1     l -> do putStrLn $ shows (c,i) "\tTCompl1 " ;     debugLump' c (i+1) l
 
-    RefTrans    l -> do putStrLn $ shows (c,i) "\tRefTrans " ;    debugLump' c (i+1) l
-    Trans2      l -> do putStrLn $ shows (c,i) "\tTrans2 " ;      debugLump' c (i+1) l
-    RefCompl    l -> do putStrLn $ shows (c,i) "\tRefCompl " ;    debugLump' c (i+1) l
-    TransCompl  l -> do putStrLn $ shows (c,i) "\tTransCompl " ;  debugLump' c (i+1) l
-    Compl2      l -> do putStrLn $ shows (c,i) "\tCompl2 " ;      debugLump' c (i+1) l
-    RefTCompl   l -> do putStrLn $ shows (c,i) "\tRefTCompl " ;   debugLump' c (i+1) l
-    TransTCompl l -> do putStrLn $ shows (c,i) "\tTransTCompl " ; debugLump' c (i+1) l
-    ComplTCompl l -> do putStrLn $ shows (c,i) "\tComplTCompl " ; debugLump' c (i+1) l
-    TCompl2     l -> do putStrLn $ shows (c,i) "\tTCompl2 " ;     debugLump' c (i+1) l
+        RefTrans    l -> do putStrLn $ shows (c,i) "\tRefTrans " ;    debugLump' c (i+1) l
+        Trans2      l -> do putStrLn $ shows (c,i) "\tTrans2 " ;      debugLump' c (i+1) l
+        RefCompl    l -> do putStrLn $ shows (c,i) "\tRefCompl " ;    debugLump' c (i+1) l
+        TransCompl  l -> do putStrLn $ shows (c,i) "\tTransCompl " ;  debugLump' c (i+1) l
+        Compl2      l -> do putStrLn $ shows (c,i) "\tCompl2 " ;      debugLump' c (i+1) l
+        RefTCompl   l -> do putStrLn $ shows (c,i) "\tRefTCompl " ;   debugLump' c (i+1) l
+        TransTCompl l -> do putStrLn $ shows (c,i) "\tTransTCompl " ; debugLump' c (i+1) l
+        ComplTCompl l -> do putStrLn $ shows (c,i) "\tComplTCompl " ; debugLump' c (i+1) l
+        TCompl2     l -> do putStrLn $ shows (c,i) "\tTCompl2 " ;     debugLump' c (i+1) l
 
-    Del1      n l -> do putStrLn $ shows (c,i) "\tDel1 " ++ shows n " " ; debugLump' c i l
-    Del2      n l -> do putStrLn $ shows (c,i) "\tDel2 " ++ shows n " " ; debugLump' c i l
-    DelH      n l -> do putStrLn $ shows (c,i) "\tDelH " ++ shows n " " ; debugLump' c i l
+        Del1      n l -> do putStrLn $ shows (c,i) "\tDel1 " ++ shows n " " ; debugLump' c i l
+        Del2      n l -> do putStrLn $ shows (c,i) "\tDel2 " ++ shows n " " ; debugLump' c i l
+        DelH      n l -> do putStrLn $ shows (c,i) "\tDelH " ++ shows n " " ; debugLump' c i l
 
-    Ins1      s l -> do putStrLn $ shows (c,i) "\tIns1 " ++ shows s " " ; debugLump' c i l
-    Ins2      s l -> do putStrLn $ shows (c,i) "\tIns2 " ++ shows s " " ; debugLump' c i l
-    InsH      s l -> do putStrLn $ shows (c,i) "\tInsH " ++ shows s " " ; debugLump' c i l
+        Ins1      s l -> do putStrLn $ shows (c,i) "\tIns1 " ++ shows s " " ; debugLump' c i l
+        Ins2      s l -> do putStrLn $ shows (c,i) "\tIns2 " ++ shows s " " ; debugLump' c i l
+        InsH      s l -> do putStrLn $ shows (c,i) "\tInsH " ++ shows s " " ; debugLump' c i l
 
 
 {-# DEPRECATED normalizeLump "use normalizeLump'" #-}
@@ -546,8 +552,8 @@ mergeLumpsWith skipLen = go 0 0
             l -> go ix (pos + fromIntegral l) (unS $ V.mapM (S . skipStretch l . unFix) smps)
 
 
-    isDone Done = True
-    isDone    _ = False
+    -- isDone Done = True
+    -- isDone    _ = False
 
     isBreak  Done     = True
     isBreak (Break _) = True
@@ -878,74 +884,78 @@ diff = gendiff viewLBS
                | otherwise =  N2b 255
 
 
-data Frag = Short !Char Frag | Long !L.ByteString Frag | Term (Fix Lump)
+data Frag a = Short !Char a | Long !L.ByteString a -- | Term
+  deriving Functor
 
-patch :: NewRefSeq -> Fix Lump -> Frag
-patch ref (Fix l) = case unconsNRS ref of
-    Just (N2b hd,tl) -> case l of
-        Break    s -> Long (unpackNRS ref) $ Term s
-        Done       -> Long (unpackNRS ref) $ Term $ Fix Done
+patch :: Monad m => NewRefSeq -> Stream Lump m r -> Stream Frag m (Stream Lump m r)
+patch ref = case unconsNRS ref of
+    Just (N2b hd,tl) -> lift . inspect >=> \case
+        Left  r -> yields (Long (unpackNRS ref) ()) >> pure (pure r)
+        Right l -> case l of
+            Break    s -> yields (Long (unpackNRS ref) ()) >> pure s
 
-        Eqs2   n s -> Long        (unpackNRS $ takeNRS n ref) $ patch (dropNRS n ref) s
-        Eqs1   n s -> Long        (unpackNRS $ takeNRS n ref) $ patch (dropNRS n ref) s
-        Ns     n s -> Long (C.replicate (fromIntegral n) 'N') $ patch (dropNRS n ref) s
+            Eqs2   n s -> wrap $ Long        (unpackNRS $ takeNRS n ref) $ patch (dropNRS n ref) s
+            Eqs1   n s -> wrap $ Long        (unpackNRS $ takeNRS n ref) $ patch (dropNRS n ref) s
+            Ns     n s -> wrap $ Long (C.replicate (fromIntegral n) 'N') $ patch (dropNRS n ref) s
 
-        Del1   n s -> Long (C.replicate (fromIntegral n) '-') $ patch (dropNRS n ref) s
-        Del2   n s -> Long (C.replicate (fromIntegral n) '-') $ patch (dropNRS n ref) s
-        DelH   n s -> Long        (unpackNRS $ takeNRS n ref) $ patch (dropNRS n ref) s
+            Del1   n s -> wrap $ Long (C.replicate (fromIntegral n) '-') $ patch (dropNRS n ref) s
+            Del2   n s -> wrap $ Long (C.replicate (fromIntegral n) '-') $ patch (dropNRS n ref) s
+            DelH   n s -> wrap $ Long        (unpackNRS $ takeNRS n ref) $ patch (dropNRS n ref) s
 
-        Ins1   _ s -> patch ref s
-        Ins2   _ s -> patch ref s
-        InsH   _ s -> patch ref s
+            Ins1   _ s -> patch ref s
+            Ins2   _ s -> patch ref s
+            InsH   _ s -> patch ref s
 
-        Trans1      s -> step "CTGA" s
-        Trans2      s -> step "CTGA" s
-        Compl1      s -> step "AGTC" s
-        Compl2      s -> step "AGTC" s
-        TCompl1     s -> step "GACT" s
-        TCompl2     s -> step "GACT" s
+            Trans1      s -> step "CTGA" s
+            Trans2      s -> step "CTGA" s
+            Compl1      s -> step "AGTC" s
+            Compl2      s -> step "AGTC" s
+            TCompl1     s -> step "GACT" s
+            TCompl2     s -> step "GACT" s
 
-        RefTrans    s -> step "YYRR" s
-        RefCompl    s -> step "WSWS" s
-        TransCompl  s -> step "MKKM" s
-        RefTCompl   s -> step "KMMK" s
-        TransTCompl s -> step "SWSW" s
-        ComplTCompl s -> step "RRYY" s
+            RefTrans    s -> step "YYRR" s
+            RefCompl    s -> step "WSWS" s
+            TransCompl  s -> step "MKKM" s
+            RefTCompl   s -> step "KMMK" s
+            TransTCompl s -> step "SWSW" s
+            ComplTCompl s -> step "RRYY" s
+          where
+            step cs s = wrap $ Short (if hd > 3 then 'N' else BC.index cs (fromIntegral hd)) (patch tl s)
+
+    Nothing      -> clear
       where
-        step cs s = Short (if hd > 3 then 'N' else BC.index cs (fromIntegral hd)) (patch tl s)
+        clear :: Monad m => Stream Lump m r -> Stream Frag m (Stream Lump m r)
+        clear = lift . inspect >=> \case
+            Left r -> pure (pure r)
+            Right l -> case l of
+                Break       a -> pure a
+                _             -> foldr (\a _ -> clear a) undefined l
+                {- Ns        _ a -> clear a
+                Eqs1      _ a -> clear a
+                Eqs2      _ a -> clear a
 
-    Nothing      -> clear (Fix l)
-      where
-        clear :: Fix Lump -> Frag
-        clear (Fix m) = case m of
-            Ns        _ a -> clear a
-            Eqs1      _ a -> clear a
-            Eqs2      _ a -> clear a
+                Trans1      a -> clear a
+                Compl1      a -> clear a
+                TCompl1     a -> clear a
 
-            Trans1      a -> clear a
-            Compl1      a -> clear a
-            TCompl1     a -> clear a
+                RefTrans    a -> clear a
+                Trans2      a -> clear a
+                RefCompl    a -> clear a
+                TransCompl  a -> clear a
+                Compl2      a -> clear a
+                RefTCompl   a -> clear a
+                TransTCompl a -> clear a
+                ComplTCompl a -> clear a
+                TCompl2     a -> clear a
 
-            RefTrans    a -> clear a
-            Trans2      a -> clear a
-            RefCompl    a -> clear a
-            TransCompl  a -> clear a
-            Compl2      a -> clear a
-            RefTCompl   a -> clear a
-            TransTCompl a -> clear a
-            ComplTCompl a -> clear a
-            TCompl2     a -> clear a
+                Del1      _ a -> clear a
+                Del2      _ a -> clear a
+                DelH      _ a -> clear a
 
-            Del1      _ a -> clear a
-            Del2      _ a -> clear a
-            DelH      _ a -> clear a
+                Ins1      _ a -> clear a
+                Ins2      _ a -> clear a
+                InsH      _ a -> clear a-}
 
-            Ins1      _ a -> clear a
-            Ins2      _ a -> clear a
-            InsH      _ a -> clear a
-
-            Break       a -> Term a
-            Done          -> Term (Fix Done)
 
 
 -- XXX  Stolen from data-fix.  If we migrate completely to streaming,
@@ -955,10 +965,15 @@ newtype Fix f = Fix { unFix :: f (Fix f) }
 ana :: Functor f => (a -> f a) -> (a -> Fix f)
 ana f = Fix . fmap (ana f) . f
 
--- adapter until we can get rid of it...
+-- adapters until we can get rid of Fix...
 -- (specialized to IO so we can unsafeInterleaveIO it)
 stream2fix :: Traversable f => (r -> Fix f) -> Stream f IO r -> IO (Fix f)
 stream2fix end = inspect >=> \case
     Left   r -> return $ end r
     Right fs -> fmap Fix $ mapM (unsafeInterleaveIO . stream2fix end) fs
+
+fix2stream :: (Monad m, Functor f) => (f (Fix f) -> Bool) -> Fix f -> Stream f m ()
+fix2stream term x = if term (unFix x)
+                    then wrap . fmap (fix2stream term) $ unFix x
+                    else pure ()
 
