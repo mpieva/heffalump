@@ -3,6 +3,8 @@ module Treemix( main_treemix ) where
 import Bio.Prelude
 import Codec.Compression.GZip           ( compress )
 import Data.ByteString.Builder          ( toLazyByteString, intDec, char7, byteString )
+import Data.ByteString.Streaming        ( concatBuilders )
+import Streaming
 import System.Console.GetOpt
 import System.FilePath                  ( takeBaseName )
 import System.IO                        ( stdout )
@@ -12,6 +14,7 @@ import qualified Data.ByteString.Char8           as B
 import qualified Data.ByteString.Lazy.Char8      as L
 import qualified Data.HashMap.Strict             as H
 import qualified Data.Vector.Unboxed             as U
+import qualified Streaming.Prelude               as Q
 
 import Bed
 import Lump
@@ -74,9 +77,12 @@ main_treemix args = do
     (ref,inps) <- decodeMany conf_reference hefs
     region_filter <- mkBedFilter conf_regions (either error nrss_chroms ref)
 
+    -- XXX  going through Builder and lazy Bytestring... workable, but
+    -- not elegant.
     conf_output $ compress $ toLazyByteString $
-        foldr (\a k -> byteString a <> char7 ' ' <> k) (char7 '\n') pops <>
-        foldMap
+        (<> foldr (\a k -> byteString a <> char7 ' ' <> k) (char7 '\n') pops) $
+        concatBuilders $
+        Q.map
             (\Variant{..} -> let ve = U.foldl' (.|.) 0 $ U.drop conf_noutgroups v_calls
                                  is_ti = not conf_transv || isTransversion v_alt
 
@@ -88,25 +94,26 @@ main_treemix args = do
                                  show1 (a,b) k = intDec a <> char7 ',' <> intDec b <> char7 ' ' <> k
 
                              -- samples (not outgroups) must show ref and alt allele at least once
-                             in if {-inRange conf_chroms v_chr &&-}  ve .&. 3 /= 0 && ve .&. 12 /= 0 && is_ti
+                             in if ve .&. 3 /= 0 && ve .&. 12 /= 0 && is_ti
                                then U.foldr show1 (char7 '\n') $ U.zip refcounts altcounts
-                               else mempty)
-            (region_filter $
-             chrom_filter (either error nrss_chroms ref) conf_chroms $
-             concat $ mergeLumps conf_noutgroups inps)
+                               else mempty) $
+        region_filter $
+        chrom_filter (either error nrss_chroms ref) conf_chroms $
+        Q.concat $ mergeLumps conf_noutgroups inps
 
-chrom_filter :: [B.ByteString] -> Maybe Regex -> [Variant] -> [Variant]
+chrom_filter :: Monad m => [B.ByteString] -> Maybe Regex -> Stream (Of Variant) m r -> Stream (Of Variant) m r
 chrom_filter _chroms  Nothing  = id
 chrom_filter  chroms (Just re) = go [ i | (i,chrom) <- zip [0..] chroms, matchTest re chrom ]
   where
-    go [    ] = const []
+    go [    ] = lift . Q.effects
     go (c:cs) = go1
       where
-        go1 [    ] = []
-        go1 (v:vs)
-            | c < v_chr v = go cs (v:vs)
-            | c > v_chr v = go1 vs
-            | otherwise   = v : go1 vs
+        go1 = lift . Q.next >=> \case
+            Left r -> pure r
+            Right (v,vs)
+                | c < v_chr v -> go cs (Q.cons v vs)
+                | c > v_chr v -> go1 vs
+                | otherwise   -> v `Q.cons` go1 vs
 
 -- | Reads an individual file.  Returns a map from individual to pop
 -- population number.

@@ -8,6 +8,7 @@ import qualified Data.ByteString.Builder         as B
 import qualified Data.ByteString.Char8           as B
 import qualified Data.Vector                     as V
 import qualified Data.Vector.Unboxed             as U
+import qualified Streaming.Prelude               as Q
 
 import Bed ( mkBedFilter )
 import Lump
@@ -59,10 +60,10 @@ main_vcfout args = do
 
     let the_vars = addRef (either error id refs) $
                    region_filter $
-                   bool singles_only concat conf_split $
+                   bool singles_only Q.concat conf_split $
                    maybe mergeLumpsDense mergeLumps conf_noutgroups inps
 
-    forM_ the_vars $ \Variant{..} ->
+    flip Q.mapM_ the_vars $ \Variant{..} ->
         -- samples (not outgroups) must show alt allele at least once
         when (conf_all || isTransversion v_alt) $ do
             B.hPutBuilder stdout $
@@ -73,7 +74,7 @@ main_vcfout args = do
                 U.foldr ((<>) . B.byteString . (V.!) gts . fromIntegral) mempty v_calls <>
                 B.char8 '\n'
   where
-    singles_only = foldr (\xs xss -> case xs of [x] -> x : xss ; _ -> xss) []
+    singles_only = Q.concat . Q.map (\case [x] -> Just x ; _ -> Nothing)
 
     gts :: V.Vector B.ByteString
     gts = V.fromList [ "\t./."      -- 0, N

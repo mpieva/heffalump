@@ -62,11 +62,18 @@ executable heffalump
                        FlexibleContexts,
                        FlexibleInstances
                        GeneralizedNewtypeDeriving,
+                       LambdaCase,
                        MultiParamTypeClasses,
                        NoImplicitPrelude,
                        OverloadedStrings,
                        RecordWildCards,
                        TypeFamilies
+  other-extensions:    CPP,
+                       DeriveFoldable, 
+                       DeriveTraversable,
+                       ForeignFunctionInterface,
+                       OverloadedLists,
+                       ScopedTypeVariables
 
   ghc-options:         -Wall -fprof-auto
   cc-options:          -O3 -std=c99 -fPIC -ggdb -Wall

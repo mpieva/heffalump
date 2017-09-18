@@ -1,4 +1,4 @@
-{-# LANGUAGE BangPatterns, OverloadedStrings, CPP #-}
+{-# LANGUAGE CPP #-}
 module NewRef where
 
 -- ^ We'll use a 2bit file as reference.  Chromosomes in the file will
@@ -37,6 +37,7 @@ module NewRef where
 import Bio.Prelude                   hiding ( Ns )
 import Data.ByteString.Short         hiding ( length, null )
 import Foreign.Storable                     ( peekByteOff )
+import Streaming
 import System.Console.GetOpt
 import System.Directory                     ( makeAbsolute )
 import System.IO                            ( hPutStrLn, stdout, stderr )
@@ -55,6 +56,7 @@ import qualified Data.ByteString.Lazy.Char8     as L
 import qualified Data.ByteString.Short          as S
 import qualified Data.ByteString.Unsafe         as B
 import qualified Data.Vector.Unboxed            as U
+import qualified Streaming.Prelude              as Q
 
 import Util ( decomp, mk_opts, parseOpts )
 
@@ -238,20 +240,21 @@ data Variant = Variant { v_chr   :: !Int                -- chromosome number
                        , v_calls :: !(U.Vector Word8) } -- Variant codes:  #ref + 4 * #alt
   deriving Show
 
-addRef :: NewRefSeqs -> [Variant] -> [Variant]
+addRef :: Monad m => NewRefSeqs -> Stream (Of Variant) m r -> Stream (Of Variant) m r
 addRef ref = go 0 (nrss_seqs ref)
   where
-    go _ [     ] = const []
+    go _ [     ] = lift . Q.effects
     go c (r0:rs) = go1 (r0 ()) 0
       where
-        go1 _ _ [    ] = []
-        go1 r p (v:vs)
-            | c /= v_chr v = go (c+1) rs (v:vs)
-            | p == v_pos v = case unconsNRS r of
-                Just (c',_) -> v { v_ref = c' } : go1 r p vs
-                Nothing     ->                    go1 r p vs
-            | p < v_pos v  = go1 (dropNRS (v_pos v - p) r) (v_pos v) (v:vs)
-            | otherwise    = error "expected sorted variants!"
+        go1 r p = lift . Q.next >=> \case
+            Left x              -> pure x
+            Right (v,vs)
+                | c /= v_chr v  -> go (c+1) rs (Q.cons v vs)
+                | p == v_pos v -> case unconsNRS r of
+                    Just (c',_) -> v { v_ref = c' } `Q.cons` go1 r p vs
+                    Nothing     ->                           go1 r p vs
+                | p < v_pos v   -> go1 (dropNRS (v_pos v - p) r) (v_pos v) (Q.cons v vs)
+                | otherwise     -> error "expected sorted variants!"
 
 
 has_help :: [String] -> Bool

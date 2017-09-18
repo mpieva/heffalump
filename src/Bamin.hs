@@ -1,4 +1,3 @@
-{-# LANGUAGE LambdaCase #-}
 -- | Code to read a BAM file in.  We pileup, then sample a base
 -- randomly.  We end with the same format we would get if we ran 'vcflc'
 -- on an appropriately generated VCF file.

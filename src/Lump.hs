@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedLists, LambdaCase, DeriveFoldable, DeriveTraversable #-}
+{-# LANGUAGE OverloadedLists, DeriveFoldable, DeriveTraversable #-}
 module Lump where
 
 import Bio.Prelude                   hiding ( Ns )
@@ -18,6 +18,7 @@ import qualified Data.ByteString.Streaming  as S
 import qualified Data.ByteString.Unsafe     as B
 import qualified Data.Vector                as V
 import qualified Data.Vector.Unboxed        as U
+import qualified Streaming.Prelude          as Q
 
 import Stretch ( Stretch, decode_dip, decode_hap, NucCode(..) )
 import qualified Stretch  as S ( Stretch(..) )
@@ -478,11 +479,11 @@ decodeLump = ana decode1
 --
 -- 'noutgroups':  number of outgroups
 
-mergeLumps :: Int -> V.Vector (Fix Lump) -> [[Variant]]
+mergeLumps :: Monad m => Int -> V.Vector (Fix Lump) -> Stream (Of [Variant]) m ()
 mergeLumps !noutgroups =
-    filter (not . null) .
+    Q.filter (not . null) .
     -- it's only a variant if at least one alt called
-    map (filter (U.any has_alt . U.drop noutgroups . v_calls)) .
+    Q.map (filter (U.any has_alt . U.drop noutgroups . v_calls)) .
     mergeLumpsWith (V.minimum . V.map (skiplen . unFix) . V.drop noutgroups)
   where
     has_alt c = c .&. 0xC /= 0
@@ -497,15 +498,14 @@ mergeLumps !noutgroups =
 -- Like mergeLumps, but produces at least one SNP record for each site.
 -- Since all variants are produced (and then some), outgroups need no
 -- special treatment.
-mergeLumpsDense :: V.Vector (Fix Lump) -> [[Variant]]
+mergeLumpsDense :: Monad m => V.Vector (Fix Lump) -> Stream (Of [Variant]) m ()
 mergeLumpsDense =
-    -- XXX  The filtering needs some redesign...
-    map (\vs -> case filter (U.any has_alt . v_calls) vs of
-        -- no real variant in here, turn the first into pseudo-var
-        [ ] -> [ (head vs) { v_alt = V2b 255 } ]
-        -- at least one real var, keep all
-        vs' -> vs' ) .
-    filter (not . null) .  -- shouldn't even happen
+    -- If there is no actual variant in here, turn the first into
+    -- pseudo-var; else keep them all
+    Q.map (\vs ->
+        let vs' = filter (U.any has_alt . v_calls) vs
+        in if null vs' then [ (head vs) { v_alt = V2b 255 } ] else vs' ) .
+    Q.filter (not . null) .  -- shouldn't even happen
     mergeLumpsWith (V.minimum . V.map (skiplen . unFix))
   where
     has_alt c = c .&. 0xC /= 0
@@ -522,7 +522,7 @@ mergeLumpsDense =
     skiplen  _         = 0
 
 
-mergeLumpsWith :: (V.Vector (Fix Lump) -> Int) -> V.Vector (Fix Lump) -> [[Variant]]
+mergeLumpsWith :: Monad m => (V.Vector (Fix Lump) -> Int) -> V.Vector (Fix Lump) -> Stream (Of [Variant]) m ()
 mergeLumpsWith skipLen = go 0 0
     -- Merging stretches.  We define a 'Variant' as anything that is
     -- different from the reference.  Therefore, 'Eqs' ('Eqs1') and 'Ns'
@@ -531,10 +531,10 @@ mergeLumpsWith skipLen = go 0 0
     -- need to collect the alleles, produce up to four variants, then
     -- output and skip forward by one base.
   where
-    go :: Int -> Int -> V.Vector (Fix Lump) -> [[Variant]]
+    go :: Monad m => Int -> Int -> V.Vector (Fix Lump) -> Stream (Of [Variant]) m ()
     go !ix !pos !smps
         -- all samples 'Done', no more 'Variant's to produce
-        | V.all (isDone . unFix) smps = []
+        | V.all (isDone . unFix) smps = pure ()
 
         -- all samples 'Break' or are done, next chromosome
         | V.all (isBreak . unFix) smps = go (succ ix) 0 (V.map (skipBreak . unFix) smps)
@@ -545,7 +545,7 @@ mergeLumpsWith skipLen = go 0 0
         | otherwise = case skipLen smps of
 
             -- no stretch, have to look for vars
-            0 -> mkVar ix    pos                                            smps $
+            0 -> mkVar ix    pos                                            smps >>
                  go ix (succ pos) (unS $ V.mapM (S . skipStretch 1 . unFix) smps)
 
             -- a stretch of l non-variants can be skipped over
@@ -604,8 +604,8 @@ mergeLumpsWith skipLen = go 0 0
 
     -- Find all the variants, anchored on the reference allele, and
     -- split them.  Misfitting alleles are not counted.
-    mkVar :: Int -> Int -> V.Vector (Fix Lump) -> [[Variant]] -> [[Variant]]
-    mkVar ix pos ss = (:)
+    mkVar :: Monad m => Int -> Int -> V.Vector (Fix Lump) -> Stream (Of [Variant]) m ()
+    mkVar ix pos ss = Q.yield
             [ Variant ix pos ref_indet (V2b alt) calls
             | (alt, ct) <- zip [1..3] [ct_trans, ct_compl, ct_tcompl]
             , let calls = V.convert $ V.map (ct . unFix) ss ]
@@ -884,7 +884,7 @@ diff = gendiff viewLBS
                | otherwise =  N2b 255
 
 
-data Frag a = Short !Char a | Long !L.ByteString a -- | Term
+data Frag a = Short !Char a | Long !L.ByteString a
   deriving Functor
 
 patch :: Monad m => NewRefSeq -> Stream Lump m r -> Stream Frag m (Stream Lump m r)

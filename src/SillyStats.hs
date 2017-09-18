@@ -8,27 +8,29 @@ import Bio.Prelude
 import Numeric.SpecFunctions            ( incompleteBeta )
 import System.Console.GetOpt
 import System.FilePath                  ( takeBaseName )
+import Streaming
 
 import qualified Data.Vector                     as V
 import qualified Data.Vector.Storable            as S
 import qualified Data.Vector.Unboxed             as U
+import qualified Streaming.Prelude               as Q
 
 import Bed
 import Lump
 import NewRef
 import Util
 
-data Config = Config {
+data Config m r = Config {
     conf_blocksize  :: Int,
     conf_noutgroups :: Int,
     conf_nrefpanel  :: Int,
     conf_nafricans  :: Int,
-    conf_filter     :: Either String NewRefSeqs -> [Variant] -> [Variant],
+    conf_filter     :: Either String NewRefSeqs -> Stream (Of Variant) m r -> Stream (Of Variant) m r,
     conf_regions    :: Maybe FilePath,
     conf_msg        :: String,
     conf_reference  :: Maybe FilePath }
 
-defaultConfig :: Config
+defaultConfig :: Config m r
 defaultConfig = Config 5000000 1 2 1 (const id) Nothing "" Nothing
 
 showPValue :: Double -> ShowS
@@ -178,7 +180,7 @@ kaycounts (u1,v1) (u2,v2) (u3,v3) = if nn > 0 then TwoD (aa/nn) ((aa+bb)/nn) els
         bb = u1 * u2 * v3 + v1 * v2 * u3
         nn = (u1 + v1) * (u2 + v2) * (u3 + v3)
 
-opts_kiv :: [ OptDescr (Config -> IO Config) ]
+opts_kiv :: Monad m => [ OptDescr (Config m r -> IO (Config m r)) ]
 opts_kiv =
     [ Option "r" ["reference"] (ReqArg set_ref  "FILE") "Read reference from FILE (.2bit)"
     , Option "n" ["numgood"]   (ReqArg set_ngood "NUM") "The first NUM inputs are \"good\" genomes (1)"
@@ -190,7 +192,7 @@ opts_kiv =
     set_ref    a c = return $ c { conf_reference = Just a }
     set_ngood  a c = readIO a >>= \n -> return $ c { conf_noutgroups = n }
     set_jack   a c = readNumIO a >>= \n -> return $ c { conf_blocksize = n }
-    set_tvonly   c = return $ c { conf_filter = const (filter (isTransversion . v_alt)) }
+    set_tvonly   c = return $ c { conf_filter = const (Q.filter (isTransversion . v_alt)) }
     set_no_cpg   c = return $ c { conf_filter  = filterCpG }
     set_rgns   a c = return $ c { conf_regions = Just a }
 
@@ -200,12 +202,11 @@ main_kayvergence args = do
     (ref,inps) <- decodeMany conf_reference hefs
     region_filter <- mkBedFilter conf_regions (either error nrss_chroms ref)
 
-    let labels = kaylabels conf_noutgroups (map takeBaseName hefs)
-        stats  = uncurry gen_stats $
-                 accum_stats conf_blocksize (kayvergence conf_noutgroups) $
-                 conf_filter ref $ region_filter $ concat $ mergeLumps 0 inps
+    stats <- liftM (uncurry gen_stats) $
+             accum_stats conf_blocksize (kayvergence conf_noutgroups) $
+             conf_filter ref $ region_filter $ Q.concat $ mergeLumps 0 inps
 
-        fmt1 (rn,sn,cn) (SillyStats k n r v _) =
+    let fmt1 (rn,sn,cn) (SillyStats k n r v _) =
                 [ Left $ "Kiv( " ++ rn ++ "; "
                 , Left $ sn ++ "; "
                 , Left $ cn
@@ -214,6 +215,8 @@ main_kayvergence args = do
                 , Right $ showFFloat (Just 0) n " = "
                 , Right $ showFFloat (Just 2) (100 * r) "% ± "
                 , Right $ showFFloat (Just 2) (100 * sqrt v) "%" ]
+
+        labels = kaylabels conf_noutgroups (map takeBaseName hefs)
 
     print_table $ zipWith fmt1 labels stats
 
@@ -264,7 +267,7 @@ abbacounts (u1,v1) (u2,v2) (u3,v3) (u4,v4) = if nn > 0 then TwoD (baba/nn) ((abb
         baba = v1 * u2 * v3 * u4 + u1 * v2 * u3 * v4
         nn = (u1 + v1) * (u2 + v2) * (u3 + v3) * (u4 + v4)
 
-opts_dstat :: [ OptDescr (Config -> IO Config) ]
+opts_dstat :: Monad m => [ OptDescr (Config m r -> IO (Config m r)) ]
 opts_dstat =
     [ Option "r" ["reference"]    (ReqArg set_ref "FILE") "Read reference from FILE (.2bit)"
     , Option "n" ["numoutgroups"] (ReqArg set_nout "NUM") "The first NUM inputs are outgroups (1)"
@@ -279,33 +282,34 @@ opts_dstat =
     set_nref   a c = readIO a    >>= \n -> return $ c { conf_nrefpanel  =      n }
     set_jack   a c = readNumIO a >>= \n -> return $ c { conf_blocksize  =      n }
     set_no_cpg   c =                       return $ c { conf_filter  = filterCpG }
-    set_tvonly   c = return $ c { conf_filter = const (filter (isTransversion . v_alt)) }
+    set_tvonly   c = return $ c { conf_filter = const (Q.filter (isTransversion . v_alt)) }
     set_rgns   a c = return $ c { conf_regions = Just a }
 
-filterCpG :: Either String NewRefSeqs -> [Variant] -> [Variant]
-filterCpG (Left  err) = error $ "GpG filtering needs a reference, " ++ err
+filterCpG :: Monad m => Either String NewRefSeqs -> Stream (Of Variant) m r -> Stream (Of Variant) m r
+filterCpG (Left  err) = error $ "CpG filtering needs a reference, " ++ err
 filterCpG (Right nrs) = go (nrss_seqs nrs) 0
   where
     -- We prepend one N to the reference so we can see
     -- if we're on the G of a CpG.
-    go [    ] !_  _ = [ ]
-    go (r:rs) !c vs = go1 rs (ManyNs 1 $ r ()) c 0 vs
+    go [    ] !_ = lift . Q.effects
+    go (r:rs) !c = go1 rs (ManyNs 1 $ r ()) c 0
 
-    go1  _ _ !_ !_ [    ] = [ ]
-    go1 rs r !c !p (v:vs)
-        | v_chr v > c                =  go rs (succ c) (v:vs)
-        | v_chr v < c || v_pos v < p =  error "[Variant] should be sorted."
-        | otherwise                  = maybe (k id NewRefEnd) (uncurry k) isCpG
-      where
-        k f r' = f $ go1 rs r' c (succ p) vs
-        isCpG = do
-            (x,r') <- unconsNRS $ dropNRS (v_pos v - p) r
-            (y,r'') <- unconsNRS r'
-            (z,_) <- unconsNRS r''
-            let f | x == N2b 1 && y == N2b 3 = id
-                  | y == N2b 1 && z == N2b 3 = id
-                  | otherwise                = (:) v
-            return (f,r')
+    go1 rs r !c !p = lift . Q.next >=> \case
+        Left x -> pure x
+        Right (v,vs)
+            | v_chr v > c                -> go rs (succ c) (Q.cons v vs)
+            | v_chr v < c || v_pos v < p -> error "[Variant] should be sorted."
+            | otherwise                  -> maybe (k (pure ()) NewRefEnd) (uncurry k) isCpG
+          where
+            k f r' = f >> go1 rs r' c (succ p) vs
+            isCpG = do
+                (x,r')  <- unconsNRS $ dropNRS (v_pos v - p) r
+                (y,r'') <- unconsNRS r'
+                (z,_)   <- unconsNRS r''
+                let f | x == N2b 1 && y == N2b 3 = pure ()
+                      | y == N2b 1 && z == N2b 3 = pure ()
+                      | otherwise                = Q.yield v
+                return (f,r')
 
 
 main_patterson :: [String] -> IO ()
@@ -314,12 +318,11 @@ main_patterson args = do
     (ref,inps) <- decodeMany conf_reference hefs
     region_filter <- mkBedFilter conf_regions (either error nrss_chroms ref)
 
-    let labels = pattersonlbls conf_noutgroups conf_nrefpanel (map takeBaseName hefs)
-        stats  = uncurry gen_stats
-                 $ accum_stats conf_blocksize (pattersons abbacounts conf_noutgroups conf_nrefpanel)
-                 $ conf_filter ref $ region_filter $ concat $ mergeLumps conf_noutgroups inps
+    stats <- liftM (uncurry gen_stats)
+             $ accum_stats conf_blocksize (pattersons abbacounts conf_noutgroups conf_nrefpanel)
+             $ conf_filter ref $ region_filter $ Q.concat $ mergeLumps conf_noutgroups inps
 
-        fmt1 (sn,cn,r1,r2) (SillyStats k n r v p) =
+    let fmt1 (sn,cn,r1,r2) (SillyStats k n r v p) =
                 [ Left conf_msg
                 , Left "D( "
                 , Left $ r1 ++ ", "
@@ -333,6 +336,7 @@ main_patterson args = do
                 , Right $ showFFloat (Just 2) (100 * sqrt v) "%, p = "
                 , Right $ showPValue p [] ]
 
+    let labels = pattersonlbls conf_noutgroups conf_nrefpanel (map takeBaseName hefs)
     print_table $ zipWith fmt1 labels stats
 
 -- --------------- Yadda-yadda
@@ -406,7 +410,7 @@ yaddacounts (u1,v1) (u2,v2) (u3,v3) (u4,v4) (u5,v5) = if nn > 0 then TwoD (aa/nn
         bb = aadad + adada + adadd
         nn = (u1 + v1) * (u2 + v2) * (u3 + v3) * (u4 + v4) * (u5 + v5)
 
-opts_yadda :: [ OptDescr (Config -> IO Config) ]
+opts_yadda :: Monad m => [ OptDescr (Config m r -> IO (Config m r)) ]
 opts_yadda =
     [ Option "r" ["reference"]      (ReqArg set_ref "FILE") "Read reference from FILE (.2bit)"
     , Option "n" ["numoutgroups"]   (ReqArg set_nout "NUM") "The first NUM inputs are outgroups (1)"
@@ -421,7 +425,7 @@ opts_yadda =
     set_nref a c = readIO a >>= \n -> return $ c { conf_nrefpanel = n }
     set_nafr a c = readIO a >>= \n -> return $ c { conf_nafricans = n }
     set_jack a c = readNumIO a >>= \n -> return $ c { conf_blocksize = n }
-    set_tvonly c = return $ c { conf_filter = const (filter (isTransversion . v_alt)) }
+    set_tvonly c = return $ c { conf_filter = const (Q.filter (isTransversion . v_alt)) }
     set_rgns a c = return $ c { conf_regions = Just a }
 
 main_yaddayadda :: [String] -> IO ()
@@ -431,12 +435,11 @@ main_yaddayadda args = do
     (ref,inps) <- decodeMany conf_reference hefs
     region_filter <- mkBedFilter conf_regions (either error nrss_chroms ref)
 
-    let labels = yaddalbls conf_noutgroups conf_nafricans conf_nrefpanel (map takeBaseName hefs)
-        stats  = uncurry gen_stats
-                 $ accum_stats conf_blocksize (yaddayadda conf_noutgroups conf_nafricans conf_nrefpanel)
-                 $ conf_filter ref $ region_filter $ concat $ mergeLumps (conf_noutgroups+conf_nafricans) inps
+    stats <- liftM (uncurry gen_stats)
+             $ accum_stats conf_blocksize (yaddayadda conf_noutgroups conf_nafricans conf_nrefpanel)
+             $ conf_filter ref $ region_filter $ Q.concat $ mergeLumps (conf_noutgroups+conf_nafricans) inps
 
-        fmt1 (cn,an,n1,n2,sn) (SillyStats k n r v p) =
+    let fmt1 (cn,an,n1,n2,sn) (SillyStats k n r v p) =
                 [ Left "Y( "
                 , Left $ cn ++ "; "
                 , Left $ n1 ++ ", "
@@ -450,6 +453,7 @@ main_yaddayadda args = do
                 , Right $ showFFloat (Just 2) (100 * sqrt v) "%, p = "
                 , Right $ showPValue p [] ]
 
+    let labels = yaddalbls conf_noutgroups conf_nafricans conf_nrefpanel (map takeBaseName hefs)
     print_table $ zipWith fmt1 labels stats
 
 print_table :: [[Either String String]] -> IO ()
@@ -459,17 +463,19 @@ print_table tab = putStrLn . unlines $ map (concat . zipWith fmt1 lns) tab
     fmt1 l (Left  s) = s ++ replicate (l - length s) ' '
     fmt1 l (Right s) =      replicate (l - length s) ' ' ++ s
 
-accum_stats :: (Storable r, Monoid r) => Int -> CountFunction r -> [Variant] -> ( S.Vector r, V.Vector (S.Vector r) )
-accum_stats blk_size cfn vs0 = (full_counts, blockstats)
+accum_stats :: (Storable r, Monoid r, Monad m)
+            => Int -> CountFunction r -> Stream (Of Variant) m x
+            -> m ( S.Vector r, V.Vector (S.Vector r) )
+accum_stats blk_size cfn vs0 = do
+    blockstats <- V.unfoldrM foldBlocks vs0
+    let full_counts = V.foldl1' (S.zipWith mappend) blockstats
+    return (full_counts, blockstats)
   where
-    blockstats = V.fromList $ foldBlocks vs0
-    full_counts = V.foldl1' (S.zipWith mappend) blockstats
-
-    foldBlocks [    ] = []
-    foldBlocks (v:vs) = case span (near v) vs of
-        (ls,rs) -> ((:) $! foldBlock v ls) (foldBlocks rs)
+    foldBlocks = Q.next >=> \case
+        Left    _    -> return Nothing
+        Right (v,vs) -> Just . lazily <$> foldBlock v (Q.span (near v) vs)
 
     near v v' = v_chr v == v_chr v' && v_pos v + blk_size > v_pos v'
 
-    foldBlock = foldl' (\acc -> S.zipWith mappend acc . cfn . v_calls) . cfn . v_calls
+    foldBlock v = Q.fold (\acc -> S.zipWith mappend acc . cfn . v_calls) (cfn $ v_calls v) id
 

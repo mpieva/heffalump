@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedStrings, RecordWildCards #-}
 module BcfScan ( readBcf, decodeBcf ) where
 
 -- Minimalistic BCF reader.  We only care about the genotype of the

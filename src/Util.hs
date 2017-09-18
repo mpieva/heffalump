@@ -1,4 +1,3 @@
-{-# LANGUAGE LambdaCase #-}
 module Util where
 
 import Bio.Prelude

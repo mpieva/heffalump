@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
 module VcfScan where
 
 import Bio.Prelude

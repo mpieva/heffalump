@@ -9,6 +9,7 @@ import qualified Data.ByteString.Char8          as B
 import qualified Data.ByteString.Lazy           as LB
 import qualified Data.ByteString.Lazy.Char8     as L
 import qualified Data.Vector.Unboxed            as U
+import qualified Streaming.Prelude              as Q
 
 import Bed
 import Lump
@@ -38,7 +39,7 @@ import Util
 -- per individual, padded to a full byte, padded to at least 48 bytes.
 
 
--- Nickhash for strings.  XXX It's not clear if we got the signs right.
+-- Nickhash for strings.  (It's not clear if we got the signs right?)
 nick_hashit :: L.ByteString -> Int32
 nick_hashit = LB.foldl (\h c -> 23 * h + fromIntegral c) 0
 
@@ -103,9 +104,9 @@ main_eigenstrat args = do
         withFile (conf_output ++ ".geno") WriteMode $ \hgeno -> do
             let vars = either (const id) addRef refs $
                        region_filter $
-                       bool singles_only concat conf_split $
+                       bool singles_only Q.concat conf_split $
                        mergeLumps conf_noutgroups inps
-            forM_ vars $ \Variant{..} ->
+            flip Q.mapM_ vars $ \Variant{..} ->
                 -- samples (not outgroups) must show ref and alt allele at least once
                 let ve = U.foldl' (.|.) 0 $ U.drop conf_noutgroups v_calls
                     is_ti = conf_all || isTransversion v_alt in
@@ -125,6 +126,6 @@ main_eigenstrat args = do
                         -- "Optional 5th and 6th columns are reference and variant alleles"
                         , [toRefCode v_ref], [toAltCode v_alt v_ref] ]
   where
-    singles_only = foldr (\xs xss -> case xs of [x] -> x : xss ; _ -> xss) []
+    singles_only = Q.concat . Q.map (\case [x] -> Just x ; _ -> Nothing)
 
 

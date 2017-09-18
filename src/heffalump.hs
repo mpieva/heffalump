@@ -1,4 +1,3 @@
-{-# LANGUAGE LambdaCase #-}
 import Bio.Prelude
 import Paths_heffalump                  ( version )
 import Streaming
@@ -210,13 +209,11 @@ main_dumplump     _     =    hPutStrLn stderr "Usage: dumplump [foo.hef]"
 patchFasta :: Handle -> Int64 -> [B.ByteString] -> [() -> NewRefSeq] -> Stream Lump IO r -> IO r
 patchFasta hdl wd = p1
   where
-    -- p1 :: [B.ByteString] -> [() -> NewRefSeq] -> Stream Lump IO r -> IO r
     p1 [    ]     _  p = mapsM_ (foldr (\a _ -> return a) undefined) p
     p1      _ [    ] p = mapsM_ (foldr (\a _ -> return a) undefined) p
     p1 (c:cs) (r:rs) p = do hPutStrLn hdl $ '>' : B.unpack c
                             p2 (p1 cs rs) 0 (patch (r ()) p)
 
-    -- p2 :: (Stream Lump IO r -> IO r) -> Int64 -> Stream Frag IO (Stream Lump IO r) -> IO r
     p2 k l | l == wd = \f -> L.hPutStrLn hdl L.empty >> p2 k 0 f
     p2 k l = inspect >=> \case
         Left p            -> when (l>0) (L.hPutStrLn hdl L.empty) >> k p
