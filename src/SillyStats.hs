@@ -199,26 +199,26 @@ opts_kiv =
 main_kayvergence :: [String] -> IO ()
 main_kayvergence args = do
     ( hefs, Config{..} ) <- parseOpts True defaultConfig (mk_opts "kayvergence" "[hef-file...]" opts_kiv) args
-    (ref,inps) <- decodeMany conf_reference hefs
-    region_filter <- mkBedFilter conf_regions (either error nrss_chroms ref)
+    decodeMany conf_reference hefs $ \ref inps -> do
+        region_filter <- mkBedFilter conf_regions (either error nrss_chroms ref)
 
-    stats <- liftM (uncurry gen_stats) $
-             accum_stats conf_blocksize (kayvergence conf_noutgroups) $
-             conf_filter ref $ region_filter $ Q.concat $ mergeLumps 0 inps
+        stats <- liftM (uncurry gen_stats) $
+                 accum_stats conf_blocksize (kayvergence conf_noutgroups) $
+                 conf_filter ref $ region_filter $ Q.concat $ mergeLumps 0 inps
 
-    let fmt1 (rn,sn,cn) (SillyStats k n r v _) =
-                [ Left $ "Kiv( " ++ rn ++ "; "
-                , Left $ sn ++ "; "
-                , Left $ cn
-                , Left $ " ) = "
-                , Right $ showFFloat (Just 0) k "/"
-                , Right $ showFFloat (Just 0) n " = "
-                , Right $ showFFloat (Just 2) (100 * r) "% ± "
-                , Right $ showFFloat (Just 2) (100 * sqrt v) "%" ]
+        let fmt1 (rn,sn,cn) (SillyStats k n r v _) =
+                    [ Left $ "Kiv( " ++ rn ++ "; "
+                    , Left $ sn ++ "; "
+                    , Left $ cn
+                    , Left $ " ) = "
+                    , Right $ showFFloat (Just 0) k "/"
+                    , Right $ showFFloat (Just 0) n " = "
+                    , Right $ showFFloat (Just 2) (100 * r) "% ± "
+                    , Right $ showFFloat (Just 2) (100 * sqrt v) "%" ]
 
-        labels = kaylabels conf_noutgroups (map takeBaseName hefs)
+            labels = kaylabels conf_noutgroups (map takeBaseName hefs)
 
-    print_table $ zipWith fmt1 labels stats
+        print_table $ zipWith fmt1 labels stats
 
 -- --------------- D-Stats
 
@@ -315,29 +315,29 @@ filterCpG (Right nrs) = go (nrss_seqs nrs) 0
 main_patterson :: [String] -> IO ()
 main_patterson args = do
     ( hefs, Config{..} ) <- parseOpts True defaultConfig (mk_opts "dstatistics" "[hef-file...]" opts_dstat) args
-    (ref,inps) <- decodeMany conf_reference hefs
-    region_filter <- mkBedFilter conf_regions (either error nrss_chroms ref)
+    decodeMany conf_reference hefs $ \ref inps -> do
+        region_filter <- mkBedFilter conf_regions (either error nrss_chroms ref)
 
-    stats <- liftM (uncurry gen_stats)
-             $ accum_stats conf_blocksize (pattersons abbacounts conf_noutgroups conf_nrefpanel)
-             $ conf_filter ref $ region_filter $ Q.concat $ mergeLumps conf_noutgroups inps
+        stats <- liftM (uncurry gen_stats)
+                 $ accum_stats conf_blocksize (pattersons abbacounts conf_noutgroups conf_nrefpanel)
+                 $ conf_filter ref $ region_filter $ Q.concat $ mergeLumps conf_noutgroups inps
 
-    let fmt1 (sn,cn,r1,r2) (SillyStats k n r v p) =
-                [ Left conf_msg
-                , Left "D( "
-                , Left $ r1 ++ ", "
-                , Left $ r2 ++ "; "
-                , Left $ sn ++ ", "
-                , Left $ cn
-                , Left " ) = "
-                , Right $ showFFloat (Just 0) k "/"
-                , Right $ showFFloat (Just 0) n " = "
-                , Right $ showFFloat (Just 2) (100 * r) "% ± "
-                , Right $ showFFloat (Just 2) (100 * sqrt v) "%, p = "
-                , Right $ showPValue p [] ]
+        let fmt1 (sn,cn,r1,r2) (SillyStats k n r v p) =
+                    [ Left conf_msg
+                    , Left "D( "
+                    , Left $ r1 ++ ", "
+                    , Left $ r2 ++ "; "
+                    , Left $ sn ++ ", "
+                    , Left $ cn
+                    , Left " ) = "
+                    , Right $ showFFloat (Just 0) k "/"
+                    , Right $ showFFloat (Just 0) n " = "
+                    , Right $ showFFloat (Just 2) (100 * r) "% ± "
+                    , Right $ showFFloat (Just 2) (100 * sqrt v) "%, p = "
+                    , Right $ showPValue p [] ]
 
-    let labels = pattersonlbls conf_noutgroups conf_nrefpanel (map takeBaseName hefs)
-    print_table $ zipWith fmt1 labels stats
+        let labels = pattersonlbls conf_noutgroups conf_nrefpanel (map takeBaseName hefs)
+        print_table $ zipWith fmt1 labels stats
 
 -- --------------- Yadda-yadda
 
@@ -432,29 +432,29 @@ main_yaddayadda :: [String] -> IO ()
 main_yaddayadda args = do
     ( hefs, Config{..} ) <- parseOpts True defaultConfig
                                       (mk_opts "yaddayadda" "[hef-file...]" opts_yadda) args
-    (ref,inps) <- decodeMany conf_reference hefs
-    region_filter <- mkBedFilter conf_regions (either error nrss_chroms ref)
+    decodeMany conf_reference hefs $ \ref inps -> do
+        region_filter <- mkBedFilter conf_regions (either error nrss_chroms ref)
 
-    stats <- liftM (uncurry gen_stats)
-             $ accum_stats conf_blocksize (yaddayadda conf_noutgroups conf_nafricans conf_nrefpanel)
-             $ conf_filter ref $ region_filter $ Q.concat $ mergeLumps (conf_noutgroups+conf_nafricans) inps
+        stats <- liftM (uncurry gen_stats)
+                 $ accum_stats conf_blocksize (yaddayadda conf_noutgroups conf_nafricans conf_nrefpanel)
+                 $ conf_filter ref $ region_filter $ Q.concat $ mergeLumps (conf_noutgroups+conf_nafricans) inps
 
-    let fmt1 (cn,an,n1,n2,sn) (SillyStats k n r v p) =
-                [ Left "Y( "
-                , Left $ cn ++ "; "
-                , Left $ n1 ++ ", "
-                , Left $ n2 ++ "; "
-                , Left $ sn ++ ", "
-                , Left $ an
-                , Left " ) = "
-                , Right $ showFFloat (Just 0) k "/"
-                , Right $ showFFloat (Just 0) n " = "
-                , Right $ showFFloat (Just 2) (100 * r) "% ± "
-                , Right $ showFFloat (Just 2) (100 * sqrt v) "%, p = "
-                , Right $ showPValue p [] ]
+        let fmt1 (cn,an,n1,n2,sn) (SillyStats k n r v p) =
+                    [ Left "Y( "
+                    , Left $ cn ++ "; "
+                    , Left $ n1 ++ ", "
+                    , Left $ n2 ++ "; "
+                    , Left $ sn ++ ", "
+                    , Left $ an
+                    , Left " ) = "
+                    , Right $ showFFloat (Just 0) k "/"
+                    , Right $ showFFloat (Just 0) n " = "
+                    , Right $ showFFloat (Just 2) (100 * r) "% ± "
+                    , Right $ showFFloat (Just 2) (100 * sqrt v) "%, p = "
+                    , Right $ showPValue p [] ]
 
-    let labels = yaddalbls conf_noutgroups conf_nafricans conf_nrefpanel (map takeBaseName hefs)
-    print_table $ zipWith fmt1 labels stats
+        let labels = yaddalbls conf_noutgroups conf_nafricans conf_nrefpanel (map takeBaseName hefs)
+        print_table $ zipWith fmt1 labels stats
 
 print_table :: [[Either String String]] -> IO ()
 print_table tab = putStrLn . unlines $ map (concat . zipWith fmt1 lns) tab

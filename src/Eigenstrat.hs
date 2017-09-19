@@ -96,11 +96,12 @@ opts_eigen =
 -- merge multiple files with the reference, write Eigenstrat format (geno & snp files)
 main_eigenstrat :: [String] -> IO ()
 main_eigenstrat args = do
-    ( hefs, ConfEigen{..} ) <- parseOpts True defaultConfEigen (mk_opts "eigenstrat" "[hef-file...]" opts_eigen) args
-    (refs, inps) <- decodeMany conf_reference hefs
-    region_filter <- mkBedFilter conf_regions (either error nrss_chroms refs)
+    ( hefs, ConfEigen{..} ) <- parseOpts True defaultConfEigen
+                                         (mk_opts "eigenstrat" "[hef-file...]" opts_eigen) args
 
-    withFile (conf_output ++ ".snp") WriteMode $ \hsnp ->
+    decodeMany conf_reference hefs $ \refs inps -> do
+      region_filter <- mkBedFilter conf_regions (either error nrss_chroms refs)
+      withFile (conf_output ++ ".snp") WriteMode $ \hsnp ->
         withFile (conf_output ++ ".geno") WriteMode $ \hgeno -> do
             let vars = either (const id) addRef refs $
                        region_filter $

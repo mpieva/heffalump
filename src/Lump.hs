@@ -1,5 +1,29 @@
 {-# LANGUAGE OverloadedLists, DeriveFoldable, DeriveTraversable #-}
-module Lump where
+module Lump
+    ( Lump(..)
+    , isDone
+    , mergeLumps
+    , mergeLumpsDense
+    , PackedLump(..)
+    , noLump
+    , diff
+    , diff'
+    , diff2'
+    , getRefPath
+    , getRefPath'
+    , encodeLumpToMem
+    , decodeMany
+    , encode
+    , encodeHeader
+    , decode
+    , debugLump
+    , fix2stream
+    , make_hap
+    , normalizeLump'
+    , encTwoVars
+    , Frag(..)
+    , patch
+    ) where
 
 import Bio.Prelude                   hiding ( Ns )
 import Data.ByteString.Builder
@@ -9,6 +33,7 @@ import Foreign.Marshal.Alloc                ( mallocBytes )
 import Streaming
 import Streaming.Prelude                    ( mapOf )
 import System.Directory                     ( doesFileExist )
+import System.IO                            ( withFile, IOMode(..) )
 
 import qualified Data.ByteString            as B
 import qualified Data.ByteString.Char8      as BC
@@ -23,7 +48,7 @@ import qualified Streaming.Prelude          as Q
 import Stretch ( Stretch, decode_dip, decode_hap, NucCode(..) )
 import qualified Stretch  as S ( Stretch(..) )
 import NewRef
-import Util ( decomp )
+import Util ( decomp' )
 
 -- | Improved diff representation and encoding.  Goals:
 --
@@ -294,6 +319,7 @@ make_hap = maps step
 newtype PackedLump = PackLump { unpackLump :: L.ByteString }
 
 -- | The encoding of an empty chromosome:  just the 'Break'
+{-# INLINE noLump #-}
 noLump :: PackedLump
 noLump = PackLump (L.singleton 0)
 
@@ -479,26 +505,26 @@ decodeLump = ana decode1
 --
 -- 'noutgroups':  number of outgroups
 
-mergeLumps :: Monad m => Int -> V.Vector (Fix Lump) -> Stream (Of [Variant]) m ()
+mergeLumps :: Monad m => Int -> V.Vector (Stream Lump m ()) -> Stream (Of [Variant]) m ()
 mergeLumps !noutgroups =
     Q.filter (not . null) .
     -- it's only a variant if at least one alt called
     Q.map (filter (U.any has_alt . U.drop noutgroups . v_calls)) .
-    mergeLumpsWith (V.minimum . V.map (skiplen . unFix) . V.drop noutgroups)
+    mergeLumpsWith (V.minimum . V.map skiplen . V.drop noutgroups)
   where
     has_alt c = c .&. 0xC /= 0
 
-    skiplen (Ns   n _) = n
-    skiplen (Eqs1 n _) = n
-    skiplen (Eqs2 n _) = n
-    skiplen (Break  _) = maxBound
-    skiplen  Done      = maxBound
-    skiplen  _         = 0
+    skiplen (Just (Ns   n _)) = n
+    skiplen (Just (Eqs1 n _)) = n
+    skiplen (Just (Eqs2 n _)) = n
+    skiplen (Just (Break  _)) = maxBound
+    skiplen  Nothing          = maxBound
+    skiplen  _                = 0
 
 -- Like mergeLumps, but produces at least one SNP record for each site.
 -- Since all variants are produced (and then some), outgroups need no
 -- special treatment.
-mergeLumpsDense :: Monad m => V.Vector (Fix Lump) -> Stream (Of [Variant]) m ()
+mergeLumpsDense :: Monad m => V.Vector (Stream Lump m ()) -> Stream (Of [Variant]) m ()
 mergeLumpsDense =
     -- If there is no actual variant in here, turn the first into
     -- pseudo-var; else keep them all
@@ -506,7 +532,7 @@ mergeLumpsDense =
         let vs' = filter (U.any has_alt . v_calls) vs
         in if null vs' then [ (head vs) { v_alt = V2b 255 } ] else vs' ) .
     Q.filter (not . null) .  -- shouldn't even happen
-    mergeLumpsWith (V.minimum . V.map (skiplen . unFix))
+    mergeLumpsWith (V.minimum . V.map skiplen)
   where
     has_alt c = c .&. 0xC /= 0
 
@@ -514,15 +540,20 @@ mergeLumpsDense =
     -- mergeLumpsWith to attempt to create four variants at each
     -- position, unless all samples have no calls.  (This neatly skips
     -- over N stretches in the reference.)
-    skiplen (Ns   n _) = n
-    skiplen (Eqs1 _ _) = 0
-    skiplen (Eqs2 _ _) = 0
-    skiplen (Break  _) = maxBound
-    skiplen  Done      = maxBound
-    skiplen  _         = 0
+    skiplen (Just (Ns   n _)) = n
+    skiplen (Just (Eqs1 _ _)) = 0
+    skiplen (Just (Eqs2 _ _)) = 0
+    skiplen (Just (Break  _)) = maxBound
+    skiplen  Nothing          = maxBound
+    skiplen  _                = 0
 
 
-mergeLumpsWith :: Monad m => (V.Vector (Fix Lump) -> Int) -> V.Vector (Fix Lump) -> Stream (Of [Variant]) m ()
+-- | Merges multiple 'Lump's and generates a stream of 'Variant's.  This
+-- is efficient by skipping over long invariant stretches.  The
+-- 'skipLen' argument is expected to compute how far ahead the process
+-- could jump, but it is only allowed to look at the first code in the
+-- 'Lump'y stream.
+mergeLumpsWith :: Monad m => (V.Vector (Maybe (Lump ())) -> Int) -> V.Vector (Stream Lump m r) -> Stream (Of [Variant]) m ()
 mergeLumpsWith skipLen = go 0 0
     -- Merging stretches.  We define a 'Variant' as anything that is
     -- different from the reference.  Therefore, 'Eqs' ('Eqs1') and 'Ns'
@@ -531,84 +562,92 @@ mergeLumpsWith skipLen = go 0 0
     -- need to collect the alleles, produce up to four variants, then
     -- output and skip forward by one base.
   where
-    go :: Monad m => Int -> Int -> V.Vector (Fix Lump) -> Stream (Of [Variant]) m ()
-    go !ix !pos !smps
-        -- all samples 'Done', no more 'Variant's to produce
-        | V.all (isDone . unFix) smps = pure ()
+    go :: Monad m => Int -> Int -> V.Vector (Stream Lump m r) -> Stream (Of [Variant]) m ()
+    go !ix !pos = lift . V.mapM inspect >=> \case
+             -- all samples 'Done', no more 'Variant's to produce
+        smps | V.all isLeft  smps -> pure ()
 
-        -- all samples 'Break' or are done, next chromosome
-        | V.all (isBreak . unFix) smps = go (succ ix) 0 (V.map (skipBreak . unFix) smps)
+             -- all samples 'Break' or are done, next chromosome
+             | V.all isBreak smps -> go (succ ix) 0 (V.map skipBreak smps)
 
         -- We ignore outgroups in computing the longest stretch.  That
         -- way, outgroups don't get to define variants, but participate
         -- in variants found in another way.
-        | otherwise = case skipLen smps of
+             -- XXX  if 'skipLen' needs to 'inspect', it might consume the
+             -- stream... can't have that.  So 'skipLen' has to return
+             -- something else, like reconstructed streams?
+             | otherwise -> do
+                case skipLen $ V.map (either (const Nothing) (Just . fmap (const ()))) smps of
+                    -- no stretch, have to look for vars
+                    -- XXX  oof, can't duplicate smps safely!
+                    0 -> mkVar ix    pos                                     smps >>
+                         go ix (succ pos) (unS $ V.mapM (S . skipStretchE 1) smps)
 
-            -- no stretch, have to look for vars
-            0 -> mkVar ix    pos                                            smps >>
-                 go ix (succ pos) (unS $ V.mapM (S . skipStretch 1 . unFix) smps)
+                    -- a stretch of l non-variants can be skipped over
+                    l -> go ix (pos + fromIntegral l) (unS $ V.mapM (S . skipStretchE l) smps)
 
-            -- a stretch of l non-variants can be skipped over
-            l -> go ix (pos + fromIntegral l) (unS $ V.mapM (S . skipStretch l . unFix) smps)
+    isBreak (Left         _ ) = True
+    isBreak (Right (Break _)) = True
+    isBreak               _   = False
 
-
-    -- isDone Done = True
-    -- isDone    _ = False
-
-    isBreak  Done     = True
-    isBreak (Break _) = True
-    isBreak        _  = False
-
-    skipBreak (Break l) =     l
-    skipBreak        l  = Fix l
+    skipBreak (Left         x ) = pure x
+    skipBreak (Right (Break s)) =      s
+    skipBreak (Right        s ) = wrap s
 
     -- Skip over exactly l sites.
-    skipStretch :: Int -> Lump (Fix Lump) -> Fix Lump
+    skipStretchS :: Monad m => Int -> Stream Lump m r -> Stream Lump m r
+    skipStretchS !l = lift . inspect >=> skipStretchE l
+
+    skipStretchE :: Monad m => Int -> Either r (Lump (Stream Lump m r)) -> Stream Lump m r
+    skipStretchE !_ (Left  r) = pure r
+    skipStretchE !l (Right s) = skipStretch l s
+
+    skipStretch :: Monad m => Int -> Lump (Stream Lump m r) -> Stream Lump m r
     skipStretch !l _ | l < 0  = error "WTF?!"
 
-    skipStretch !l (Del1 _ s) = skipStretch l (unFix s)
-    skipStretch !l (Del2 _ s) = skipStretch l (unFix s)
-    skipStretch !l (DelH _ s) = skipStretch l (unFix s)
+    skipStretch !l (Del1 _ s) = skipStretchS l s
+    skipStretch !l (Del2 _ s) = skipStretchS l s
+    skipStretch !l (DelH _ s) = skipStretchS l s
 
-    skipStretch !l (Ins1 _ s) = skipStretch l (unFix s)
-    skipStretch !l (Ins2 _ s) = skipStretch l (unFix s)
-    skipStretch !l (InsH _ s) = skipStretch l (unFix s)
+    skipStretch !l (Ins1 _ s) = skipStretchS l s
+    skipStretch !l (Ins2 _ s) = skipStretchS l s
+    skipStretch !l (InsH _ s) = skipStretchS l s
 
-    skipStretch _ (Break    s) = Fix $ Break s
-    skipStretch _  Done        = Fix $ Done
+    skipStretch _ (Break    s) = wrap $ Break s
+    skipStretch _  Done        = error "Can't happen!" -- XXX
 
     skipStretch !l (Ns   !n s) | l == n = s
-                               | l <  n = Fix $ Ns (n-l) s
-                               | otherwise = skipStretch (l-n) (unFix s)
+                               | l <  n = wrap $ Ns (n-l) s
+                               | otherwise = skipStretchS (l-n) s
     skipStretch !l (Eqs1 !n s) | l == n = s
-                               | l <  n = Fix $ Eqs1 (n-l) s
-                               | otherwise = skipStretch (l-n) (unFix s)
+                               | l <  n = wrap $ Eqs1 (n-l) s
+                               | otherwise = skipStretchS (l-n) s
     skipStretch !l (Eqs2 !n s) | l == n = s
-                               | l <  n = Fix $ Eqs2 (n-l) s
-                               | otherwise = skipStretch (l-n) (unFix s)
+                               | l <  n = wrap $ Eqs2 (n-l) s
+                               | otherwise = skipStretchS (l-n) s
 
-    skipStretch  0          s  = Fix s
-    skipStretch !l (Trans1  s) = skipStretch (l-1) (unFix s)
-    skipStretch !l (Compl1  s) = skipStretch (l-1) (unFix s)
-    skipStretch !l (TCompl1 s) = skipStretch (l-1) (unFix s)
+    skipStretch  0          s  = wrap s
+    skipStretch !l (Trans1  s) = skipStretchS (l-1) s
+    skipStretch !l (Compl1  s) = skipStretchS (l-1) s
+    skipStretch !l (TCompl1 s) = skipStretchS (l-1) s
 
-    skipStretch !l (RefTrans    s) = skipStretch (l-1) (unFix s)
-    skipStretch !l (Trans2      s) = skipStretch (l-1) (unFix s)
-    skipStretch !l (RefCompl    s) = skipStretch (l-1) (unFix s)
-    skipStretch !l (TransCompl  s) = skipStretch (l-1) (unFix s)
-    skipStretch !l (Compl2      s) = skipStretch (l-1) (unFix s)
-    skipStretch !l (RefTCompl   s) = skipStretch (l-1) (unFix s)
-    skipStretch !l (TransTCompl s) = skipStretch (l-1) (unFix s)
-    skipStretch !l (ComplTCompl s) = skipStretch (l-1) (unFix s)
-    skipStretch !l (TCompl2     s) = skipStretch (l-1) (unFix s)
+    skipStretch !l (RefTrans    s) = skipStretchS (l-1) s
+    skipStretch !l (Trans2      s) = skipStretchS (l-1) s
+    skipStretch !l (RefCompl    s) = skipStretchS (l-1) s
+    skipStretch !l (TransCompl  s) = skipStretchS (l-1) s
+    skipStretch !l (Compl2      s) = skipStretchS (l-1) s
+    skipStretch !l (RefTCompl   s) = skipStretchS (l-1) s
+    skipStretch !l (TransTCompl s) = skipStretchS (l-1) s
+    skipStretch !l (ComplTCompl s) = skipStretchS (l-1) s
+    skipStretch !l (TCompl2     s) = skipStretchS (l-1) s
 
     -- Find all the variants, anchored on the reference allele, and
     -- split them.  Misfitting alleles are not counted.
-    mkVar :: Monad m => Int -> Int -> V.Vector (Fix Lump) -> Stream (Of [Variant]) m ()
+    mkVar :: Monad m => Int -> Int -> V.Vector (Either r (Lump (Stream Lump m r))) -> Stream (Of [Variant]) m ()
     mkVar ix pos ss = Q.yield
             [ Variant ix pos ref_indet (V2b alt) calls
             | (alt, ct) <- zip [1..3] [ct_trans, ct_compl, ct_tcompl]
-            , let calls = V.convert $ V.map (ct . unFix) ss ]
+            , let calls = V.convert $ V.map (either (const 0) ct) ss ]
 
     ref_indet = N2b 255
 
@@ -716,23 +755,43 @@ decode (Right  r) str | "HEF\0"  `L.isPrefixOf` str = stretchToLump r $ decode_d
               else error "Incompatible reference genome."
 
 
+{-# DEPRECATED getRefPath "use getRefPath'" #-}
 getRefPath :: L.ByteString -> Maybe FilePath
 getRefPath str | "HEF\3" `L.isPrefixOf` str = Just . C.unpack . L.takeWhile (/= 0) $ L.drop 4 str
                | otherwise                  = Nothing
 
-decodeMany :: Maybe FilePath -> [FilePath] -> IO ( Either String NewRefSeqs, V.Vector (Fix Lump) )
-decodeMany mrs fs = do
-    raws <- mapM (fmap decomp . L.readFile) fs
-    rs <- case mrs of
-            Just fp -> Right <$> readTwoBit fp
-            Nothing -> do
-                fps <- filterM doesFileExist $ mapMaybe getRefPath raws
-                case fps of
-                    fp : _ -> Right <$> readTwoBit fp
-                    [    ] -> return . Left $ "No reference found.  Looked for it at "
-                                ++ intercalate ", " (mapMaybe getRefPath raws) ++ "."
-    return ( rs, V.fromList $ map (decode rs) raws )
+getRefPath' :: Monad m => S.ByteString m r -> m (Maybe FilePath, S.ByteString m r)
+getRefPath' str = do
+    key :> rest <- S.toStrict $ S.splitAt 4 str
+    if "HEF\3" == key
+      then do fp :> rest' <- S.toStrict $ S.break (== 0) rest
+              return ( Just $ unpack fp, S.chunk key >> S.chunk fp >> rest' )
+      else return ( Nothing, S.chunk key >> rest )
 
+-- I don't like to infect everything with 'ResourceT', and apparently
+-- the only way around it is to use 'withFile', so we might as well do
+-- it right in here.
+decodeMany :: Maybe FilePath -> [FilePath]
+           -> ( Either String NewRefSeqs -> V.Vector (Stream Lump IO ()) -> IO r ) -> IO r
+decodeMany mrs fs kk =
+    withFiles fs ReadMode $ \hdls -> do
+        (rps,raws) <- unzip <$> mapM (getRefPath' . decomp' . S.fromHandle) hdls
+        rs <- case mrs of
+                Just fp -> Right <$> liftIO (readTwoBit fp)
+                Nothing -> do
+                    fps <- filterM (liftIO . doesFileExist) $ catMaybes rps
+                    case fps of
+                        fp : _ -> Right <$> liftIO (readTwoBit fp)
+                        [    ] -> return . Left $ "No reference found.  Looked for it at "
+                                    ++ intercalate ", " (catMaybes rps) ++ "."
+        raws' <- mapM S.toLazy_ raws
+        kk rs (V.fromList $ map (fix2stream isDone . decode rs) raws')
+  where
+    withFiles [      ] _iom k = k []
+    withFiles (fp:fps)  iom k =
+        withFile fp iom $ \hdl ->
+            withFiles fps iom $
+                k . (:) hdl
 
 
 -- | Encode a 'Lump' and enough information about the 'NewRefSeqs' to be
@@ -854,10 +913,6 @@ encTwoVars vs = fromMaybe (Ns 1) $ vv V.!? fromIntegral vs
           , Eqs1 1, Trans1, Compl1, TCompl1
           , Eqs1 1, Trans1, Compl1, TCompl1 ]
 
-
-diff2 :: (() -> NewRefSeq) -> L.ByteString -> Fix Lump -> Fix Lump
-diff2 = gendiff viewNRS . ($ ())
-
 diff2' :: Monad m => (() -> NewRefSeq) -> S.ByteString m r -> Stream Lump m r
 diff2' = gendiff' viewNRS . ($ ())
 
@@ -965,13 +1020,14 @@ newtype Fix f = Fix { unFix :: f (Fix f) }
 ana :: Functor f => (a -> f a) -> (a -> Fix f)
 ana f = Fix . fmap (ana f) . f
 
--- adapters until we can get rid of Fix...
+-- XXX adapters until we can get rid of Fix...
 -- (specialized to IO so we can unsafeInterleaveIO it)
-stream2fix :: Traversable f => (r -> Fix f) -> Stream f IO r -> IO (Fix f)
-stream2fix end = inspect >=> \case
-    Left   r -> return $ end r
-    Right fs -> fmap Fix $ mapM (unsafeInterleaveIO . stream2fix end) fs
+-- stream2fix :: Traversable f => (r -> Fix f) -> Stream f IO r -> IO (Fix f)
+-- stream2fix end = inspect >=> \case
+    -- Left   r -> return $ end r
+    -- Right fs -> fmap Fix $ mapM (unsafeInterleaveIO . stream2fix end) fs
 
+{-# DEPRECATED fix2stream "switch to streams!" #-}
 fix2stream :: (Monad m, Functor f) => (f (Fix f) -> Bool) -> Fix f -> Stream f m ()
 fix2stream term x = if term (unFix x)
                     then wrap . fmap (fix2stream term) $ unFix x

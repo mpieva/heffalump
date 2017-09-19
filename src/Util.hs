@@ -1,4 +1,15 @@
-module Util where
+module Util
+    ( decomp'
+    , decomp
+    , gunzip
+    , gzip
+    , mk_opts
+    , parseOpts
+    , parseFasta
+    , readSampleFa
+    , readNumIO
+    , FastaSeq(..)
+    ) where
 
 import Bio.Prelude
 import Streaming
@@ -12,6 +23,7 @@ import qualified Data.ByteString.Streaming       as SB ( nextByte, cons' )
 import qualified Data.ByteString.Streaming.Char8 as S
 import qualified Codec.Compression.Zlib.Internal as Z
 
+{-# DEPRECATED decomp "use decomp'" #-}
 decomp :: L.ByteString -> L.ByteString
 decomp s0 = case L.uncons s0 of
     Just (31, s') -> case L.uncons s' of

@@ -72,10 +72,9 @@ main_treemix args = do
                       return . toSymtab $ map (lookupHef popmap) hefs
         Nothing -> return (map (B.pack . takeBaseName) hefs, length hefs, U.enumFromN 0 (length hefs))
 
-    (ref,inps) <- decodeMany conf_reference hefs
-    region_filter <- mkBedFilter conf_regions (either error nrss_chroms ref)
-
-    conf_output $ \hdl ->
+    decodeMany conf_reference hefs $ \ref inps -> do
+      region_filter <- mkBedFilter conf_regions (either error nrss_chroms ref)
+      conf_output $ \hdl ->
         toHandle hdl $ gzip $ toStreamingByteString $
 
         (<> foldr (\a k -> byteString a <> char7 ' ' <> k) (char7 '\n') pops) $
