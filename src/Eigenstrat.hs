@@ -96,8 +96,8 @@ opts_eigen =
 -- merge multiple files with the reference, write Eigenstrat format (geno & snp files)
 main_eigenstrat :: [String] -> IO ()
 main_eigenstrat args = do
-    ( hefs, ConfEigen{..} ) <- parseOpts True defaultConfEigen
-                                         (mk_opts "eigenstrat" "[hef-file...]" opts_eigen) args
+    ( hefs, ConfEigen{..} ) <- parseFileOpts defaultConfEigen
+                                             (mk_opts "eigenstrat" "[hef-file...]" opts_eigen) args
 
     decodeMany conf_reference hefs $ \refs inps -> do
       region_filter <- mkBedFilter conf_regions (either error nrss_chroms refs)

@@ -75,7 +75,7 @@ opts_bam =
 
 main_bam :: [String] -> IO ()
 main_bam args = do
-    ( bams, cfg@ConfBam{..} ) <- parseOpts True conf_bam0 (mk_opts "bamin" "[bam-file...]" opts_bam) args
+    ( bams, cfg@ConfBam{..} ) <- parseFileOpts conf_bam0 (mk_opts "bamin" "[bam-file...]" opts_bam) args
     ref <- readTwoBit conf_bam_reference
     rnd_gen <- newStdGen
 

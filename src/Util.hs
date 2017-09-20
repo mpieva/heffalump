@@ -5,6 +5,7 @@ module Util
     , gzip
     , mk_opts
     , parseOpts
+    , parseFileOpts
     , parseFasta
     , readSampleFa
     , readNumIO
@@ -109,12 +110,18 @@ mk_opts cmd moreopts ods = ods'
                     ("Usage: " ++ pn ++ ' ': cmd ++ " [options...] " ++ moreopts) ods
                  exitSuccess
 
-parseOpts :: Bool -> a -> [OptDescr (a -> IO a)] -> [String] -> IO ([String], a)
-parseOpts fileargs def ods args = do
+parseOpts :: a -> [OptDescr (a -> IO a)] -> [String] -> IO a
+parseOpts def ods args = do
     let (opts, files, errs) = getOpt Permute ods args
     unless (null errs) $ do mapM_ (hPutStrLn stderr) errs >> exitFailure
-    unless (fileargs || null files) $ do
+    unless (null files) $ do
         mapM_ (hPutStrLn stderr . (++) "unexpected argument " . show) files >> exitFailure
+    foldl (>>=) (return def) opts
+
+parseFileOpts :: a -> [OptDescr (a -> IO a)] -> [String] -> IO ([String], a)
+parseFileOpts def ods args = do
+    let (opts, files, errs) = getOpt Permute ods args
+    unless (null errs) $ do mapM_ (hPutStrLn stderr) errs >> exitFailure
     (,) files <$> foldl (>>=) (return def) opts
 
 

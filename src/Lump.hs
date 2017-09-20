@@ -10,7 +10,6 @@ module Lump
     , diff'
     , diff2'
     , getRefPath
-    , getRefPath'
     , encodeLumpToMem
     , decodeMany
     , encode
@@ -755,13 +754,8 @@ decode (Right  r) str | "HEF\0"  `L.isPrefixOf` str = stretchToLump r $ decode_d
               else error "Incompatible reference genome."
 
 
-{-# DEPRECATED getRefPath "use getRefPath'" #-}
-getRefPath :: L.ByteString -> Maybe FilePath
-getRefPath str | "HEF\3" `L.isPrefixOf` str = Just . C.unpack . L.takeWhile (/= 0) $ L.drop 4 str
-               | otherwise                  = Nothing
-
-getRefPath' :: Monad m => S.ByteString m r -> m (Maybe FilePath, S.ByteString m r)
-getRefPath' str = do
+getRefPath :: Monad m => S.ByteString m r -> m (Maybe FilePath, S.ByteString m r)
+getRefPath str = do
     key :> rest <- S.toStrict $ S.splitAt 4 str
     if "HEF\3" == key
       then do fp :> rest' <- S.toStrict $ S.break (== 0) rest
@@ -775,7 +769,7 @@ decodeMany :: Maybe FilePath -> [FilePath]
            -> ( Either String NewRefSeqs -> V.Vector (Stream Lump IO ()) -> IO r ) -> IO r
 decodeMany mrs fs kk =
     withFiles fs ReadMode $ \hdls -> do
-        (rps,raws) <- unzip <$> mapM (getRefPath' . decomp' . S.fromHandle) hdls
+        (rps,raws) <- unzip <$> mapM (getRefPath . decomp' . S.fromHandle) hdls
         rs <- case mrs of
                 Just fp -> Right <$> liftIO (readTwoBit fp)
                 Nothing -> do

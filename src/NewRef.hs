@@ -58,7 +58,7 @@ import qualified Data.ByteString.Unsafe         as B
 import qualified Data.Vector.Unboxed            as U
 import qualified Streaming.Prelude              as Q
 
-import Util ( decomp, mk_opts, parseOpts )
+import Util ( decomp, mk_opts, parseFileOpts )
 
 -- | This is a reference sequence.  It consists of stretches of Ns and
 -- sequence.  Invariant:  the lengths for 'ManyNs' and 'SomeSeq' are
@@ -319,8 +319,8 @@ opts_fato2bit = [ Option "o" ["output"] (ReqArg (\a _ -> return a) "FILE") "Writ
 
 main_fato2bit :: [String] -> IO ()
 main_fato2bit args = do
-    ( fs, fp ) <- parseOpts True (error "no output file given")
-                            (mk_opts "fatotwobit" "[fasta-file...]" opts_fato2bit) args
+    ( fs, fp ) <- parseFileOpts (error "no output file given")
+                                (mk_opts "fatotwobit" "[fasta-file...]" opts_fato2bit) args
 
     L.writeFile fp . faToTwoBit . L.concat . map decomp =<<
         mapM l'readFile (if null fs then ["-"] else fs)

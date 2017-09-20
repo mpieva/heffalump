@@ -61,7 +61,7 @@ main_xcf :: ConfXcf -> [String] -> IO ()
 main_xcf conf0 args = do
     ( vcfs, ConfXcf{..} ) <- let opts = mk_opts (conf_key conf0) fspec opts_xcf
                                  fspec = "["++conf_ext conf0++"-file...]"
-                             in parseOpts True conf0 opts args
+                             in parseFileOpts conf0 opts args
     ref <- readTwoBit conf_ref
     withFile conf_output WriteMode $ \hdl ->
         S.hPut hdl . encode ref . conf_ploidy

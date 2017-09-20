@@ -61,7 +61,7 @@ opts_treemix =
 
 main_treemix :: [String] -> IO ()
 main_treemix args = do
-    ( hefs, ConfTmx{..} ) <- parseOpts True defaultConfTmx (mk_opts "treemix" [] opts_treemix) args
+    ( hefs, ConfTmx{..} ) <- parseFileOpts defaultConfTmx (mk_opts "treemix" [] opts_treemix) args
 
     -- We read and merge all the HEF files (shell trickery is suggested
     -- to assemble the horrible command line).  We use the optional IND

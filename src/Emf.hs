@@ -383,7 +383,7 @@ opts_emf =
 
 main_emf :: [String] -> IO ()
 main_emf args = do
-    ( emfs, OptsEmf{..} ) <- parseOpts True opts_emf_default (mk_opts "emf" "[emf-file...]" opts_emf) args
+    ( emfs, OptsEmf{..} ) <- parseFileOpts opts_emf_default (mk_opts "emf" "[emf-file...]" opts_emf) args
     ref <- readTwoBit emf_reference
 
     !genome <- foldM (collectTrees (nrss_chroms ref) (emf_select emf_ref_species)) emptyGenome

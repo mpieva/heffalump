@@ -89,7 +89,7 @@ opts_hetfa =
 
 main_hetfa :: [String] -> IO ()
 main_hetfa args = do
-    ( _, ConfImportGen{..} ) <- parseOpts False defaultImportConf (mk_opts "hetfa" [] opts_hetfa) args
+    ConfImportGen{..} <- parseOpts defaultImportConf (mk_opts "hetfa" [] opts_hetfa) args
     refs <- readTwoBit conf_imp_reference
 
     runResourceT $ S.writeFile conf_imp_output $
@@ -155,7 +155,7 @@ conf_maf = ConfMaf (error "no output file specified")
 
 main_maf :: [String] -> IO ()
 main_maf args = do
-    (maffs,ConfMaf{..}) <- parseOpts True conf_maf (mk_opts "maf" "[maf-file...]" opts_maf) args
+    (maffs,ConfMaf{..}) <- parseFileOpts conf_maf (mk_opts "maf" "[maf-file...]" opts_maf) args
     ref <- readTwoBit conf_maf_reference
     withFile conf_maf_output WriteMode $ \hdl ->
         L.hPut hdl . encodeGenome =<<
@@ -191,13 +191,16 @@ opts_patch =
 
 main_patch :: [String] -> IO ()
 main_patch args = do
-    ( _, ConfPatch{..} ) <- parseOpts False defaultPatchConf (mk_opts "patch" [] opts_patch) args
-    raw <- decomp <$> L.readFile conf_patch_sample
-    ref <- readTwoBit $ either (\e -> fromMaybe e $ getRefPath raw) id conf_patch_reference
+    ConfPatch{..} <- parseOpts defaultPatchConf (mk_opts "patch" [] opts_patch) args
+    withFile conf_patch_sample ReadMode $ \hdli -> do
+        (mref, raw) <- getRefPath $ decomp' $ S.fromHandle hdli
+        ref <- readTwoBit $ either (\e -> fromMaybe e mref) id conf_patch_reference
 
-    conf_patch_output $ \hdl ->
-        patchFasta hdl conf_patch_width (nrss_chroms ref)
-                   (nrss_seqs ref) (fix2stream isDone $ decode (Right ref) raw)
+        raw' <- S.toLazy_ raw
+        conf_patch_output $ \hdlo ->
+            patchFasta hdlo conf_patch_width
+                (nrss_chroms ref) (nrss_seqs ref)
+                (fix2stream isDone $ decode (Right ref) raw')
 
 main_dumplump :: [String] -> IO ()
 main_dumplump [ref,inf] = do rs <- readTwoBit ref
