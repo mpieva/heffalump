@@ -4,56 +4,69 @@ module BcfScan ( readBcf, decodeBcf ) where
 -- first individual.  Should allow for a handful of shortcuts...
 
 import Bio.Prelude
-import Util                     ( decomp )
+import Util                     ( decomp' )
 import VcfScan                  ( RawVariant(..), hashChrom )
 
 import Foreign.C.Types          ( CChar )
 import Foreign.Ptr              ( Ptr, plusPtr )
 import Foreign.Storable         ( peekByteOff, pokeByteOff )
+import Streaming
+import System.IO                ( withFile, IOMode(..) )
 
 import qualified Data.ByteString                 as B
+import qualified Data.ByteString.Char8           as C
 import qualified Data.ByteString.Internal        as B
+import qualified Data.ByteString.Streaming       as S
 import qualified Data.ByteString.Unsafe          as B
-import qualified Data.ByteString.Lazy            as L
-import qualified Data.ByteString.Lazy.Char8      as C
 import qualified Data.Vector.Unboxed             as V
+import qualified Streaming.Prelude               as Q
 
-readBcf :: FilePath -> IO [ RawVariant ]
-readBcf fp = decodeBcf . decomp =<< L.readFile fp
+readBcf :: FilePath -> (Stream (Of RawVariant) IO () -> IO r) -> IO r
+readBcf fp k = withFile fp ReadMode $ k . decodeBcf . decomp' . S.fromHandle
+-- XXX readBcf fp = decodeBcf . decomp =<< L.readFile fp
 
 -- Skip over header, for now we won't parse it.  This fails if GT is not
 -- the first individual field that's encoded, but that should always be
 -- the case.
-decodeBcf :: L.ByteString -> IO [ RawVariant ]
-decodeBcf str0
-    | "BCF\2" == L.take 4 str0 = let l_text     = slow_word32 (L.drop 5 str0)
-                                     (hdr,body) = L.splitAt l_text $ L.drop 9 str0
-                                 in case L.toChunks body of
-                                     [  ] -> return []
-                                     s:ss -> getvars (mkSymTab hdr) ss s
-    | otherwise = error "not a BCFv2 file"
-
+decodeBcf :: MonadIO m => S.ByteString m r -> Stream (Of RawVariant) m r
+decodeBcf = lift . S.toStrict . S.splitAt 9 >=> parse_hdr
   where
-    slow_word32 s = fromIntegral (L.index s 0) .|.
-                    fromIntegral (L.index s 1) `shiftL` 8 .|.
-                    fromIntegral (L.index s 2) `shiftL` 16 .|.
-                    fromIntegral (L.index s 3) `shiftL` 24
+    parse_hdr (hdr :> rest)
+        | "BCF\2" == B.take 4 hdr
+            = do let l_text = slow_word32 5 hdr
+                 txt :> body <- lift . S.toStrict $ S.splitAt l_text rest
+                 lift (S.nextChunk body) >>= \case
+                    Left r -> pure r
+                    Right (s,ss) -> getvars (mkSymTab txt) ss s
+        | otherwise = error "not a BCFv2 file"
 
-getvars :: V.Vector Int -> [B.ByteString] -> B.ByteString -> IO [RawVariant]
+    slow_word32 o s =     fromIntegral (B.index s $ o+0)
+                      .|. fromIntegral (B.index s $ o+1) `shiftL`  8
+                      .|. fromIntegral (B.index s $ o+2) `shiftL` 16
+                      .|. fromIntegral (B.index s $ o+3) `shiftL` 24
+
+
+getvars :: MonadIO m => V.Vector Int -> S.ByteString m r -> B.ByteString -> Stream (Of RawVariant) m r
 getvars !tab strs !str = go 0
   where
     go !off
-        | B.length str < 32 + off = case strs of (s:ss) -> getvars tab ss (B.append (B.drop off str) s)
-                                                 [    ] | B.length str == off -> return []
-                                                        | otherwise           -> error "Short record."
+        | B.length str < 32 + off = lift (S.nextChunk strs) >>= \case
+                                        Right (s,ss) -> getvars tab ss (B.append (B.drop off str) s)
+                                        Left r | B.length str == off -> pure r
+                                               | otherwise           -> error "Short record."
         | otherwise = do
-            (!l_shared, !l_indiv) <- B.unsafeUseAsCString str $ \p -> do
-                                                    (,) <$> peek32 p off <*> peek32 p (off+4)
+            (!l_shared, !l_indiv) <- liftIO . B.unsafeUseAsCString str $ \p -> do
+                                            (,) <$> peek32 p off <*> peek32 p (off+4)
             let !l_tot = l_shared + l_indiv + 8
 
             if B.length str < fromIntegral l_tot + off
-                then getvars tab (tail strs) (B.append (B.drop off str) (head strs))
-                else do !v1 <- B.unsafeUseAsCString str $ \p0 -> do
+                -- This looks kinda unsafe, but I think we should never
+                -- hit the end here on properly formatted files.
+                then do (hd,tl) <- either (error "Short record.") id <$> lift (S.nextChunk strs)
+                        getvars tab tl (B.append (B.drop off str) hd)
+                        -- XXX  getvars tab (tail strs) (B.append (B.drop off str) (head strs))
+
+                else do !v1 <- liftIO $ B.unsafeUseAsCString str $ \p0 -> do
                                       let !p = plusPtr p0 off
                                       !refid    <- fromIntegral        <$> peek32 p  8
                                       !rv_pos   <- fromIntegral . succ <$> peek32 p 12
@@ -61,8 +74,9 @@ getvars !tab strs !str = go 0
                                       !rv_vars  <- get_als n_allls (plusPtr p 32)
                                       !rv_gt    <- get_gts         (plusPtr p (fromIntegral l_shared + 8))
                                       return $! RawVariant{ rv_chrom = tab V.! refid, .. }
-                        vs <- unsafeInterleaveIO $ go (fromIntegral l_tot + off)
-                        return (v1:vs)
+                        v1 `Q.cons` go (fromIntegral l_tot + off)
+                        -- XXX  vs <- unsafeInterleaveIO $ go (fromIntegral l_tot + off)
+                        -- return (v1:vs)
 
 
 -- skip over variant ID, then get alleles
@@ -135,12 +149,11 @@ get_gts p = do !k1 <- peek8 p 0
 
                     _    -> error $ "only haploid or diploid calls are supported " ++ showHex tp_byte []
 
-mkSymTab :: L.ByteString -> V.Vector Int
+mkSymTab :: C.ByteString -> V.Vector Int
 mkSymTab = V.fromList . mapMaybe parse . C.lines
   where
     parse l = case C.splitAt (C.length key) l of
-        (u,v) | u == key  -> Just $! hashChrom (l2s $ C.takeWhile (/=',') v)
+        (u,v) | u == key  -> Just $! hashChrom (C.takeWhile (/=',') v)
               | otherwise -> Nothing
     key = "##contig=<ID="
-    l2s = B.concat . L.toChunks
 

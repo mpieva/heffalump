@@ -197,7 +197,7 @@ foreign import ccall unsafe "zlib.h crc32" c_crc32 ::
     CULong -> Ptr Word8 -> CUInt -> IO CULong
 
 
-getVariant :: Scanner -> IO (Maybe RawVariant)
+getVariant :: Scanner -> IO (Either RawVariant ())
 getVariant sc = withScanner go sc
   where
     go psc hdl = scan_vcf1 psc >>= go' psc hdl
@@ -207,7 +207,7 @@ getVariant sc = withScanner go sc
         wb <- #{ peek scanner, next_work } psc
         we <- #{ peek scanner, last_work } psc
         if n <= 0 && wb == (we :: Ptr Word8)
-            then return Nothing
+            then return $ Right ()
             else do -- maybe newline is missing?
                     when (n <= 0) $ pokeByteOff we (-1) (10::Word8)
                     go psc hdl
@@ -223,7 +223,7 @@ getVariant sc = withScanner go sc
 
     getGt p = peekByteOff p (#{ offset scanner, gts })
 
-    variant :: Word16 -> Word32 -> B.ByteString -> Word16 -> Maybe RawVariant
-    variant r p vs gt = Just $! RawVariant (fromIntegral r) (fromIntegral p) vs gt
+    variant :: Word16 -> Word32 -> B.ByteString -> Word16 -> Either RawVariant ()
+    variant r p vs gt = Left $! RawVariant (fromIntegral r) (fromIntegral p) vs gt
 
 
