@@ -15,6 +15,7 @@ import qualified Data.ByteString.Char8          as B
 import qualified Data.ByteString.Internal       as B
 import qualified Data.ByteString.Streaming      as S
 import qualified Data.ByteString.Unsafe         as BB
+import qualified Streaming.Prelude              as Q
 
 import Util ( decomp )
 
@@ -26,29 +27,29 @@ instance Show NucCode where show = (:[]) . tr
 
 
 -- All stretch lengths are even, so we pre-divide them by two.
-data Stretch a = Ns   !Int64            a
-               | Eqs  !Int64            a
-               | Eqs1 !Int64            a
-               | Chrs !NucCode !NucCode a
-               | Break                  a
-    deriving (Show, Functor)
+data Stretch = Ns   !Int64
+             | Eqs  !Int64
+             | Eqs1 !Int64
+             | Chrs !NucCode !NucCode
+             | Break
+    deriving Show
 
-debugStretch :: MonadIO m => Stream Stretch m r -> m r
+debugStretch :: MonadIO m => Stream (Of Stretch) m r -> m r
 debugStretch = debugStretch' 0 0
 
-debugStretch' :: MonadIO m => Int -> Int64 -> Stream Stretch m r -> m r
-debugStretch' c i = inspect >=> \case
+debugStretch' :: MonadIO m => Int -> Int64 -> Stream (Of Stretch) m r -> m r
+debugStretch' c i = Q.next >=> \case
     Left r -> return r
-    Right (Break    s) -> do liftIO . putStrLn $ shows (c,i) "\tBreak" ;                    debugStretch' (c+1) 0 s
-    Right (Ns     n s) -> do liftIO . putStrLn $ shows (c,i) "\tNs   " ++ show n ;          debugStretch' c (i+2*n) s
-    Right (Eqs    n s) -> do liftIO . putStrLn $ shows (c,i) "\tEqs  " ++ show n ;          debugStretch' c (i+2*n) s
-    Right (Eqs1   n s) -> do liftIO . putStrLn $ shows (c,i) "\tEqs1 " ++ show n ;          debugStretch' c (i+2*n) s
-    Right (Chrs x y s) -> do liftIO . putStrLn $ shows (c,i) "\tChrs " ++ [tr x,' ',tr y] ; debugStretch' c (i+2) s
+    Right (Break   ,s) -> do liftIO . putStrLn $ shows (c,i) "\tBreak" ;                    debugStretch' (c+1) 0 s
+    Right (Ns     n,s) -> do liftIO . putStrLn $ shows (c,i) "\tNs   " ++ show n ;          debugStretch' c (i+2*n) s
+    Right (Eqs    n,s) -> do liftIO . putStrLn $ shows (c,i) "\tEqs  " ++ show n ;          debugStretch' c (i+2*n) s
+    Right (Eqs1   n,s) -> do liftIO . putStrLn $ shows (c,i) "\tEqs1 " ++ show n ;          debugStretch' c (i+2*n) s
+    Right (Chrs x y,s) -> do liftIO . putStrLn $ shows (c,i) "\tChrs " ++ [tr x,' ',tr y] ; debugStretch' c (i+2) s
 
 
 -- | Main decoder.  Switches behavior based on header.
 {-# DEPRECATED decode "Switch to Lumps" #-}
-decode :: Monad m => S.ByteString m r -> Stream Stretch m r
+decode :: Monad m => S.ByteString m r -> Stream (Of Stretch) m r
 decode str = do hd :> tl <- lift . S.toStrict $ S.splitAt 4 str
                 case B.take 3 hd :> B.drop 3 hd of
                     "HEF" :> "\0" -> decode_dip tl
@@ -89,7 +90,7 @@ decode str = do hd :> tl <- lift . S.toStrict $ S.splitAt 4 str
 -- Decoding produces one stretch until it finds the end marker or runs
 -- out of input.  We shall get one 'Stretch' for each chromosome.
 
-decode_dip, decode_hap :: Monad m => S.ByteString m r -> Stream Stretch m r
+decode_dip, decode_hap :: Monad m => S.ByteString m r -> Stream (Of Stretch) m r
 decode_dip = decode_v0 NucCode Eqs
 decode_hap = decode_v0 nc Eqs1
   where
@@ -102,52 +103,52 @@ decode_hap = decode_v0 nc Eqs1
 -- haploid and diploid individuals (aka "high coverage" and "low
 -- coverage" input).
 {-# DEPRECATED decode_v0 "Switch to Lumps" #-}
-decode_v0 :: Monad m => (Word8 -> NucCode) -> (forall a . Int64 -> a -> Stretch a)
-                     -> S.ByteString m r -> Stream Stretch m r
+decode_v0 :: Monad m => (Word8 -> NucCode) -> (Int64 -> Stretch)
+                     -> S.ByteString m r -> Stream (Of Stretch) m r
 decode_v0 nucCode eqs = go
   where
     go = lift . S.nextByte >=> \case
        Left    r     -> pure r
        Right (w,s')
-          | w < 0x80 -> let (y,x) = w `divMod` 11 in wrap $ Chrs (nucCode x) (nucCode y) $ go s'
-          | w ==0x80 -> wrap $ Break $ go s'
+          | w < 0x80 -> let (y,x) = w `divMod` 11 in Chrs (nucCode x) (nucCode y) `Q.cons` go s'
+          | w ==0x80 -> Break `Q.cons` go s'
 
-          | w < 0xA0 -> wrap $ Ns (fromIntegral (w .&. 0x1f)) $ go s'
+          | w < 0xA0 -> Ns (fromIntegral (w .&. 0x1f)) `Q.cons` go s'
           | w < 0xB0 -> do Right (w1,s1) <- lift $ S.nextByte s'
-                           wrap $ Ns (fromIntegral (w .&. 0x0f) .|.
-                                      fromIntegral w1 `shiftL` 4) $ go s1
+                           Ns (fromIntegral (w .&. 0x0f) .|.
+                               fromIntegral w1 `shiftL` 4) `Q.cons` go s1
           | w < 0xB8 -> do Right (w1,s1) <- lift $ S.nextByte s'
                            Right (w2,s2) <- lift $ S.nextByte s1
-                           wrap $ Ns (fromIntegral (w .&. 0x07) .|.
-                                      fromIntegral w1 `shiftL` 3 .|.
-                                      fromIntegral w2 `shiftL` 11) $ go s2
+                           Ns (fromIntegral (w .&. 0x07) .|.
+                               fromIntegral w1 `shiftL` 3 .|.
+                               fromIntegral w2 `shiftL` 11) `Q.cons` go s2
           | w < 0xBC -> do Right (w1,s1) <- lift $ S.nextByte s'
                            Right (w2,s2) <- lift $ S.nextByte s1
                            Right (w3,s3) <- lift $ S.nextByte s2
-                           wrap $ Ns (fromIntegral (w .&. 0x03) .|.
-                                      fromIntegral w1 `shiftL` 2 .|.
-                                      fromIntegral w2 `shiftL` 10 .|.
-                                      fromIntegral w3 `shiftL` 18) $ go s3
+                           Ns (fromIntegral (w .&. 0x03) .|.
+                               fromIntegral w1 `shiftL` 2 .|.
+                               fromIntegral w2 `shiftL` 10 .|.
+                               fromIntegral w3 `shiftL` 18) `Q.cons` go s3
           | w < 0xBE -> do Right (w1,s1) <- lift $ S.nextByte s'
                            Right (w2,s2) <- lift $ S.nextByte s1
                            Right (w3,s3) <- lift $ S.nextByte s2
                            Right (w4,s4) <- lift $ S.nextByte s3
-                           wrap $ Ns (fromIntegral (w .&. 0x01) .|.
-                                      fromIntegral w1 `shiftL` 1 .|.
-                                      fromIntegral w2 `shiftL` 9 .|.
-                                      fromIntegral w3 `shiftL` 17 .|.
-                                      fromIntegral w4 `shiftL` 25) $ go s4
+                           Ns (fromIntegral (w .&. 0x01) .|.
+                               fromIntegral w1 `shiftL` 1 .|.
+                               fromIntegral w2 `shiftL` 9 .|.
+                               fromIntegral w3 `shiftL` 17 .|.
+                               fromIntegral w4 `shiftL` 25) `Q.cons` go s4
           | w < 0xC0 -> error $ "WTF?! (too many Ns) " ++ show w
 
-          | w < 0xE0 -> wrap $ eqs (fromIntegral (w .&. 0x1f)) $ go s'
+          | w < 0xE0 -> eqs (fromIntegral (w .&. 0x1f)) `Q.cons` go s'
           | w < 0xF0 -> do Right (w1,s1) <- lift $ S.nextByte s'
-                           wrap $ eqs (fromIntegral (w .&. 0x0f) .|.
-                                       fromIntegral w1 `shiftL` 4) $ go s1
+                           eqs (fromIntegral (w .&. 0x0f) .|.
+                                fromIntegral w1 `shiftL` 4) `Q.cons` go s1
           | w < 0xF8 -> do Right (w1,s1) <- lift $ S.nextByte s'
                            Right (w2,s2) <- lift $ S.nextByte s1
-                           wrap $ eqs (fromIntegral (w .&. 0x07) .|.
-                                       fromIntegral w1 `shiftL` 3 .|.
-                                       fromIntegral w2 `shiftL` 11) $ go s2
+                           eqs (fromIntegral (w .&. 0x07) .|.
+                                fromIntegral w1 `shiftL` 3 .|.
+                                fromIntegral w2 `shiftL` 11) `Q.cons` go s2
           | otherwise -> error $ "WTF?! (too many matches) " ++ show w
 
 

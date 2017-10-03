@@ -653,18 +653,18 @@ instance Monad S where
 -- | Converts old style 'Stretch' to new style 'Lump'.  Unfortunately,
 -- this needs a reference, but at least we can use a new style
 -- 'NewRefSeq', too.
-stretchToLump :: Monad m => NewRefSeqs -> Stream Stretch m r -> Stream Lump m r
+stretchToLump :: Monad m => NewRefSeqs -> Stream (Of Stretch) m r -> Stream Lump m r
 stretchToLump nrs = normalizeLump . go1 (nrss_seqs nrs)
   where
     go1 [     ] l = pure undefined -- effects l  doesn't work XXX
     go1 (r0:rs) l = go (r0 ()) l
       where
-        go r = lift . inspect >=> \case
-            Right (S.Chrs a b k) -> call a (call b (flip go k)) r
-            Right (S.Ns     c k) -> wrap $ Ns   (fromIntegral $ c+c) $ go (dropNRS (fromIntegral $ c+c) r) k
-            Right (S.Eqs    c k) -> wrap $ Eqs2 (fromIntegral $ c+c) $ go (dropNRS (fromIntegral $ c+c) r) k
-            Right (S.Eqs1   c k) -> wrap $ Eqs1 (fromIntegral $ c+c) $ go (dropNRS (fromIntegral $ c+c) r) k
-            Right (S.Break    k) -> wrap $ Break                     $ go1 rs k
+        go r = lift . Q.next >=> \case
+            Right (S.Chrs a b,k) -> call a (call b (flip go k)) r
+            Right (S.Ns     c,k) -> wrap $ Ns   (fromIntegral $ c+c) $ go (dropNRS (fromIntegral $ c+c) r) k
+            Right (S.Eqs    c,k) -> wrap $ Eqs2 (fromIntegral $ c+c) $ go (dropNRS (fromIntegral $ c+c) r) k
+            Right (S.Eqs1   c,k) -> wrap $ Eqs1 (fromIntegral $ c+c) $ go (dropNRS (fromIntegral $ c+c) r) k
+            Right (S.Break   ,k) -> wrap $ Break                     $ go1 rs k
             Left z               -> pure z
 
     call :: Monad m => NucCode -> (NewRefSeq -> Stream Lump m r) -> NewRefSeq -> Stream Lump m r
