@@ -1,6 +1,5 @@
 module Util
-    ( decomp'
-    , decomp
+    ( decomp
     , gunzip
     , gzip
     , mk_opts
@@ -18,44 +17,26 @@ import System.Console.GetOpt
 import System.IO                        ( hPutStrLn, stderr )
 
 import qualified Data.ByteString                 as B
-import qualified Data.ByteString.Lazy            as L
-import qualified Data.ByteString.Lazy.Internal   as L ( ByteString(..) )
-import qualified Data.ByteString.Streaming       as SB ( nextByte, cons' )
+import qualified Data.ByteString.Streaming       as Q ( nextByte, cons' )
 import qualified Data.ByteString.Streaming.Char8 as S
 import qualified Codec.Compression.Zlib.Internal as Z
 
-{-# DEPRECATED decomp "use decomp'" #-}
-decomp :: L.ByteString -> L.ByteString
-decomp s0 = case L.uncons s0 of
-    Just (31, s') -> case L.uncons s' of
-        Just (139,_) -> decomp_loop s0
-        _            -> s0 -- no decompression needed
-    _                -> s0 -- no decompression needed
-  where
-    decomp_loop :: L.ByteString -> L.ByteString
-    decomp_loop s = case L.uncons s of
-        Just (31, s') -> case L.uncons s' of
-            Just (139,_) -> Z.foldDecompressStreamWithInput L.Chunk decomp_loop throw
-                            (Z.decompressST Z.gzipOrZlibFormat Z.defaultDecompressParams) s
-            _            -> L.empty  -- ignores trailing garbage
-        _                -> L.empty  -- ignores trailing garbage
-
 -- | Checks if the input is GZip at all, returns it unchanged if it
 -- isn't.  Else runs gunzip.
-decomp' :: MonadIO m => S.ByteString m r -> S.ByteString m r
-decomp' = decompWith return
+decomp :: MonadIO m => S.ByteString m r -> S.ByteString m r
+decomp = decompWith return
 
 -- | Checks if the input is GZip at all, and runs gunzip if it is.  If
 -- it isn't, it runs 'k' on the input.
 decompWith :: MonadIO m
            => (S.ByteString m r -> m (S.ByteString m r))
            -> S.ByteString m r -> S.ByteString m r
-decompWith k s0 = S.mwrap $ SB.nextByte s0 >>= \case
-    Right (31, s') -> SB.nextByte s' >>= \case
-        Right (139,s'') -> return $ gunzip (SB.cons' 31 (SB.cons' 139 s''))
-        Right ( c, s'') -> return $ SB.cons' 31 (SB.cons' c s'')
-        Left     r      -> return $ SB.cons' 31 (pure r)
-    Right ( c, s') -> k $ SB.cons' c s'
+decompWith k s0 = S.mwrap $ Q.nextByte s0 >>= \case
+    Right (31, s') -> Q.nextByte s' >>= \case
+        Right (139,s'') -> return $ gunzip (Q.cons' 31 (Q.cons' 139 s''))
+        Right ( c, s'') -> return $ Q.cons' 31 (Q.cons' c s'')
+        Left     r      -> return $ Q.cons' 31 (pure r)
+    Right ( c, s') -> k $ Q.cons' c s'
     Left     r     -> k $ pure r
 
 -- | Decompresses a gzip stream.  If the leftovers look like another
@@ -128,7 +109,7 @@ parseFileOpts def ods args = do
 data FastaSeq m r = FastaSeq !B.ByteString (S.ByteString m r) deriving Functor
 
 readSampleFa :: MonadResource m => FilePath -> Stream (FastaSeq m) m ()
-readSampleFa = parseFasta . decomp' . S.readFile
+readSampleFa = parseFasta . decomp . S.readFile
 
 -- | Parsing a FastA file results in pairs of sequence names and
 -- sequences.  The sequences are still text with their case preserved.

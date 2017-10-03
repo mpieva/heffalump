@@ -1,14 +1,12 @@
-{-# LANGUAGE OverloadedLists, DeriveFoldable, DeriveTraversable #-}
+{-# LANGUAGE DeriveFoldable, DeriveTraversable #-}
 module Lump
     ( Lump(..)
-    , isDone
     , mergeLumps
     , mergeLumpsDense
     , PackedLump(..)
     , noLump
     , diff
-    , diff'
-    , diff2'
+    , diff2
     , getRefPath
     , encodeLumpToMem
     , decodeMany
@@ -16,9 +14,8 @@ module Lump
     , encodeHeader
     , decode
     , debugLump
-    , fix2stream
     , make_hap
-    , normalizeLump'
+    , normalizeLump
     , encTwoVars
     , Frag(..)
     , patch
@@ -47,7 +44,7 @@ import qualified Streaming.Prelude          as Q
 import Stretch ( Stretch, decode_dip, decode_hap, NucCode(..) )
 import qualified Stretch  as S ( Stretch(..) )
 import NewRef
-import Util ( decomp' )
+import Util ( decomp )
 
 -- | Improved diff representation and encoding.  Goals:
 --
@@ -134,104 +131,46 @@ data Lump a
     | InsH !Seq1 a                      -- ^ insertion, the other allele is the reference
 
     | Break a                           -- ^ break marker (end-of-chromosome)
-    | Done                              -- ^ end of data stream
   deriving (Functor, Show, Foldable, Traversable)
-
-{-# DEPRECATED isDone "get rid fo Done already!" #-}
-isDone :: Lump a -> Bool
-isDone Done = True
-isDone _    = False
 
 type Seq1 = U.Vector Word8
 
 debugLump :: Stream Lump IO r -> IO r
-debugLump = debugLump' 0 0
-
-debugLump' :: Int -> Int -> Stream Lump IO r -> IO r
-debugLump' c i = inspect >=> \case
-    Left r -> return r
-    Right lump -> case lump of
-        Break       l -> do putStrLn $ shows (c,i) "\tBreak" ;           debugLump' (c+1) 0 l
-        Ns        n l -> do putStrLn $ shows (c,i) "\tNs   " ++ show n ; debugLump' c (i+n) l
-        Eqs1      n l -> do putStrLn $ shows (c,i) "\tEqs1 " ++ show n ; debugLump' c (i+n) l
-        Eqs2      n l -> do putStrLn $ shows (c,i) "\tEqs2 " ++ show n ; debugLump' c (i+n) l
-
-        Trans1      l -> do putStrLn $ shows (c,i) "\tTrans1 " ;      debugLump' c (i+1) l
-        Compl1      l -> do putStrLn $ shows (c,i) "\tCompl1 " ;      debugLump' c (i+1) l
-        TCompl1     l -> do putStrLn $ shows (c,i) "\tTCompl1 " ;     debugLump' c (i+1) l
-
-        RefTrans    l -> do putStrLn $ shows (c,i) "\tRefTrans " ;    debugLump' c (i+1) l
-        Trans2      l -> do putStrLn $ shows (c,i) "\tTrans2 " ;      debugLump' c (i+1) l
-        RefCompl    l -> do putStrLn $ shows (c,i) "\tRefCompl " ;    debugLump' c (i+1) l
-        TransCompl  l -> do putStrLn $ shows (c,i) "\tTransCompl " ;  debugLump' c (i+1) l
-        Compl2      l -> do putStrLn $ shows (c,i) "\tCompl2 " ;      debugLump' c (i+1) l
-        RefTCompl   l -> do putStrLn $ shows (c,i) "\tRefTCompl " ;   debugLump' c (i+1) l
-        TransTCompl l -> do putStrLn $ shows (c,i) "\tTransTCompl " ; debugLump' c (i+1) l
-        ComplTCompl l -> do putStrLn $ shows (c,i) "\tComplTCompl " ; debugLump' c (i+1) l
-        TCompl2     l -> do putStrLn $ shows (c,i) "\tTCompl2 " ;     debugLump' c (i+1) l
-
-        Del1      n l -> do putStrLn $ shows (c,i) "\tDel1 " ++ shows n " " ; debugLump' c i l
-        Del2      n l -> do putStrLn $ shows (c,i) "\tDel2 " ++ shows n " " ; debugLump' c i l
-        DelH      n l -> do putStrLn $ shows (c,i) "\tDelH " ++ shows n " " ; debugLump' c i l
-
-        Ins1      s l -> do putStrLn $ shows (c,i) "\tIns1 " ++ shows s " " ; debugLump' c i l
-        Ins2      s l -> do putStrLn $ shows (c,i) "\tIns2 " ++ shows s " " ; debugLump' c i l
-        InsH      s l -> do putStrLn $ shows (c,i) "\tInsH " ++ shows s " " ; debugLump' c i l
-
-
-{-# DEPRECATED normalizeLump "use normalizeLump'" #-}
-normalizeLump :: Fix Lump -> Fix Lump
-normalizeLump = ana (go . unFix)
+debugLump = go (0::Int) (0::Int)
   where
-    go (Ns 0 l) = unFix l
-    go (Ns n l) = case unFix l of
-        Ns n' l' -> go $ Ns (n+n') l'
-        _        -> Ns n l
+    go c i = inspect >=> \case
+      Left r -> return r
+      Right lump -> case lump of
+        Break       l -> do putStrLn $ shows (c,i) "\tBreak" ;           go (c+1) 0 l
+        Ns        n l -> do putStrLn $ shows (c,i) "\tNs   " ++ show n ; go c (i+n) l
+        Eqs1      n l -> do putStrLn $ shows (c,i) "\tEqs1 " ++ show n ; go c (i+n) l
+        Eqs2      n l -> do putStrLn $ shows (c,i) "\tEqs2 " ++ show n ; go c (i+n) l
 
-    go (Eqs1 0 l) = unFix l
-    go (Eqs1 n l) = case unFix l of
-        Eqs1 n' l' -> go $ Eqs1 (n+n') l'
-        _          -> Eqs1 n l
+        Trans1      l -> do putStrLn $ shows (c,i) "\tTrans1 " ;      go c (i+1) l
+        Compl1      l -> do putStrLn $ shows (c,i) "\tCompl1 " ;      go c (i+1) l
+        TCompl1     l -> do putStrLn $ shows (c,i) "\tTCompl1 " ;     go c (i+1) l
 
-    go (Eqs2 0 l) = unFix l
-    go (Eqs2 n l) = case unFix l of
-        Eqs2 n' l' -> go $ Eqs2 (n+n') l'
-        _          -> Eqs2 n l
+        RefTrans    l -> do putStrLn $ shows (c,i) "\tRefTrans " ;    go c (i+1) l
+        Trans2      l -> do putStrLn $ shows (c,i) "\tTrans2 " ;      go c (i+1) l
+        RefCompl    l -> do putStrLn $ shows (c,i) "\tRefCompl " ;    go c (i+1) l
+        TransCompl  l -> do putStrLn $ shows (c,i) "\tTransCompl " ;  go c (i+1) l
+        Compl2      l -> do putStrLn $ shows (c,i) "\tCompl2 " ;      go c (i+1) l
+        RefTCompl   l -> do putStrLn $ shows (c,i) "\tRefTCompl " ;   go c (i+1) l
+        TransTCompl l -> do putStrLn $ shows (c,i) "\tTransTCompl " ; go c (i+1) l
+        ComplTCompl l -> do putStrLn $ shows (c,i) "\tComplTCompl " ; go c (i+1) l
+        TCompl2     l -> do putStrLn $ shows (c,i) "\tTCompl2 " ;     go c (i+1) l
 
-    go (Del1 0 l) = unFix l
-    go (Del1 n l) = case unFix l of
-        Del1 n' l' -> go $ Del1 (n+n') l'
-        _          -> Del1 n l
+        Del1      n l -> do putStrLn $ shows (c,i) "\tDel1 " ++ shows n " " ; go c i l
+        Del2      n l -> do putStrLn $ shows (c,i) "\tDel2 " ++ shows n " " ; go c i l
+        DelH      n l -> do putStrLn $ shows (c,i) "\tDelH " ++ shows n " " ; go c i l
 
-    go (Del2 0 l) = unFix l
-    go (Del2 n l) = case unFix l of
-        Del2 n' l' -> go $ Del2 (n+n') l'
-        _          -> Del2 n l
+        Ins1      s l -> do putStrLn $ shows (c,i) "\tIns1 " ++ shows s " " ; go c i l
+        Ins2      s l -> do putStrLn $ shows (c,i) "\tIns2 " ++ shows s " " ; go c i l
+        InsH      s l -> do putStrLn $ shows (c,i) "\tInsH " ++ shows s " " ; go c i l
 
-    go (DelH 0 l) = unFix l
-    go (DelH n l) = case unFix l of
-        DelH n' l' -> go $ DelH (n+n') l'
-        _          -> DelH n l
 
-    go (Ins1 n l) | U.null n = unFix l
-    go (Ins1 n l) = case unFix l of
-        Ins1 n' l' -> go $ Ins1 (n U.++ n') l'
-        _          -> Ins1 n l
-
-    go (Ins2 n l) | U.null n = unFix l
-    go (Ins2 n l) = case unFix l of
-        Ins2 n' l' -> go $ Ins2 (n U.++ n') l'
-        _          -> Ins2 n l
-
-    go (InsH n l) | U.null n = unFix l
-    go (InsH n l) = case unFix l of
-        InsH n' l' -> go $ InsH (n U.++ n') l'
-        _          -> InsH n l
-
-    go lump = lump
-
-normalizeLump' :: Monad m => Stream Lump m r -> Stream Lump m r
-normalizeLump' = unfold (inspect >=> either (return . Left) go)
+normalizeLump :: Monad m => Stream Lump m r -> Stream Lump m r
+normalizeLump = unfold (inspect >=> either (return . Left) go)
   where
     wrapE = either pure wrap
 
@@ -282,8 +221,8 @@ normalizeLump' = unfold (inspect >=> either (return . Left) go)
 
     go lump = return $ Right lump
 
--- | Lowers all calls to haploid.  (Not sure
--- if this is really a good idea anymore...)
+-- | Lowers all calls to haploid.
+-- (Not sure this is really a good idea anymore...)
 make_hap :: Monad m => Stream Lump m r -> Stream Lump m r
 make_hap = maps step
   where
@@ -324,7 +263,7 @@ noLump = PackLump (L.singleton 0)
 
 {-# INLINE encodeLumpToMem #-}
 encodeLumpToMem :: MonadIO m => Stream Lump m r -> m (Of PackedLump r)
-encodeLumpToMem = fmap (mapOf PackLump) . S.toLazy . encodeLump . normalizeLump'
+encodeLumpToMem = fmap (mapOf PackLump) . S.toLazy . encodeLump . normalizeLump
 
 {-# INLINE encodeLump #-}
 encodeLump :: MonadIO m => Stream Lump m r -> S.ByteString m r
@@ -368,7 +307,6 @@ encodeLump = go
             Ins2 sq s'                       -> indelOf 0x38 (U.length sq) >>= seqOf sq >>= fill p l s'
 
             Break s'                         -> wrd8 0x00 >>= fill p l s')
-    -- encode1  Done                              = mempty
       where
         stretchOf k n
             | n < 0x3C      = liftIO $ do pokeElemOff p o (k .|. fromIntegral n)
@@ -414,26 +352,26 @@ encodeLump = go
 
         wrd8 w = liftIO $ pokeElemOff p o w >> return (o+1)
 
-decodeLump :: L.ByteString -> Fix Lump
-decodeLump = ana decode1
+decodeLump :: Monad m => S.ByteString m r -> Stream Lump m r
+decodeLump = unfold decode1
   where
-    decode1 s = case L.uncons s of
-        Nothing                                -> Done
-        Just (c,s1)
-            | c == 0x00                        -> Break s1
-            | c == 0x01                        -> Trans1 s1
-            | c == 0x02                        -> Compl1 s1
-            | c == 0x03                        -> TCompl1 s1
+    decode1 = S.nextByte >=> \case
+        Left r                                 -> return $ Left r
+        Right (c,s1)
+            | c == 0x00                        -> return . Right $ Break s1
+            | c == 0x01                        -> return . Right $ Trans1 s1
+            | c == 0x02                        -> return . Right $ Compl1 s1
+            | c == 0x03                        -> return . Right $ TCompl1 s1
             | c == 0x04                        -> error $ "unexpected " ++ show c
-            | c == 0x05                        -> RefTrans s1
-            | c == 0x06                        -> Trans2 s1
-            | c == 0x07                        -> RefCompl s1
-            | c == 0x08                        -> TransCompl s1
-            | c == 0x09                        -> Compl2 s1
-            | c == 0x0A                        -> RefTCompl s1
-            | c == 0x0B                        -> TransTCompl s1
-            | c == 0x0C                        -> ComplTCompl s1
-            | c == 0x0D                        -> TCompl2 s1
+            | c == 0x05                        -> return . Right $ RefTrans s1
+            | c == 0x06                        -> return . Right $ Trans2 s1
+            | c == 0x07                        -> return . Right $ RefCompl s1
+            | c == 0x08                        -> return . Right $ TransCompl s1
+            | c == 0x09                        -> return . Right $ Compl2 s1
+            | c == 0x0A                        -> return . Right $ RefTCompl s1
+            | c == 0x0B                        -> return . Right $ TransTCompl s1
+            | c == 0x0C                        -> return . Right $ ComplTCompl s1
+            | c == 0x0D                        -> return . Right $ TCompl2 s1
             | c == 0x0E                        -> error $ "unexpected " ++ show c
             | c == 0x0F                        -> error $ "unexpected " ++ show c
 
@@ -452,51 +390,67 @@ decodeLump = ana decode1
             | otherwise                        -> error $ "Impossibru! " ++ show c
 
     stretch_of cons c s1
-        | c .&. 0x3F == 0x3F  = cons (fromIntegral (L.index s1 0)) (L.drop 1 s1)
-        | c .&. 0x3F == 0x3E  = cons (fromIntegral (L.index s1 0) .|.
-                                      fromIntegral (L.index s1 1) `shiftL`  8) (L.drop 2 s1)
-        | c .&. 0x3F == 0x3D  = cons (fromIntegral (L.index s1 0) .|.
-                                      fromIntegral (L.index s1 1) `shiftL`  8 .|.
-                                      fromIntegral (L.index s1 2) `shiftL` 16) (L.drop 3 s1)
-        | c .&. 0x3F == 0x3C  = cons (fromIntegral (L.index s1 0) .|.
-                                      fromIntegral (L.index s1 1) `shiftL`  8 .|.
-                                      fromIntegral (L.index s1 2) `shiftL` 16 .|.
-                                      fromIntegral (L.index s1 3) `shiftL` 24) (L.drop 4 s1)
-        | otherwise           = cons (fromIntegral (c .&. 0x3F)) s1
+        | c .&. 0x3F == 0x3F  = do Right (w0,s2) <- S.nextByte s1
+                                   return . Right $ cons (fromIntegral w0) s2
+        | c .&. 0x3F == 0x3E  = do Right (w0,s2) <- S.nextByte s1
+                                   Right (w1,s3) <- S.nextByte s2
+                                   return . Right $ cons (fromIntegral w0 .|.
+                                                          fromIntegral w1 `shiftL`  8) s3
+        | c .&. 0x3F == 0x3D  = do Right (w0,s2) <- S.nextByte s1
+                                   Right (w1,s3) <- S.nextByte s2
+                                   Right (w2,s4) <- S.nextByte s3
+                                   return . Right $ cons (fromIntegral w0 .|.
+                                                          fromIntegral w1 `shiftL`  8 .|.
+                                                          fromIntegral w2 `shiftL` 16) s4
+        | c .&. 0x3F == 0x3C  = do Right (w0,s2) <- S.nextByte s1
+                                   Right (w1,s3) <- S.nextByte s2
+                                   Right (w2,s4) <- S.nextByte s3
+                                   Right (w3,s5) <- S.nextByte s4
+                                   return . Right $ cons (fromIntegral w0 .|.
+                                                          fromIntegral w1 `shiftL`  8 .|.
+                                                          fromIntegral w2 `shiftL` 16 .|.
+                                                          fromIntegral w3 `shiftL` 24) s5
+        | otherwise           = return . Right $ cons (fromIntegral (c .&. 0x3F)) s1
 
     del_of cons c s1
-        | c .&. 0x07 == 0  = cons (fromIntegral (L.head s1)) (L.tail s1)
-        | otherwise        = cons (fromIntegral c .&. 0x07) s1
+        | c .&. 0x07 == 0  = do Right (hd,tl) <- S.nextByte s1
+                                return . Right $ cons (fromIntegral hd) tl
+        | otherwise        = return . Right $ cons (fromIntegral c .&. 0x07) s1
 
     ins_of cons c s1
-        | c .&. 0x07 == 0  = seq_of cons U.empty (L.head s1) (L.tail s1)
+        | c .&. 0x07 == 0  = do Right (hd,tl) <- S.nextByte s1
+                                seq_of cons U.empty hd tl
         | otherwise        = seq_of cons U.empty (c .&. 0x07) s1
 
 
 
-    seq_of cons acc 0 s1 = cons acc s1
+    seq_of cons acc 0 s1 = return . Right $ cons acc s1
 
-    seq_of cons acc 1 s1 = cons acc' (L.tail s1)
-      where
-        acc' = acc `U.snoc` (L.head s1 `shiftR` 0 .&. 0x3)
+    seq_of cons acc 1 s1 = do
+        Right (hd,tl) <- S.nextByte s1
+        let acc' = acc `U.snoc` (hd `shiftR` 0 .&. 0x3)
+        return . Right $ cons acc' tl
 
-    seq_of cons acc 2 s1 = cons acc' (L.tail s1)
-      where
-        acc' = acc U.++ [ L.head s1 `shiftR` 0 .&. 0x3
-                        , L.head s1 `shiftR` 2 .&. 0x3 ]
+    seq_of cons acc 2 s1 = do
+        Right (hd,tl) <- S.nextByte s1
+        let acc' = acc `U.snoc` (hd `shiftR` 0 .&. 0x3)
+                       `U.snoc` (hd `shiftR` 2 .&. 0x3)
+        return . Right $ cons acc' tl
 
-    seq_of cons acc 3 s1 = cons acc' (L.tail s1)
-      where
-        acc' = acc U.++ [ L.head s1 `shiftR` 0 .&. 0x3
-                        , L.head s1 `shiftR` 2 .&. 0x3
-                        , L.head s1 `shiftR` 4 .&. 0x3 ]
+    seq_of cons acc 3 s1 = do
+        Right (hd,tl) <- S.nextByte s1
+        let acc' = acc `U.snoc` (hd `shiftR` 0 .&. 0x3)
+                       `U.snoc` (hd `shiftR` 2 .&. 0x3)
+                       `U.snoc` (hd `shiftR` 4 .&. 0x3)
+        return . Right $ cons acc' tl
 
-    seq_of cons acc n s1 = seq_of cons acc' (n-4) (L.tail s1)
-      where
-        acc' = acc U.++ [ L.head s1 `shiftR` 0 .&. 0x3
-                        , L.head s1 `shiftR` 2 .&. 0x3
-                        , L.head s1 `shiftR` 4 .&. 0x3
-                        , L.head s1 `shiftR` 6 .&. 0x3 ]
+    seq_of cons acc n s1 = do
+        Right (hd,tl) <- S.nextByte s1
+        let acc' = acc `U.snoc` (hd `shiftR` 0 .&. 0x3)
+                       `U.snoc` (hd `shiftR` 2 .&. 0x3)
+                       `U.snoc` (hd `shiftR` 4 .&. 0x3)
+                       `U.snoc` (hd `shiftR` 6 .&. 0x3)
+        seq_of cons acc' (n-4) tl
 
 
 -- | Merging without access to a reference sequence.  This code doesn't
@@ -556,10 +510,10 @@ mergeLumpsWith :: Monad m => (V.Vector (Maybe (Lump ())) -> Int) -> V.Vector (St
 mergeLumpsWith skipLen = go 0 0
     -- Merging stretches.  We define a 'Variant' as anything that is
     -- different from the reference.  Therefore, 'Eqs' ('Eqs1') and 'Ns'
-    -- never create a 'Variant' and we can skip forwards.  A 'Done' is
-    -- an error.  Else, if at least one sample has some sort of call, we
-    -- need to collect the alleles, produce up to four variants, then
-    -- output and skip forward by one base.
+    -- never create a 'Variant' and we can skip forwards.  Else, if at
+    -- least one sample has some sort of call, we need to collect the
+    -- alleles, produce up to four variants, then output and skip
+    -- forward by one base.
   where
     go :: Monad m => Int -> Int -> V.Vector (Stream Lump m r) -> Stream (Of [Variant]) m ()
     go !ix !pos = lift . V.mapM inspect >=> \case
@@ -569,17 +523,14 @@ mergeLumpsWith skipLen = go 0 0
              -- all samples 'Break' or are done, next chromosome
              | V.all isBreak smps -> go (succ ix) 0 (V.map skipBreak smps)
 
-        -- We ignore outgroups in computing the longest stretch.  That
-        -- way, outgroups don't get to define variants, but participate
-        -- in variants found in another way.
-             -- XXX  if 'skipLen' needs to 'inspect', it might consume the
-             -- stream... can't have that.  So 'skipLen' has to return
-             -- something else, like reconstructed streams?
+             -- We ignore outgroups in computing the longest stretch.
+             -- That way, outgroups don't get to define variants, but
+             -- participate in variants found in another way.
              | otherwise -> do
                 case skipLen $ V.map (either (const Nothing) (Just . fmap (const ()))) smps of
-                    -- no stretch, have to look for vars
-                    -- XXX  oof, can't duplicate smps safely!
-                    0 -> mkVar ix    pos                                     smps >>
+                    -- no stretch, have to look for vars (duplicating 'smps' is safe,
+                    -- because mkVar can't do an monadic operations on it)
+                    0 -> Q.yield (mkVar ix pos                               smps) >>
                          go ix (succ pos) (unS $ V.mapM (S . skipStretchE 1) smps)
 
                     -- a stretch of l non-variants can be skipped over
@@ -613,7 +564,6 @@ mergeLumpsWith skipLen = go 0 0
     skipStretch !l (InsH _ s) = skipStretchS l s
 
     skipStretch _ (Break    s) = wrap $ Break s
-    skipStretch _  Done        = error "Can't happen!" -- XXX
 
     skipStretch !l (Ns   !n s) | l == n = s
                                | l <  n = wrap $ Ns (n-l) s
@@ -642,8 +592,8 @@ mergeLumpsWith skipLen = go 0 0
 
     -- Find all the variants, anchored on the reference allele, and
     -- split them.  Misfitting alleles are not counted.
-    mkVar :: Monad m => Int -> Int -> V.Vector (Either r (Lump (Stream Lump m r))) -> Stream (Of [Variant]) m ()
-    mkVar ix pos ss = Q.yield
+    mkVar :: Int -> Int -> V.Vector (Either u (Lump v)) -> [Variant]
+    mkVar ix pos ss =
             [ Variant ix pos ref_indet (V2b alt) calls
             | (alt, ct) <- zip [1..3] [ct_trans, ct_compl, ct_tcompl]
             , let calls = V.convert $ V.map (either (const 0) ct) ss ]
@@ -703,28 +653,29 @@ instance Monad S where
 -- | Converts old style 'Stretch' to new style 'Lump'.  Unfortunately,
 -- this needs a reference, but at least we can use a new style
 -- 'NewRefSeq', too.
-stretchToLump :: NewRefSeqs -> Stretch -> Fix Lump
+stretchToLump :: Monad m => NewRefSeqs -> Stream Stretch m r -> Stream Lump m r
 stretchToLump nrs = normalizeLump . go1 (nrss_seqs nrs)
   where
-    go1 [     ] _ = Fix Done
+    go1 [     ] l = pure undefined -- effects l  doesn't work XXX
     go1 (r0:rs) l = go (r0 ()) l
       where
-        go r (S.Chrs a b k) = call a (call b (flip go k)) r
-        go r (S.Ns     c k) = Fix $ Ns   (fromIntegral $ c+c) $ go (dropNRS (fromIntegral $ c+c) r) k
-        go r (S.Eqs    c k) = Fix $ Eqs2 (fromIntegral $ c+c) $ go (dropNRS (fromIntegral $ c+c) r) k
-        go r (S.Eqs1   c k) = Fix $ Eqs1 (fromIntegral $ c+c) $ go (dropNRS (fromIntegral $ c+c) r) k
-        go _ (S.Break    k) = Fix $ Break                     $ go1 rs k
-        go _  S.Done        = Fix   Done
+        go r = lift . inspect >=> \case
+            Right (S.Chrs a b k) -> call a (call b (flip go k)) r
+            Right (S.Ns     c k) -> wrap $ Ns   (fromIntegral $ c+c) $ go (dropNRS (fromIntegral $ c+c) r) k
+            Right (S.Eqs    c k) -> wrap $ Eqs2 (fromIntegral $ c+c) $ go (dropNRS (fromIntegral $ c+c) r) k
+            Right (S.Eqs1   c k) -> wrap $ Eqs1 (fromIntegral $ c+c) $ go (dropNRS (fromIntegral $ c+c) r) k
+            Right (S.Break    k) -> wrap $ Break                     $ go1 rs k
+            Left z               -> pure z
 
-    call :: NucCode -> (NewRefSeq -> Fix Lump) -> NewRefSeq -> Fix Lump
+    call :: Monad m => NucCode -> (NewRefSeq -> Stream Lump m r) -> NewRefSeq -> Stream Lump m r
     call (NucCode b) k r = case unconsNRS r of
-        Nothing     -> Fix Done
-        Just (a,r') -> Fix . encTwoNucs a (nc2vs U.! fromIntegral b) $ k r'
+        Nothing     -> pure undefined -- XXX
+        Just (a,r') -> wrap . encTwoNucs a (nc2vs U.! fromIntegral b) $ k r'
 
     nc2vs :: U.Vector Word8
-    !nc2vs = [ 255,  5, 10, 15, 0,        -- NACGT
-                 6,  7,  1, 11, 2, 3,     -- MRWSYK
-                17, 18, 19, 16, 255 ]     -- acgtN
+    !nc2vs = U.fromList [ 255,  5, 10, 15, 0,        -- NACGT
+                            6,  7,  1, 11, 2, 3,     -- MRWSYK
+                           17, 18, 19, 16, 255 ]     -- acgtN
 
 
 -- | Main decoder.  Switches behavior based on header.  "HEF\0",
@@ -736,22 +687,26 @@ stretchToLump nrs = normalizeLump . go1 (nrss_seqs nrs)
 -- We try to support legacy files.  These could start with anything, but
 -- in practice start with either (Ns 5000) or (Ns 5001).  Anything else
 -- is rejected as unknown junk.
-decode :: Either String NewRefSeqs -> L.ByteString -> Fix Lump
-decode (Left err)  str | "HEF\3" `L.isPrefixOf` str = decodeLump . L.drop 5 $ L.dropWhile (/= 0) str
-                       | otherwise                  = error err
+decode :: Monad m => Either String NewRefSeqs -> S.ByteString m r -> Stream Lump m r
+decode (Left err) str = do hd :> tl <- lift . S.toStrict $ S.splitAt 4 str
+                           if hd == "HEF\3"
+                               then decodeLump . S.drop 5 $ S.dropWhile (/= 0) tl
+                               else error err
 
-decode (Right  r) str | "HEF\0"  `L.isPrefixOf` str = stretchToLump r $ decode_dip (L.drop 4 str)
-                      | "HEF\1"  `L.isPrefixOf` str = stretchToLump r $ decode_hap (L.drop 4 str)
-                      | "HEF\3"  `L.isPrefixOf` str = go (L.drop 4 str)
-                      | 176:113:2:_ <- L.unpack str = stretchToLump r $ decode_dip str
-                      | 177:113:2:_ <- L.unpack str = stretchToLump r $ decode_dip str
-                      | otherwise                   = error "File format not recognized?"
+decode (Right  r) str = do hd :> tl <- lift . S.toStrict $ S.splitAt 4 str
+                           case B.take 3 hd :> B.drop 3 hd of
+                               "HEF" :> "\0"     -> stretchToLump r $ decode_dip tl
+                               "HEF" :> "\1"     -> stretchToLump r $ decode_hap tl
+                               "HEF" :> "\3"     -> go tl
+                               "\176\113\2" :> _ -> stretchToLump r $ decode_dip $ S.chunk hd >> tl
+                               "\177\113\2" :> _ -> stretchToLump r $ decode_dip $ S.chunk hd >> tl
+                               _                 -> error "File format not recognized?"
   where
-    go s = let (hs,s') = L.splitAt 4 . L.drop 1 . L.dropWhile (/= 0) $ s
-               hv = L.foldr (\b a -> fromIntegral b .|. shiftL a 8) 0 hs :: Word32
-           in if hv == fromIntegral (hash (nrss_chroms r, nrss_lengths r))
-              then decodeLump s'
-              else error "Incompatible reference genome."
+    go s = do hs :> s' <- lift . S.toStrict . S.splitAt 4 . S.drop 1 . S.dropWhile (/= 0) $ s
+              let hv = B.foldr (\b a -> fromIntegral b .|. shiftL a 8) 0 hs :: Word32
+              if hv == fromIntegral (hash (nrss_chroms r, nrss_lengths r))
+                  then decodeLump s'
+                  else error "Incompatible reference genome."
 
 
 getRefPath :: Monad m => S.ByteString m r -> m (Maybe FilePath, S.ByteString m r)
@@ -769,7 +724,7 @@ decodeMany :: Maybe FilePath -> [FilePath]
            -> ( Either String NewRefSeqs -> V.Vector (Stream Lump IO ()) -> IO r ) -> IO r
 decodeMany mrs fs kk =
     withFiles fs ReadMode $ \hdls -> do
-        (rps,raws) <- unzip <$> mapM (getRefPath . decomp' . S.fromHandle) hdls
+        (rps,raws) <- unzip <$> mapM (getRefPath . decomp . S.fromHandle) hdls
         rs <- case mrs of
                 Just fp -> Right <$> liftIO (readTwoBit fp)
                 Nothing -> do
@@ -778,8 +733,7 @@ decodeMany mrs fs kk =
                         fp : _ -> Right <$> liftIO (readTwoBit fp)
                         [    ] -> return . Left $ "No reference found.  Looked for it at "
                                     ++ intercalate ", " (catMaybes rps) ++ "."
-        raws' <- mapM S.toLazy_ raws
-        kk rs (V.fromList $ map (fix2stream isDone . decode rs) raws')
+        kk rs (V.fromList $ map (decode rs) raws)
   where
     withFiles [      ] _iom k = k []
     withFiles (fp:fps)  iom k =
@@ -802,32 +756,11 @@ encodeHeader r = byteString "HEF\3" <>
 
 -- | Diff between a reference and a sample in string format.  The sample
 -- is treated as diploid.
-gendiff :: (a -> RefSeqView a) -> a -> L.ByteString -> Fix Lump -> Fix Lump
-gendiff view = generic
-  where
-    isN        c = c == c2w 'N' || c == c2w 'n' || c == c2w '-'
-    eq (N2b a) b = b == c2w 'Q' || b == c2w 'q' ||
-                   "TCAG" `B.index` fromIntegral a == b ||
-                   "tcag" `B.index` fromIntegral a == b
-
-    generic !ref !smp =
-        case (L.uncons smp, view ref) of
-            (Nothing, _)    -> id
-            (_, NilRef)     -> id
-            (_, l :== ref') -> Fix . Ns l . generic ref' (L.drop (fromIntegral l) smp)
-            (Just (x, smp'), u :^ ref')
-                | x .&. 0x7F <= 32             -> generic ref  smp'
-                | isN  x    -> Fix . Ns       1 . generic ref' smp'
-                | eq u x    -> Fix . Eqs2     1 . generic ref' smp'
-                | otherwise -> Fix . encVar u x . generic ref' smp'
-
-
--- | Generic diff between two aligned strings using "streaming" code.
 --
 -- XXX  We should deal with gaps, now that we can actually encode them
-{-# INLINE gendiff' #-}
-gendiff' :: Monad m => (a -> RefSeqView a) -> a -> S.ByteString m r -> Stream Lump m r
-gendiff' view = generic
+{-# INLINE gendiff #-}
+gendiff :: Monad m => (a -> RefSeqView a) -> a -> S.ByteString m r -> Stream Lump m r
+gendiff view = generic
   where
     isN        c = c == c2w 'N' || c == c2w 'n' || c == c2w '-'
     isNN (N2b a) = a > 3
@@ -897,34 +830,23 @@ encTwoNucs (N2b r) ns = encTwoVars $ xor ns (r .|. shiftL r 2)
 encTwoVars :: Word8 -> a -> Lump a
 encTwoVars vs = fromMaybe (Ns 1) $ vv V.!? fromIntegral vs
   where
-    !vv = [ Eqs2 1,    RefTrans,    RefCompl,    RefTCompl
-          , RefTrans,  Trans2,      TransCompl,  TransTCompl
-          , RefCompl,  TransCompl,  Compl2,      ComplTCompl
-          , RefTCompl, TransTCompl, ComplTCompl, TCompl2
+    !vv = V.fromList [ Eqs2 1,    RefTrans,    RefCompl,    RefTCompl
+                     , RefTrans,  Trans2,      TransCompl,  TransTCompl
+                     , RefCompl,  TransCompl,  Compl2,      ComplTCompl
+                     , RefTCompl, TransTCompl, ComplTCompl, TCompl2
 
-          , Eqs1 1, Trans1, Compl1, TCompl1
-          , Eqs1 1, Trans1, Compl1, TCompl1
-          , Eqs1 1, Trans1, Compl1, TCompl1
-          , Eqs1 1, Trans1, Compl1, TCompl1 ]
+                     , Eqs1 1, Trans1, Compl1, TCompl1
+                     , Eqs1 1, Trans1, Compl1, TCompl1
+                     , Eqs1 1, Trans1, Compl1, TCompl1
+                     , Eqs1 1, Trans1, Compl1, TCompl1 ]
 
-diff2' :: Monad m => (() -> NewRefSeq) -> S.ByteString m r -> Stream Lump m r
-diff2' = gendiff' viewNRS . ($ ())
+diff2 :: Monad m => (() -> NewRefSeq) -> S.ByteString m r -> Stream Lump m r
+diff2 = gendiff viewNRS . ($ ())
 
-diff' :: Monad m => L.ByteString -> S.ByteString m r -> Stream Lump m r
-diff' = gendiff' viewLBS
+diff :: Monad m => B.ByteString -> B.ByteString -> Stream Lump m ()
+diff s1 = gendiff viewBS s1 . S.fromStrict
   where
-    viewLBS = maybe NilRef (\(a,b) -> fromCode (a .|. 32) :^ b) . L.uncons
-
-    fromCode c | c == c2w 't' = N2b 0
-               | c == c2w 'c' = N2b 1
-               | c == c2w 'a' = N2b 2
-               | c == c2w 'g' = N2b 3
-               | otherwise =  N2b 255
-
-diff :: L.ByteString -> L.ByteString -> Fix Lump -> Fix Lump
-diff = gendiff viewLBS
-  where
-    viewLBS = maybe NilRef (\(a,b) -> fromCode (a .|. 32) :^ b) . L.uncons
+    viewBS = maybe NilRef (\(a,b) -> fromCode (a .|. 32) :^ b) . B.uncons
 
     fromCode c | c == c2w 't' = N2b 0
                | c == c2w 'c' = N2b 1
@@ -1004,26 +926,4 @@ patch ref = case unconsNRS ref of
                 Ins1      _ a -> clear a
                 Ins2      _ a -> clear a
                 InsH      _ a -> clear a-}
-
-
-
--- XXX  Stolen from data-fix.  If we migrate completely to streaming,
--- this isn't needed anymore.
-newtype Fix f = Fix { unFix :: f (Fix f) }
-
-ana :: Functor f => (a -> f a) -> (a -> Fix f)
-ana f = Fix . fmap (ana f) . f
-
--- XXX adapters until we can get rid of Fix...
--- (specialized to IO so we can unsafeInterleaveIO it)
--- stream2fix :: Traversable f => (r -> Fix f) -> Stream f IO r -> IO (Fix f)
--- stream2fix end = inspect >=> \case
-    -- Left   r -> return $ end r
-    -- Right fs -> fmap Fix $ mapM (unsafeInterleaveIO . stream2fix end) fs
-
-{-# DEPRECATED fix2stream "switch to streams!" #-}
-fix2stream :: (Monad m, Functor f) => (f (Fix f) -> Bool) -> Fix f -> Stream f m ()
-fix2stream term x = if term (unFix x)
-                    then wrap . fmap (fix2stream term) $ unFix x
-                    else pure ()
 

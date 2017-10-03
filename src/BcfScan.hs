@@ -4,7 +4,7 @@ module BcfScan ( readBcf, decodeBcf ) where
 -- first individual.  Should allow for a handful of shortcuts...
 
 import Bio.Prelude
-import Util                     ( decomp' )
+import Util                     ( decomp )
 import VcfScan                  ( RawVariant(..), hashChrom )
 
 import Foreign.C.Types          ( CChar )
@@ -22,8 +22,7 @@ import qualified Data.Vector.Unboxed             as V
 import qualified Streaming.Prelude               as Q
 
 readBcf :: FilePath -> (Stream (Of RawVariant) IO () -> IO r) -> IO r
-readBcf fp k = withFile fp ReadMode $ k . decodeBcf . decomp' . S.fromHandle
--- XXX readBcf fp = decodeBcf . decomp =<< L.readFile fp
+readBcf fp k = withFile fp ReadMode $ k . decodeBcf . decomp . S.fromHandle
 
 -- Skip over header, for now we won't parse it.  This fails if GT is not
 -- the first individual field that's encoded, but that should always be
@@ -64,7 +63,6 @@ getvars !tab strs !str = go 0
                 -- hit the end here on properly formatted files.
                 then do (hd,tl) <- either (error "Short record.") id <$> lift (S.nextChunk strs)
                         getvars tab tl (B.append (B.drop off str) hd)
-                        -- XXX  getvars tab (tail strs) (B.append (B.drop off str) (head strs))
 
                 else do !v1 <- liftIO $ B.unsafeUseAsCString str $ \p0 -> do
                                       let !p = plusPtr p0 off
@@ -75,8 +73,6 @@ getvars !tab strs !str = go 0
                                       !rv_gt    <- get_gts         (plusPtr p (fromIntegral l_shared + 8))
                                       return $! RawVariant{ rv_chrom = tab V.! refid, .. }
                         v1 `Q.cons` go (fromIntegral l_tot + off)
-                        -- XXX  vs <- unsafeInterleaveIO $ go (fromIntegral l_tot + off)
-                        -- return (v1:vs)
 
 
 -- skip over variant ID, then get alleles

@@ -118,7 +118,7 @@ importHetfa ref smps = S.mwrap $ do
                 pure r
   where
     enc2 :: MonadIO m => Int -> S.ByteString m r -> m (Of PackedLump r)
-    enc2 i sq = encodeLumpToMem $ diff2' (nrss_seqs ref !! i) sq >>= yields . Break
+    enc2 i sq = encodeLumpToMem $ diff2 (nrss_seqs ref !! i) sq >>= yields . Break
 
     fold_1 :: MonadIO m => I.IntMap PackedLump -> Stream (FastaSeq m) m r -> m (I.IntMap PackedLump, r)
     fold_1 !acc s = inspect s >>= \case
@@ -157,10 +157,11 @@ main_maf :: [String] -> IO ()
 main_maf args = do
     (maffs,ConfMaf{..}) <- parseFileOpts conf_maf (mk_opts "maf" "[maf-file...]" opts_maf) args
     ref <- readTwoBit conf_maf_reference
-    withFile conf_maf_output WriteMode $ \hdl ->
-        L.hPut hdl . encodeGenome =<<
-           foldM (\g f -> parseMaf (conf_maf_ref_species, conf_maf_oth_species)
-                                   (nrss_chroms ref) g . decomp =<< L.readFile f)
+    withFile conf_maf_output WriteMode $ \ohdl ->
+        L.hPut ohdl . encodeGenome =<<
+           foldM (\g f -> withFile f ReadMode $
+                            parseMaf (conf_maf_ref_species, conf_maf_oth_species)
+                                     (nrss_chroms ref) g . decomp . S.fromHandle)
                  emptyGenome maffs
 
 
@@ -193,19 +194,17 @@ main_patch :: [String] -> IO ()
 main_patch args = do
     ConfPatch{..} <- parseOpts defaultPatchConf (mk_opts "patch" [] opts_patch) args
     withFile conf_patch_sample ReadMode $ \hdli -> do
-        (mref, raw) <- getRefPath $ decomp' $ S.fromHandle hdli
+        (mref, raw) <- getRefPath $ decomp $ S.fromHandle hdli
         ref <- readTwoBit $ either (\e -> fromMaybe e mref) id conf_patch_reference
 
-        raw' <- S.toLazy_ raw
         conf_patch_output $ \hdlo ->
             patchFasta hdlo conf_patch_width
-                (nrss_chroms ref) (nrss_seqs ref)
-                (fix2stream isDone $ decode (Right ref) raw')
+                (nrss_chroms ref) (nrss_seqs ref) (decode (Right ref) raw)
 
 main_dumplump :: [String] -> IO ()
 main_dumplump [ref,inf] = do rs <- readTwoBit ref
-                             debugLump . fix2stream isDone . decode (Right rs) . decomp =<< L.readFile inf
-main_dumplump [  inf  ] =    debugLump . fix2stream isDone . decode (Left "no reference given") . decomp =<< L.readFile inf
+                             withFile inf ReadMode $ debugLump . decode (Right rs) . decomp . S.fromHandle
+main_dumplump [  inf  ] =    withFile inf ReadMode $ debugLump . decode (Left "no reference given") . decomp . S.fromHandle
 main_dumplump     _     =    hPutStrLn stderr "Usage: dumplump [foo.hef]"
 
 

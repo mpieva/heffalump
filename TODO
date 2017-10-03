@@ -1,3 +1,5 @@
+- Stream (Of Lump) instead of Stream Lump?
+
 - Support indels where it makes sense ([bv]cf, bam, emf/maf)
 
 - Retain phasing information ([bv]cf only?)
@@ -9,4 +11,3 @@
 
 - C-library for reading and merging
 
-- Uniformly replace 'Fix' with 'Stream'

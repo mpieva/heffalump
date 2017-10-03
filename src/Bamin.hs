@@ -169,7 +169,7 @@ encodePiles ref tgts = S.mwrap $ do
                                       return $! I.insert i lump m
 
 importPile :: Monad m => Q.Stream Lump (Iteratee [Var1] m) ()
-importPile = normalizeLump' $ generic (Refseq 0) 0
+importPile = normalizeLump $ generic (Refseq 0) 0
   where
     generic !rs !pos = Q.effect $ tryHead >>= \case
         Nothing -> return $ Q.yields (Break ())

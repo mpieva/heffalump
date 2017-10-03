@@ -73,6 +73,7 @@ executable heffalump
                        DeriveTraversable,
                        ForeignFunctionInterface,
                        OverloadedLists,
+                       Rank2Types,
                        ScopedTypeVariables
 
   ghc-options:         -Wall -fprof-auto

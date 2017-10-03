@@ -40,7 +40,7 @@ import Foreign.Storable                     ( peekByteOff )
 import Streaming
 import System.Console.GetOpt
 import System.Directory                     ( makeAbsolute )
-import System.IO                            ( hPutStrLn, stdout, stderr )
+import System.IO                            ( hPutStrLn, stdout, stderr, withFile, IOMode(..) )
 import System.IO.Unsafe                     ( unsafeDupablePerformIO )
 
 #if MIN_VERSION_biohazard(0,6,16)
@@ -53,7 +53,8 @@ import qualified Data.ByteString                as B
 import qualified Data.ByteString.Builder        as B
 import qualified Data.ByteString.Char8          as C
 import qualified Data.ByteString.Lazy.Char8     as L
-import qualified Data.ByteString.Short          as S
+import qualified Data.ByteString.Short          as H
+import qualified Data.ByteString.Streaming.Char8      as S
 import qualified Data.ByteString.Unsafe         as B
 import qualified Data.Vector.Unboxed            as U
 import qualified Streaming.Prelude              as Q
@@ -322,11 +323,15 @@ main_fato2bit args = do
     ( fs, fp ) <- parseFileOpts (error "no output file given")
                                 (mk_opts "fatotwobit" "[fasta-file...]" opts_fato2bit) args
 
-    L.writeFile fp . faToTwoBit . L.concat . map decomp =<<
-        mapM l'readFile (if null fs then ["-"] else fs)
+    withFiles (if null fs then ["-"] else fs) $
+        L.writeFile fp <=< faToTwoBit
   where
-    l'readFile "-" = L.getContents
-    l'readFile  f  = L.readFile f
+    withFiles [      ] k = k $ pure ()
+    withFiles ("-":fs) k = withFiles fs $ \s ->
+                               k $ decomp (S.fromHandle stdin) >> s
+    withFiles ( f :fs) k = withFile f ReadMode $ \h ->
+                             withFiles fs $ \s ->
+                               k $ decomp (S.fromHandle h) >> s
 
 
 -- List of pairs of 'Word32's.  Specialized and unpacked to conserve
@@ -348,51 +353,55 @@ encodeL2i = go 0 mempty mempty
 -- We also have to buffer everything, since the header with the sequence
 -- names must be written first.  Oh joy.
 
-faToTwoBit :: L.ByteString -> L.ByteString
-faToTwoBit s0 = L.concat $ B.toLazyByteString header : map snd seqs
+faToTwoBit :: Monad m => S.ByteString m r -> m L.ByteString
+faToTwoBit s0 = do
+    seqs <- get_each [] s0
+
+    let offset0 = 16 + 5 * length seqs + sum (map (H.length . fst) seqs)
+        offsets = scanl (\a b -> a + fromIntegral (L.length b)) offset0 $ map snd seqs
+
+        header = B.word32LE 0x1A412743 <> B.word32LE 0 <>
+                 B.word32LE (fromIntegral $ length seqs) <> B.word32LE 0 <>
+                 fold (zipWith (\nm off -> B.word8 (fromIntegral (H.length nm)) <>
+                                           B.shortByteString nm <>
+                                           B.word32LE (fromIntegral off))
+                               (map fst seqs) offsets)
+
+    return $ L.concat $ B.toLazyByteString header : map snd seqs
+
   where
-    seqs = get_each s0
-
-    offset0 = 16 + 5 * length seqs + sum (map (S.length . fst) seqs)
-    offsets = scanl (\a b -> a + fromIntegral (L.length b)) offset0 $ map snd seqs
-
-    header = B.word32LE 0x1A412743 <> B.word32LE 0 <>
-             B.word32LE (fromIntegral $ length seqs) <> B.word32LE 0 <>
-             fold (zipWith (\nm off -> B.word8 (fromIntegral (S.length nm)) <>
-                                       B.shortByteString nm <>
-                                       B.word32LE (fromIntegral off))
-                           (map fst seqs) offsets)
-
-    get_each s = let s1 = L.dropWhile (/= '>') s
-                     nm = L.takeWhile (not . isSpace) $ L.drop 1 s1
-                     s2 = L.dropWhile (/= '\n') s1
-                 in if L.null s1 then []
-                    else get_one (toShort $ L.toStrict nm) 0
-                                 (maxBound :!: L2i_Nil) (maxBound :!: L2i_Nil) (0 :!: 0 :!: []) s2
+    get_each acc s = do s1 <- S.uncons $ S.dropWhile (/= '>') s
+                        case s1 of
+                            Left    _    -> return $ reverse acc
+                            Right (_,s2) -> do
+                                nm :> s' <- S.toStrict $ S.break isSpace s2
+                                get_one acc (toShort nm) 0 (maxBound :!: L2i_Nil)
+                                        (maxBound :!: L2i_Nil) (0 :!: 0 :!: [])
+                                        (S.dropWhile (/= '\n') s')
 
 
-    get_one !nm !pos !_ns !_ms !_bs _s
+    get_one _acc !nm !pos _ns !_ms !_bs
         | pos .&. 0xFFFFFF == 0 && trace (show (nm,pos)) False = undefined
 
-    get_one !nm !pos !ns !ms !bs s = case L.uncons s of
-        Nothing -> fin
-        Just (c,s')
-            | isSpace c -> get_one nm pos ns ms bs s'
-            | c == '>'  -> fin
-            | otherwise -> get_one nm (succ pos)
+    get_one acc !nm !pos !ns !ms !bs = S.uncons >=> \case
+        Left    r       -> fin (pure r)
+        Right (c,s')
+            | isSpace c -> get_one acc nm pos ns ms bs s'
+            | c == '>'  -> fin (S.cons c s')
+            | otherwise -> get_one acc nm (succ pos)
                                    (collect_Ns ns pos c)
                                    (collect_ms ms pos c)
                                    (collect_bases bs c) s'
       where
-        fin = let ss' = case bs of (0 :!: _ :!: ss) -> ss
-                                   (n :!: w :!: ss) -> B.singleton (w `shiftL` (6-2*n)) : ss
-                  raw = B.toLazyByteString $
-                            B.word32LE pos <>
-                            encodeL2i (case ns of p :!: rs | p == maxBound -> rs ; p :!: rs -> L2i p pos rs) <>
-                            encodeL2i (case ms of p :!: rs | p == maxBound -> rs ; p :!: rs -> L2i p pos rs) <>
-                            B.word32LE 0 <>
-                            foldMap B.byteString (reverse ss')
-              in L.length raw `seq` (nm, raw) : get_each s
+        fin s = let ss' = case bs of (0 :!: _ :!: ss) -> ss
+                                     (n :!: w :!: ss) -> B.singleton (w `shiftL` (6-2*n)) : ss
+                    raw = B.toLazyByteString $
+                              B.word32LE pos <>
+                              encodeL2i (case ns of p :!: rs | p == maxBound -> rs ; p :!: rs -> L2i p pos rs) <>
+                              encodeL2i (case ms of p :!: rs | p == maxBound -> rs ; p :!: rs -> L2i p pos rs) <>
+                              B.word32LE 0 <>
+                              foldMap B.byteString (reverse ss')
+                in L.length raw `seq` get_each ((nm, raw) : acc) s
 
     collect_Ns (spos :!: rs) pos c
         | spos == maxBound && c `C.elem` "ACGTacgt" = maxBound :!: rs

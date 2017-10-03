@@ -118,7 +118,7 @@ readVcf fp k = do
     k $ Q.untilRight (getVariant sc)
 
 importVcf :: Monad m => GapCons -> [ B.ByteString ] -> Stream (Of RawVariant) m r -> Stream Lump m r
-importVcf ns = (.) normalizeLump' . go
+importVcf ns = (.) normalizeLump . go
   where
     -- We start the coordinate at one(!), for VCF is one-based.
     -- Pseudo-variants of the "no call" type must be filtered
