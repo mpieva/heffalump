@@ -4,6 +4,19 @@ module SillyStats (
     main_yaddayadda
                   ) where
 
+-- A note regarding F4 statistics:  With F4 defined as
+-- E(#(BABA)-#(ABBA)), the number of sites becomes important.  (Some
+-- sites may count fractionally, not sure about that.)  The difficulty
+-- is that invariant sites count, too, but sites with missing data
+-- don't.  Currently, we skip over both of those, which is a good thing
+-- for performance reasons.
+--
+-- What we could do:  Skip over stretches where everyone matches the
+-- reference, and count them.  Skip over stretches where nobody has
+-- data, and don't count them.  Sites where someone is missing data and
+-- everyone else matches the reference need to be processed
+-- individually.  This needs some modification to 'mergeLumpsWith'.
+
 import Bio.Prelude
 import Numeric.SpecFunctions            ( incompleteBeta )
 import System.Console.GetOpt
