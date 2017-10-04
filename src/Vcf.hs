@@ -17,8 +17,8 @@ import NewRef
 import Util
 import VcfScan
 
-type LumpXform = (Stream Lump IO () -> Stream Lump IO ())
-type GapCons = Int -> () -> Lump ()
+type LumpXform = (Stream (Of Lump) IO () -> Stream (Of Lump) IO ())
+type GapCons = Int -> Lump
 
 data ConfXcf = ConfXcf
     { conf_output  :: FilePath
@@ -117,30 +117,30 @@ readVcf fp k = do
     sc <- initVcf fp
     k $ Q.untilRight (getVariant sc)
 
-importVcf :: Monad m => GapCons -> [ B.ByteString ] -> Stream (Of RawVariant) m r -> Stream Lump m r
+importVcf :: Monad m => GapCons -> [ B.ByteString ] -> Stream (Of RawVariant) m r -> Stream (Of Lump) m r
 importVcf ns = (.) normalizeLump . go
   where
     -- We start the coordinate at one(!), for VCF is one-based.
     -- Pseudo-variants of the "no call" type must be filtered
     -- beforehand, see 'cleanVcf'.
-    go [    ] = wrap . Break . lift . Q.effects
+    go [    ] = Q.cons Break . lift . Q.effects
     go (c:cs) = generic (hashChrom c) 1
       where
         generic !hs pos = lift . Q.next >=> \case
-            Left r                    -> wrap . Break $ pure r
+            Left r                    -> Q.cons Break $ pure r
             Right (var1,vars)
-                | hs /= rv_chrom var1 -> wrap . Break $ go cs (var1 `Q.cons` vars)
+                | hs /= rv_chrom var1 -> Q.cons Break $ go cs (var1 `Q.cons` vars)
 
                 -- long gap, creates Ns or Eqs2
-                | rv_pos var1 > pos   -> yields (ns (rv_pos var1 - pos) ()) >>
+                | rv_pos var1 > pos   -> Q.cons (ns (rv_pos var1 - pos)) $
                                          generic hs (rv_pos var1) (var1 `Q.cons` vars)
 
                 -- positions must match now
                 | rv_pos var1 < pos   -> error $ "Got variant position " ++ show (rv_pos var1)
                                               ++ " when expecting " ++ show pos ++ " or higher."
 
-                | isVar var1          -> wrap . get_var_code var1 $ generic hs (succ pos) vars
-                | otherwise           -> wrap . Eqs2     1        $ generic hs (succ pos) vars
+                | isVar var1          -> Q.cons (get_var_code var1) $ generic hs (succ pos) vars
+                | otherwise           -> Q.cons (Eqs2     1       ) $ generic hs (succ pos) vars
 
 
     -- *sigh*  Have to turn a numeric genotype into a 'NucCode'.  We

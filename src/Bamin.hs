@@ -17,7 +17,7 @@ import qualified Data.ByteString.Lazy           as L
 import qualified Data.ByteString.Streaming      as S
 import qualified Data.IntMap.Strict             as I
 import qualified Data.Vector.Unboxed            as U
-import qualified Streaming                      as Q
+import qualified Streaming.Prelude              as Q
 
 import Lump
 import NewRef
@@ -163,36 +163,36 @@ encodePiles ref tgts = S.mwrap $ do
                                       m <$ skipToEof
 
                         Just  i -> do liftIO $ hPrintf stderr "\nTarget %s becomes index %d.\n" (unpack rn) i
-                                      lump Q.:> _ <- encodeLumpToMem $ importPile >> Q.yields (Break ())
+                                      lump Q.:> _ <- encodeLumpToMem $ importPile >> Q.yield Break
                                       liftIO $ hPrintf stderr "\nTarget %s becomes index %d, %d bytes.\n"
                                                     (unpack rn) i (L.length $ unpackLump lump)
                                       return $! I.insert i lump m
 
-importPile :: Monad m => Q.Stream Lump (Iteratee [Var1] m) ()
+importPile :: Monad m => Q.Stream (Q.Of Lump) (Iteratee [Var1] m) ()
 importPile = normalizeLump $ generic (Refseq 0) 0
   where
-    generic !rs !pos = Q.effect $ tryHead >>= \case
-        Nothing -> return $ Q.yields (Break ())
+    generic !rs !pos = lift tryHead >>= \case
+        Nothing -> Q.yield Break
         Just var1
             -- switch to next chromosome
-            | rs /= v_refseq var1 -> return $ do
-                forM_ [succ rs .. v_refseq var1] $ \_ -> Q.yields (Break ())
+            | rs /= v_refseq var1 -> do
+                forM_ [succ rs .. v_refseq var1] $ \_ -> Q.yield Break
                 when (v_loc var1 > 0) $
-                    Q.yields $ Ns (fromIntegral $ v_loc var1) ()
-                Q.yields $ enc_var (v_call var1) ()
+                    Q.yield $ Ns (fromIntegral $ v_loc var1)
+                Q.yield $ enc_var (v_call var1)
                 generic (v_refseq var1) (v_loc var1 + 1)
 
             -- gap, creates Ns
-            | v_loc var1 >= pos -> return $ do
+            | v_loc var1 >= pos -> do
                 when (v_loc var1 > pos) $
-                    Q.yields $ Ns (fromIntegral $ v_loc var1 - pos) ()
-                Q.yields $ enc_var (v_call var1) ()
+                    Q.yield $ Ns (fromIntegral $ v_loc var1 - pos)
+                Q.yield $ enc_var (v_call var1)
                 generic rs (v_loc var1 + 1)
 
             | otherwise -> error $ "Got variant position " ++ show (v_refseq var1, v_loc var1)
                                 ++ " when expecting " ++ show pos ++ " or higher."
 
-    enc_var :: Var2b -> a -> Lump a
+    enc_var :: Var2b -> Lump
     enc_var (V2b 0) = Eqs1 1     -- ref equals alt, could both be N
     enc_var (V2b 1) = Trans1     -- transition
     enc_var (V2b 2) = Compl1     -- complement

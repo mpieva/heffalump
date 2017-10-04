@@ -9,6 +9,7 @@ import qualified Data.ByteString.Char8           as B
 import qualified Data.ByteString.Lazy.Char8      as L
 import qualified Data.ByteString.Streaming       as S
 import qualified Data.IntMap                     as I
+import qualified Streaming.Prelude               as Q
 
 import Bamin
 import Eigenstrat
@@ -118,7 +119,7 @@ importHetfa ref smps = S.mwrap $ do
                 pure r
   where
     enc2 :: MonadIO m => Int -> S.ByteString m r -> m (Of PackedLump r)
-    enc2 i sq = encodeLumpToMem $ diff2 (nrss_seqs ref !! i) sq >>= yields . Break
+    enc2 i sq = encodeLumpToMem $ diff2 (nrss_seqs ref !! i) sq <* Q.yield Break
 
     fold_1 :: MonadIO m => I.IntMap PackedLump -> Stream (FastaSeq m) m r -> m (I.IntMap PackedLump, r)
     fold_1 !acc s = inspect s >>= \case
@@ -208,11 +209,11 @@ main_dumplump [  inf  ] =    withFile inf ReadMode $ debugLump . decode (Left "n
 main_dumplump     _     =    hPutStrLn stderr "Usage: dumplump [foo.hef]"
 
 
-patchFasta :: Handle -> Int64 -> [B.ByteString] -> [() -> NewRefSeq] -> Stream Lump IO r -> IO r
+patchFasta :: Handle -> Int64 -> [B.ByteString] -> [() -> NewRefSeq] -> Stream (Of Lump) IO r -> IO r
 patchFasta hdl wd = p1
   where
-    p1 [    ]     _  p = mapsM_ (foldr (\a _ -> return a) undefined) p
-    p1      _ [    ] p = mapsM_ (foldr (\a _ -> return a) undefined) p
+    p1 [    ]     _  p = Q.effects p
+    p1      _ [    ] p = Q.effects p
     p1 (c:cs) (r:rs) p = do hPutStrLn hdl $ '>' : B.unpack c
                             p2 (p1 cs rs) 0 (patch (r ()) p)
 
