@@ -21,7 +21,6 @@ module Emf ( main_emf
 
 
 import Bio.Prelude               hiding ( compl )
-import Codec.Compression.GZip
 import Streaming
 import System.Console.GetOpt
 import System.Directory                 ( getDirectoryContents )
@@ -31,7 +30,6 @@ import System.IO
 import qualified Data.Attoparsec.ByteString.Char8   as A
 import qualified Data.ByteString.Char8              as B
 import qualified Data.ByteString.Lazy               as L
-import qualified Data.ByteString.Lazy.Char8         as C
 import qualified Data.ByteString.Streaming.Char8    as S
 import qualified Data.IntMap.Strict                 as I
 import qualified Streaming.Prelude                  as Q
@@ -201,20 +199,23 @@ data EmfBlock = EmfBlock { emf_tree :: Tree Label
                          , emf_seqs :: [B.ByteString] }
     deriving Show
 
--- XXX Would be so cool if this could stream.
-scanOneBlock :: [B.ByteString] -> ( EmfBlock, [B.ByteString] )
-scanOneBlock inp = ( EmfBlock tree seqs, drop 1 remainder )
+scanBlocks :: Monad m => Stream (Of B.ByteString) m r -> Stream (Of EmfBlock) m r
+scanBlocks inp = do
+        rngs :> inp1 <- lift . Q.toList .
+                        Q.zipWith parse_seq_name (Q.enumFrom 0) .
+                        Q.span (B.isPrefixOf "SEQ ") .              -- names and indices of sequences
+                        Q.dropWhile (B.all A.isSpace) .             -- and empty lines
+                        Q.dropWhile ("#" `B.isPrefixOf`) $ inp      -- get rid of comments
+
+        lift (Q.next inp1) >>= \case
+            -- We detect EOF here.  'rngs' will be empty, too, which is not a problem.
+            Left r -> pure r
+            Right (treeln, inp1a) -> do
+                Right ("DATA", inp2) <- lift $ Q.next inp1a
+                let tree = relabel rngs $ parse_tree treeln         -- topology of tree w/ indices
+                datalns :> remainder <- lift $ Q.toList $ Q.map (B.map toUpper) $ Q.span ("//" /=) inp2
+                EmfBlock tree (B.transpose datalns) `Q.cons` scanBlocks (Q.drop 1 remainder)
   where
-    (seqlns, treeln : "DATA" : inp2) = span (B.isPrefixOf "SEQ ") .           -- names and indices of sequences
-                                       dropWhile (B.all A.isSpace) $          -- and empty lines
-                                       dropWhile ("#" `B.isPrefixOf`) inp     -- get rid of comments
-
-    rngs = zipWith parse_seq_name [0..] seqlns
-    tree = relabel rngs $ parse_tree treeln                                   -- topology of tree w/ indices
-
-    (datalns, remainder) = span ("//" /=) inp2
-    seqs = B.transpose . map (B.map toUpper) $ datalns
-
     parse_seq_name i s = Label i (spc, B.drop 1 race) (str $ Range (Pos sqn (beg-1)) (end-beg+1))
       where
         ("SEQ":sr:sqn:beg':end':str':_) = B.words s
@@ -232,6 +233,7 @@ scanOneBlock inp = ( EmfBlock tree seqs, drop 1 remainder )
             <$> A.takeWhile (\c -> A.isAlpha_ascii c || A.isDigit c || c == '_' || c == '.')
             <*> (A.char '[' *> (A.char '+' <|> A.char '-'))
             <*> (A.char ']' *> A.char ':' *> A.double)
+
 
 data Label = Label Int Species Range deriving Show
 data Tree label = Branch (Tree label) (Tree label) label | Leaf label deriving Show
@@ -340,18 +342,6 @@ consensus_seq (x:xs)
         error "consensus_seq: sequences have uneuqal lengths."
 
 
--- | Scans a directory with gzipped EMF files in arbitrary order.  (The
--- files are not sorted internally, so there is no point in trying any
--- particular order.)
-scan_all_emf :: [FilePath] -> IO [EmfBlock]
-scan_all_emf fs = do
-    foldr (\fp k -> do bs  <- unsafeInterleaveIO k
-                       let go [] = bs
-                           go ls = case scanOneBlock ls of (b,ls') -> b : go ls'
-                       go . map L.toStrict . C.lines . decompress <$> L.readFile fp)
-          (return []) fs
-
-
 data OptsEmf = OptsEmf {
     emf_output :: FilePath,
     emf_reference :: FilePath,
@@ -387,10 +377,14 @@ main_emf args = do
     ( emfs, OptsEmf{..} ) <- parseFileOpts opts_emf_default (mk_opts "emf" "[emf-file...]" opts_emf) args
     ref <- readTwoBit emf_reference
 
-    !genome <- foldM (collectTrees (nrss_chroms ref) (emf_select emf_ref_species)) emptyGenome
-               =<< scan_all_emf
+
+    let cons = collectTrees (nrss_chroms ref) (emf_select emf_ref_species)
+    !genome <- foldM (\g fp -> withFile fp ReadMode $
+                                    Q.foldM_ cons (return g) return . scanBlocks .
+                                    mapsM (S.toStrict) . S.lines . decomp . S.fromHandle)
+                     emptyGenome
                -- this is just so the one path at MPI that makes sense
-               -- doesn't need to be typed over and over
+               -- doesn't need to be typed over and over again
                =<< case emfs of
                     [] -> let dir = "/mnt/expressions/martin/sequence_db/epo/epo_6_primate_v66"
                           in map (dir </>) . filter (".emf.gz" `isSuffixOf`) <$> getDirectoryContents dir
