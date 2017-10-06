@@ -1,5 +1,6 @@
 module Util
-    ( decomp
+    ( Xform
+    , decomp
     , gunzip
     , gzip
     , mk_opts
@@ -20,6 +21,8 @@ import qualified Data.ByteString                 as B
 import qualified Data.ByteString.Streaming       as Q ( nextByte, cons' )
 import qualified Data.ByteString.Streaming.Char8 as S
 import qualified Codec.Compression.Zlib.Internal as Z
+
+type Xform a = Stream (Of a) IO () -> Stream (Of a) IO ()
 
 -- | Checks if the input is GZip at all, returns it unchanged if it
 -- isn't.  Else runs gunzip.
@@ -123,52 +126,52 @@ parseFasta :: Monad m => S.ByteString m r -> Stream (FastaSeq m) m r
 parseFasta = go . ignoreBody . S.lines
   where
     go :: Monad m => Stream (S.ByteString m) m r -> Stream (FastaSeq m) m r
-    go s = effect (inspect s >>= go')
+    go = lift . inspect >=> go'
 
-    go' :: Monad m => Either r (S.ByteString m (Stream (S.ByteString m) m r)) -> m (Stream (FastaSeq m) m r)
-    go' (Left    r) = return $ pure r
+    go' :: Monad m => Either r (S.ByteString m (Stream (S.ByteString m) m r)) -> Stream (FastaSeq m) m r
+    go' (Left    r) = pure r
     go' (Right hdr) = do
-                h :> ls <- S.toStrict hdr
+                h :> ls <- lift $ S.toStrict hdr
                 let name = B.drop 1 $ B.takeWhile (not . is_space_w8) h
-                return $ yields (FastaSeq name (S.concat (takeBody ls))) >>= go
+                yields (FastaSeq name (S.concat (takeBody ls))) >>= go
 
     is_space_w8 :: Word8 -> Bool
     is_space_w8 x = (x .&. 0x7F) <= 32
 
     -- Take lines as long as they don't start with ">"
     takeBody :: Monad m => Stream (S.ByteString m) m r -> Stream (S.ByteString m) m (Stream (S.ByteString m) m r)
-    takeBody s = effect $ inspect s >>= \case
+    takeBody = lift . inspect >=> \case
         -- empty input stream:  return an empty stream that returns an
         -- empty stream.
-        Left r -> return $ pure (pure r)     -- ?!
+        Left r -> pure (pure r)     -- ?!
         -- inspect first line...
-        Right line -> S.uncons line >>= \case
+        Right line -> lift (S.uncons line) >>= \case
             -- empty line:  return it and continue
-            Left      s'      ->  return $ yields (pure s') >>= takeBody
+            Left      s'      -> yields (pure s') >>= takeBody
 
             -- header line:  return empty stream that returns an empty
             -- stream that starts with the restored line.
-            Right ('>',line') -> return $ pure (wrap (S.cons '>' line'))
+            Right ('>',line') -> pure (wrap (S.cons '>' line'))
 
             -- body line:  return a stream that begins with it, recurse
             -- on its tail
-            Right ( c ,line') -> return $ yields (S.cons c line') >>= takeBody
+            Right ( c ,line') -> yields (S.cons c line') >>= takeBody
 
     ignoreBody :: Monad m => Stream (S.ByteString m) m r -> Stream (S.ByteString m) m r
-    ignoreBody s = effect $ inspect s >>= \case
+    ignoreBody = lift . inspect >=> \case
         -- empty input stream:  return an empty stream
-        Left r -> return $ pure r
+        Left r -> pure r
         -- inspect first line...
-        Right line -> S.uncons line >>= \case
+        Right line -> lift (S.uncons line) >>= \case
             -- empty line:  continue
-            Left      s'      ->  return $ ignoreBody s'
+            Left      s'      -> ignoreBody s'
 
             -- header line:
             -- return a stream that starts with the restored line.
-            Right ('>',line') -> return $ wrap (S.cons '>' line')
+            Right ('>',line') -> wrap (S.cons '>' line')
 
             -- body line:  continue
-            Right ( _ ,line') -> return $ ignoreBody $ effect (S.effects line')
+            Right ( _ ,line') -> ignoreBody $ effect (S.effects line')
 
 
 readNumIO :: String -> IO Int

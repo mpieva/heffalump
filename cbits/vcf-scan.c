@@ -95,29 +95,45 @@ int scan_vcf1( struct scanner *sc )
         skip() ;
         char *thetab = p-1 ; // the tab between ref and alt
 
-        // optionally skip invariant records
-        if( 1 /**p != '.'*/ ) {
-            // if alt=='.', we store no alt alleles 
+        // if alt=='.', we store no alt alleles 
+        if( *p == '.' ) {
+            skip() ;
+            sc->ealleles = p-3 ;
+        } else {
+            skip() ;
+            sc->ealleles = p-1 ;
+        }
+
+        // skip qual, filter, info, format, but not the last tab
+        skip() ;
+        skip() ;
+        skip() ;
+        while( *p != '\t' ) inc() ;
+
+        // to end of line, read genotypes
+        uint8_t *pgts = sc->gts ;
+        while( *p != '\n' ) {
+            inc() ;
+            // scan one diploid GT.  have to allow for more than one
+            // digit :(
             if( *p == '.' ) {
-                skip() ;
-                sc->ealleles = p-3 ;
+                *pgts++ = 0 ;
+                inc() ;
             } else {
-                skip() ;
-                sc->ealleles = p-1 ;
+                uint8_t g = 0 ;
+                while (*p >= '0' && *p <= '9') {
+                    g = 10*g + *p - '0' ;
+                    inc() ; 
+                }
+                *pgts++ = (g+1) << 1 ;
             }
 
-            // skip qual, filter, info, format, but not the last tab
-            skip() ;
-            skip() ;
-            skip() ;
-            while( *p != '\t' ) inc() ;
-
-            // to end of line, read genotypes
-            uint8_t *pgts = sc->gts ;
-            while( *p != '\n' ) {
+            if( *p != '|' && *p != '/' ) {
+                *pgts++ = -1 ;
+            } else {
+                uint8_t ph = *p == '|' ? 1 : 0 ;
                 inc() ;
-                // scan one diploid GT.  have to allow for more than one
-                // digit :(
+
                 if( *p == '.' ) {
                     *pgts++ = 0 ;
                     inc() ;
@@ -125,41 +141,18 @@ int scan_vcf1( struct scanner *sc )
                     uint8_t g = 0 ;
                     while (*p >= '0' && *p <= '9') {
                         g = 10*g + *p - '0' ;
-                        inc() ; 
-                    }
-                    *pgts++ = (g+1) << 1 ;
-                }
-
-                if( *p != '|' && *p != '/' ) {
-                    *pgts++ = -1 ;
-                } else {
-                    uint8_t ph = *p == '|' ? 1 : 0 ;
-                    inc() ;
-
-                    if( *p == '.' ) {
-                        *pgts++ = 0 ;
                         inc() ;
-                    } else {
-                        uint8_t g = 0 ;
-                        while (*p >= '0' && *p <= '9') {
-                            g = 10*g + *p - '0' ;
-                            inc() ;
-                        }
-                        *pgts++ = ((g+1) << 1) | ph ;
                     }
-                } 
+                    *pgts++ = ((g+1) << 1) | ph ;
+                }
+            } 
 
-                while( *p != '\t' && *p != '\n') inc() ;
-            }
-            // don't use the inc() macro here, we don't need more input
-            sc->next_work = ++p ;
-            *thetab = ',' ; // all alleles are now comma-separated
-            return 1 ;
-        } else {
-            while( *p != '\n') inc() ;
-            // don't use the inc() macro here, we don't need more input
-            sc->next_work = ++p ;
+            while( *p != '\t' && *p != '\n') inc() ;
         }
+        // don't use the inc() macro here, we don't need more input
+        sc->next_work = ++p ;
+        *thetab = ',' ; // all alleles are now comma-separated
+        return 1 ;
     }
     return 0 ;
 }

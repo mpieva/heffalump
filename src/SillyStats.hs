@@ -5,17 +5,19 @@ module SillyStats (
                   ) where
 
 -- A note regarding F4 statistics:  With F4 defined as
--- E(#(BABA)-#(ABBA)), the number of sites becomes important.  (Some
--- sites may count fractionally, not sure about that.)  The difficulty
--- is that invariant sites count, too, but sites with missing data
--- don't.  Currently, we skip over both of those, which is a good thing
--- for performance reasons.
+-- E(#(BABA)-#(ABBA)), the number of valid sites becomes important.  The
+-- difficulty is that invariant sites count as well, but sites with
+-- missing data don't.  Currently, we skip over both of those, which
+-- does good things for performance.
 --
 -- What we could do:  Skip over stretches where everyone matches the
 -- reference, and count them.  Skip over stretches where nobody has
 -- data, and don't count them.  Sites where someone is missing data and
 -- everyone else matches the reference need to be processed
 -- individually.  This needs some modification to 'mergeLumpsWith'.
+--
+-- Right now, counting of sites is in, but the invariant sites are still
+-- skipped.
 
 import Bio.Prelude
 import Numeric.SpecFunctions            ( incompleteBeta )
@@ -33,17 +35,17 @@ import Lump
 import NewRef
 import Util
 
-data Config m r = Config {
+data Config = Config {
     conf_blocksize  :: Int,
     conf_noutgroups :: Int,
     conf_nrefpanel  :: Int,
     conf_nafricans  :: Int,
-    conf_filter     :: Either String NewRefSeqs -> Stream (Of Variant) m r -> Stream (Of Variant) m r,
+    conf_filter     :: Either String NewRefSeqs -> Xform Variant,
     conf_regions    :: Maybe FilePath,
     conf_msg        :: String,
     conf_reference  :: Maybe FilePath }
 
-defaultConfig :: Config m r
+defaultConfig :: Config
 defaultConfig = Config 5000000 1 2 1 (const id) Nothing "" Nothing
 
 showPValue :: Double -> ShowS
@@ -69,38 +71,43 @@ showPValue x | x >= 0.002 = showFFloat (Just 3) x
 
 type CountFunction r = U.Vector Word8 -> S.Vector r
 
-data TwoD = TwoD !Double !Double
+data TwoD = TwoD !Double !Double !Double
 
 instance Storable TwoD where
     alignment _ = alignment (0::Double)
-    sizeOf    _ = 2 * sizeOf (0::Double)
+    sizeOf    _ = 3 * sizeOf (0::Double)
 
-    poke p (TwoD x y) = pokeElemOff (castPtr p) 0 x >>
-                        pokeElemOff (castPtr p) 1 y
+    poke p (TwoD x y z) = pokeElemOff (castPtr p) 0 x >>
+                          pokeElemOff (castPtr p) 1 y >>
+                          pokeElemOff (castPtr p) 2 z
     peek p = TwoD <$> peekElemOff (castPtr p) 0
                   <*> peekElemOff (castPtr p) 1
+                  <*> peekElemOff (castPtr p) 2
 
 instance Monoid TwoD where
-    mempty = TwoD 0 0
-    TwoD a b `mappend` TwoD a' b' = TwoD (a+a') (b+b')
+    mempty = TwoD 0 0 0
+    TwoD a b c `mappend` TwoD a' b' c' = TwoD (a+a') (b+b') (c+c')
 
 data SillyStats = SillyStats
-    { _silly_count       :: Double       -- ^ pseudo-count of successes
-    , _silly_total       :: Double       -- ^ pseudo-count of everything
-    , _silly_est         :: Double       -- ^ the point estimate
-    , _silly_var         :: Double       -- ^ variance (from block jackknife)
-    , _silly_p           :: Double }     -- ^ p-value (one-sided beta-test)
+    { _silly_count      :: !Double       -- ^ pseudo-count of successes
+    , _silly_total      :: !Double       -- ^ pseudo-count of everything
+    , _silly_sites      :: !Double       -- ^ number of valid sites
+    , _silly_est        :: !Double       -- ^ the point estimate
+    , _silly_var        :: !Double       -- ^ variance (from block jackknife)
+    , _silly_p          :: !Double }     -- ^ p-value (one-sided beta-test)
 
 gen_stats :: S.Vector TwoD -> V.Vector (S.Vector TwoD) -> [SillyStats]
 gen_stats full_counts blockstats = final_vals
   where
     -- We generate the count (k), the total (n), the result (k/n),
     -- the variance estimate (\sigma^2, from Jackknifing)
-    final_vals = [ SillyStats k n (2*k/n -1) (4*v)
+    final_vals = [ SillyStats k n f4 (2*k/n -1) (4*v)
                               (if n == 0 then 0/0 else pval (k/n) v)
                  | i <- [0 .. S.length full_counts - 1]
-                 , let TwoD k n = full_counts S.! i
-                 , let v        = blk_jackknife k n $ V.map (S.! i) blockstats ]
+                 , let TwoD k n t = full_counts S.! i
+                 , let v          = blk_jackknife k n $ V.map (S.! i) blockstats
+                 -- If we compute D, this is F4.  Else nobody cares.
+                 , let f4         = (k+k-n) / t ]
 
 
     -- p-value.  Use a Beta distribution with a=b=1/8V - 1/2 to match
@@ -133,8 +140,8 @@ blk_jackknife kk nn = divide . V.foldl' step (0 :!: (0::Int))
   where
     divide (s :!: l) = s / fromIntegral l
 
-    step (s :!: l) (TwoD kj mj) | mj == 0   =               s :!: succ l
-                                | otherwise = d / (nn-mj) + s :!: succ l
+    step (s :!: l) (TwoD kj mj _) | mj == 0   =               s :!: succ l
+                                  | otherwise = d / (nn-mj) + s :!: succ l
       where
         d = kj*kj / mj - 2 * kj * kk / nn + kk*kk*mj / (nn*nn)
 
@@ -179,27 +186,25 @@ kayvergence ngood callz = S.fromListN nstats
     -- number of ways to pick two good genomes and one ordinary one
     nstats = ngood * (ngood+1) * (ntot-2) `div` 2
 
--- | Counting for 'kayvergence'.  @aa@ is the number of combinations
--- that count as shared variation; @aa+bb@ is the number of combinations
--- that count as variation.  Their ratio will contribute to our final
--- estimate, but we need to weight it by the total number of
--- combinations, which is $\prod_i u_i+v_i$.
--- kaycounts :: Word8 -> Word8 -> Word8 -> (Double, Double)
-{-# INLINE kaycounts #-}
-kaycounts :: (Double, Double) -> (Double, Double) -> (Double, Double) -> TwoD
-kaycounts (u1,v1) (u2,v2) (u3,v3) = if nn > 0 then TwoD (aa/nn) ((aa+bb)/nn) else mempty
-    where
+    -- Counting for 'kayvergence'.  @aa@ is the number of combinations
+    -- that count as shared variation; @aa+bb@ is the number of
+    -- combinations that count as variation.  Their ratio will
+    -- contribute to our final estimate, but we need to weight it by the
+    -- total number of combinations, which is $\prod_i u_i+v_i$.
+    kaycounts (u1,v1) (u2,v2) (u3,v3) =
+            if nn > 0 then TwoD (aa/nn) ((aa+bb)/nn) 1 else mempty
+      where
         aa = u1 * v2 * v3 + v1 * u2 * u3
         bb = u1 * u2 * v3 + v1 * v2 * u3
         nn = (u1 + v1) * (u2 + v2) * (u3 + v3)
 
-opts_kiv :: Monad m => [ OptDescr (Config m r -> IO (Config m r)) ]
+opts_kiv :: [ OptDescr (Config -> IO Config) ]
 opts_kiv =
     [ Option "r" ["reference"] (ReqArg set_ref  "FILE") "Read reference from FILE (.2bit)"
     , Option "n" ["numgood"]   (ReqArg set_ngood "NUM") "The first NUM inputs are \"good\" genomes (1)"
     , Option "J" ["blocksize"] (ReqArg set_jack  "NUM") "Set blocksize for Jackknife to NUM bases (5M)"
     , Option "t" ["transversions"]   (NoArg set_tvonly) "Restrict to transversion sites"
-    , Option [ ] ["ignore-cpg"]        (NoArg set_no_cpg) "Ignore GpG sites (according to reference)"
+    , Option [ ] ["ignore-cpg"]      (NoArg set_no_cpg) "Ignore GpG sites (according to reference)"
     , Option "R" ["regions"]   (ReqArg set_rgns "FILE") "Restrict to regions in bed-file FILE" ]
   where
     set_ref    a c = return $ c { conf_reference = Just a }
@@ -219,7 +224,7 @@ main_kayvergence args = do
                  accum_stats conf_blocksize (kayvergence conf_noutgroups) $
                  conf_filter ref $ region_filter $ Q.concat $ mergeLumps 0 inps
 
-        let fmt1 (rn,sn,cn) (SillyStats k n r v _) =
+        let fmt1 (rn,sn,cn) (SillyStats k n _ r v _) =
                     [ Left $ "Kiv( " ++ rn ++ "; "
                     , Left $ sn ++ "; "
                     , Left $ cn
@@ -252,12 +257,9 @@ pattersonlbls nout nref labels =
 -- Kayvergence, we pick one from the outgroup, two from the ref panel,
 -- and one sample.
 
-pattersons :: Storable a
-           => ((Double,Double) -> (Double,Double) -> (Double,Double) -> (Double,Double) -> a)
-           -> Int -> Int -> U.Vector Word8 -> S.Vector a
-
-pattersons cfn nout nref callz = S.fromListN nstats
-    [ cfn (ex smp) (ex outg) (ex refA) (ex refB)
+pattersons :: Int -> Int -> U.Vector Word8 -> S.Vector TwoD
+pattersons nout nref callz = S.fromListN nstats
+    [ abbacounts (ex smp) (ex outg) (ex refA) (ex refB)
     | outg <- U.toList outcalls
     , refA:refs' <- tails $ U.toList refcalls
     , refB <- refs'
@@ -273,14 +275,15 @@ pattersons cfn nout nref callz = S.fromListN nstats
     nstats = U.length outcalls * U.length smpcalls *
              U.length refcalls * (U.length refcalls -1) `div` 2
 
-abbacounts :: (Double, Double) -> (Double, Double) -> (Double, Double) -> (Double, Double) -> TwoD
-abbacounts (u1,v1) (u2,v2) (u3,v3) (u4,v4) = if nn > 0 then TwoD (baba/nn) ((abba+baba)/nn) else mempty
+    abbacounts (u1,v1) (u2,v2) (u3,v3) (u4,v4) =
+            if nn > 0 then TwoD (baba/nn) ((abba+baba)/nn) 1 else mempty
       where
         abba = u1 * v2 * v3 * u4 + v1 * u2 * u3 * v4
         baba = v1 * u2 * v3 * u4 + u1 * v2 * u3 * v4
         nn = (u1 + v1) * (u2 + v2) * (u3 + v3) * (u4 + v4)
 
-opts_dstat :: Monad m => [ OptDescr (Config m r -> IO (Config m r)) ]
+
+opts_dstat :: [ OptDescr (Config -> IO Config) ]
 opts_dstat =
     [ Option "r" ["reference"]    (ReqArg set_ref "FILE") "Read reference from FILE (.2bit)"
     , Option "n" ["numoutgroups"] (ReqArg set_nout "NUM") "The first NUM inputs are outgroups (1)"
@@ -332,17 +335,18 @@ main_patterson args = do
         region_filter <- mkBedFilter conf_regions (either error nrss_chroms ref)
 
         stats <- liftM (uncurry gen_stats)
-                 $ accum_stats conf_blocksize (pattersons abbacounts conf_noutgroups conf_nrefpanel)
+                 $ accum_stats conf_blocksize (pattersons conf_noutgroups conf_nrefpanel)
                  $ conf_filter ref $ region_filter $ Q.concat $ mergeLumps conf_noutgroups inps
 
-        let fmt1 (sn,cn,r1,r2) (SillyStats k n r v p) =
+        let fmt1 (sn,cn,r1,r2) (SillyStats k n f4 r v p) =
                     [ Left conf_msg
-                    , Left "D( "
+                    , Left "F4( "
                     , Left $ r1 ++ ", "
                     , Left $ r2 ++ "; "
                     , Left $ sn ++ ", "
                     , Left $ cn
                     , Left " ) = "
+                    , Right $ showEFloat (Just 2) f4 ", D = "
                     , Right $ showFFloat (Just 0) k "/"
                     , Right $ showFFloat (Just 0) n " = "
                     , Right $ showFFloat (Just 2) (100 * r) "% ± "
@@ -403,13 +407,12 @@ yaddayadda nape nout nnea callz = S.fromListN nstats
     nstats = U.length apecalls * U.length afrcalls * U.length smpcalls
            * U.length neacalls * (U.length neacalls -1) `div` 2
 
--- | Yadda-yadda:  We compute patterns of the shape (C, N1, N2, H, Y),
--- then count with a positive sign AADDA, AADDD, ADAAD and with a
--- negative sign AADAD, ADADA, ADADD.  (Need to do it twice, because the
--- human reference can be either state.)
-
-yaddacounts :: (Double, Double) -> (Double, Double) -> (Double, Double) -> (Double, Double) -> (Double, Double) -> TwoD
-yaddacounts (u1,v1) (u2,v2) (u3,v3) (u4,v4) (u5,v5) = if nn > 0 then TwoD (aa/nn) ((aa+bb)/nn) else mempty
+    -- Yadda-yadda:  We compute patterns of the shape (C, N1, N2, H, Y),
+    -- then count with a positive sign AADDA, AADDD, ADAAD and with a
+    -- negative sign AADAD, ADADA, ADADD.  (Need to do it twice, because
+    -- the human reference can be either state.)
+    yaddacounts (u1,v1) (u2,v2) (u3,v3) (u4,v4) (u5,v5) =
+            if nn > 0 then TwoD (aa/nn) ((aa+bb)/nn) 1 else mempty
       where
         aadda = u1 * u2 * v3 * v4 * u5  +  v1 * v2 * u3 * u4 * v5
         aaddd = u1 * u2 * v3 * v4 * v5  +  v1 * v2 * u3 * u4 * u5
@@ -423,7 +426,7 @@ yaddacounts (u1,v1) (u2,v2) (u3,v3) (u4,v4) (u5,v5) = if nn > 0 then TwoD (aa/nn
         bb = aadad + adada + adadd
         nn = (u1 + v1) * (u2 + v2) * (u3 + v3) * (u4 + v4) * (u5 + v5)
 
-opts_yadda :: Monad m => [ OptDescr (Config m r -> IO (Config m r)) ]
+opts_yadda :: [ OptDescr (Config -> IO Config) ]
 opts_yadda =
     [ Option "r" ["reference"]      (ReqArg set_ref "FILE") "Read reference from FILE (.2bit)"
     , Option "n" ["numoutgroups"]   (ReqArg set_nout "NUM") "The first NUM inputs are outgroups (1)"
@@ -452,7 +455,7 @@ main_yaddayadda args = do
                  $ accum_stats conf_blocksize (yaddayadda conf_noutgroups conf_nafricans conf_nrefpanel)
                  $ conf_filter ref $ region_filter $ Q.concat $ mergeLumps (conf_noutgroups+conf_nafricans) inps
 
-        let fmt1 (cn,an,n1,n2,sn) (SillyStats k n r v p) =
+        let fmt1 (cn,an,n1,n2,sn) (SillyStats k n _ r v p) =
                     [ Left "Y( "
                     , Left $ cn ++ "; "
                     , Left $ n1 ++ ", "

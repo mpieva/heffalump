@@ -39,7 +39,8 @@ data ConfBam = ConfBam {
   deriving Show
 
 conf_bam0 :: ConfBam
-conf_bam0 = ConfBam (error "no output file specified") (error "no reference file specified")
+conf_bam0 = ConfBam (error "no output file specified")
+                    (error "no reference file specified")
                     Ostrich False (Q 0) (Q 0) 0 0
 
 opts_bam :: [ OptDescr ( ConfBam -> IO ConfBam ) ]
@@ -136,7 +137,6 @@ sample_piles g0 deam pick cs0 = eneeCheckIfDone (nextChrom g0 (nrss_seqs cs0) (R
                    in headStream >>
                       eneeCheckIfDone (generic g'' cs c' rs (v_loc var1 + 1))
                                       (k (Chunk [var1 { v_call = V2b (xor rb nc) }]))
-
             | otherwise
                 -> headStream >> generic g cs NewRefEnd rs (v_loc var1 + 1) k
 
@@ -260,8 +260,7 @@ post_collect ref pp vv = U.fromListN 5 $ go pp
               | otherwise        = [ a+a'+u', c+c', g+g', t+t'+u, 0 ]
 
     -- Mateja's second method depends on the reference allele:  if the
-    -- reference is C, we ignore the forward Ts and sample from the
-    -- rest.
+    -- reference is C, we ignore the forward Ts and sample from the rest.
     go Mateja2 | isC       = [ a+a'+u', c+c', g+g', t',     0 ]
                | isG       = [ a,       c+c', g+g', t+t'+u, 0 ]
                | otherwise = [ a+a'+u', c+c', g+g', t+t'+u, 0 ]

@@ -43,7 +43,6 @@ opts_vcfout =
     set_rgns   a c = return $ c { conf_regions    =  Just a }
 
 
--- VCF output, this time going through 'Lump' instead of 'Stretch'
 main_vcfout :: [String] -> IO ()
 main_vcfout args = do
     ( hefs, ConfVcfOut{..} ) <- parseFileOpts defaultVcfConf

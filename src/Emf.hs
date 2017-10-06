@@ -168,13 +168,14 @@ encodeGenome (Genome m1)
     step :: Int -> (Int, PackedLump) -> (Int -> L.ByteString) -> Int -> L.ByteString
     step start (len, PackLump lump) k pos
         -- Could we get duplicated or overlapping blocks?  We won't deal
-        -- with them properly, but we skip them just in case to get
-        -- correct output.
+        -- with them properly, but we skip them just in case, so we get
+        -- valid, if not correct output.
         | start >= pos = lots_of_Ns (start - pos) <> lump <> k (start+len)
         | otherwise    =                                     k start
 
     -- Argh, this wasn't supposed to be repeated here, but it's the most
-    -- straight forward way to do it.
+    -- straight forward way to do it.  If the encoding of 'Lump's (see
+    -- 'encodeLump') ever changes, this needs to be adapted.
     lots_of_Ns :: Int -> L.ByteString
     lots_of_Ns n
         | n == 0        = L.empty
@@ -208,7 +209,7 @@ scanBlocks inp = do
                         Q.dropWhile ("#" `B.isPrefixOf`) $ inp      -- get rid of comments
 
         lift (Q.next inp1) >>= \case
-            -- We detect EOF here.  'rngs' will be empty, too, which is not a problem.
+            -- We detect EOF here.  ('rngs' will be empty, too, which is not a problem.)
             Left r -> pure r
             Right (treeln, inp1a) -> do
                 Right ("DATA", inp2) <- lift $ Q.next inp1a
@@ -377,12 +378,11 @@ main_emf args = do
     ( emfs, OptsEmf{..} ) <- parseFileOpts opts_emf_default (mk_opts "emf" "[emf-file...]" opts_emf) args
     ref <- readTwoBit emf_reference
 
-
     let cons = collectTrees (nrss_chroms ref) (emf_select emf_ref_species)
     !genome <- foldM (\g fp -> withFile fp ReadMode $
                                     Q.foldM_ cons (return g) return . scanBlocks .
-                                    mapsM (S.toStrict) . S.lines . decomp . S.fromHandle)
-                     emptyGenome
+                                    mapsM (S.toStrict) . S.lines . decomp . S.fromHandle
+                     ) emptyGenome
                -- this is just so the one path at MPI that makes sense
                -- doesn't need to be typed over and over again
                =<< case emfs of
@@ -391,5 +391,5 @@ main_emf args = do
                     _  -> return emfs
 
     withFile emf_output WriteMode $ \hdl ->
-        L.hPut hdl $ encodeGenome genome
+            L.hPut hdl $ encodeGenome genome
 

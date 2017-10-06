@@ -13,15 +13,16 @@ typedef struct scanner {
     char *last_work ;
 
     // output structure
-    char *alleles ;     // points to ref, must be copied out immediately
+    char *alleles ;         // points to ref, must be copied out immediately
     char *ealleles ;
     uint32_t pos ;
-    uint16_t refseq ;        // hashed, mapped externally
+    uint16_t refseq ;       // hashed, mapped externally
     uint16_t nsmp ;         // number of samples
-    uint8_t gts[2] ;       // genotypes (two bytes per sample)
+    uint8_t gts[2] ;        // genotypes (two bytes per sample)
 } scanner ;
 
 char *scan_hdr( struct scanner *sc ) ;
 int   skip_hdr( struct scanner *sc ) ;
-int scan_vcf1( struct scanner *sc ) ;
-void free_scanner( struct scanner* sc ) ;
+int   scan_vcf1( struct scanner *sc ) ;
+void  free_scanner( struct scanner* sc ) ;
+

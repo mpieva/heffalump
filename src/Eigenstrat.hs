@@ -16,8 +16,8 @@ import Lump
 import NewRef
 import Util
 
--- ^ The Eigenstrat and Ancestrymap exporters.  Includes silly
--- generation of names and hash functions.
+-- ^ The Eigenstrat and Ancestrymap exporters.  Includes generation of
+-- meaningless names and hash functions.
 
 
 -- We wrote Eigenstrat in the first iteration.  Eigenstrat is one
@@ -28,8 +28,8 @@ import Util
 -- printf("GENO %d %d %x %x", n_individuals, n_snps, individual_hash, snp_hash);
 --
 -- That's of course retarded, we can't know n_snps or snp_hash before we
--- generate the snp file.  So all we can do is reserve space and print
--- the header later.  m(
+-- generate the snp file.  So all we can do is reserve space and
+-- overwrite the header later.  m(
 --
 -- To generate individual_hash, we apply nick_hasharr to the vector of
 -- individual names; to generate snp_hash we apply nick_hasharr to the

@@ -2,6 +2,11 @@ module BcfScan ( readBcf, decodeBcf ) where
 
 -- Minimalistic BCF reader.  We only care about the genotype of the
 -- first individual.  Should allow for a handful of shortcuts...
+--
+-- This assumes that GT is the first field encodes for each sample.  If
+-- that assumption is violated, you probably get an incomprehensible and
+-- misleading error message.  Doing this right just isn't worth the
+-- increase in code complexity.
 
 import Bio.Prelude
 import Util                     ( decomp )

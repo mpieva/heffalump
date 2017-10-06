@@ -1,4 +1,3 @@
-{-# LANGUAGE DeriveFoldable, DeriveTraversable #-}
 module Lump
     ( Lump(..)
     , mergeLumps
@@ -140,33 +139,23 @@ debugLump = go (0::Int) (0::Int)
   where
     go c i = Q.next >=> \case
       Left r -> return r
-      Right lump -> case lump of
-        (Break      ,l) -> do putStrLn $ shows (c,i) "\tBreak" ;           go (c+1) 0 l
-        (Ns        n,l) -> do putStrLn $ shows (c,i) "\tNs   " ++ show n ; go c (i+n) l
-        (Eqs1      n,l) -> do putStrLn $ shows (c,i) "\tEqs1 " ++ show n ; go c (i+n) l
-        (Eqs2      n,l) -> do putStrLn $ shows (c,i) "\tEqs2 " ++ show n ; go c (i+n) l
+      Right (x,l) -> do
+            putStrLn $ shows (c,i) "\t" ++ show x
+            case x of
+                Break  -> go (c+1) 0 l
+                Ns   n -> go c (i+n) l
+                Eqs1 n -> go c (i+n) l
+                Eqs2 n -> go c (i+n) l
 
-        (Trans1     ,l) -> do putStrLn $ shows (c,i) "\tTrans1 " ;      go c (i+1) l
-        (Compl1     ,l) -> do putStrLn $ shows (c,i) "\tCompl1 " ;      go c (i+1) l
-        (TCompl1    ,l) -> do putStrLn $ shows (c,i) "\tTCompl1 " ;     go c (i+1) l
+                Del1 _ -> go c i l
+                Del2 _ -> go c i l
+                DelH _ -> go c i l
 
-        (RefTrans   ,l) -> do putStrLn $ shows (c,i) "\tRefTrans " ;    go c (i+1) l
-        (Trans2     ,l) -> do putStrLn $ shows (c,i) "\tTrans2 " ;      go c (i+1) l
-        (RefCompl   ,l) -> do putStrLn $ shows (c,i) "\tRefCompl " ;    go c (i+1) l
-        (TransCompl ,l) -> do putStrLn $ shows (c,i) "\tTransCompl " ;  go c (i+1) l
-        (Compl2     ,l) -> do putStrLn $ shows (c,i) "\tCompl2 " ;      go c (i+1) l
-        (RefTCompl  ,l) -> do putStrLn $ shows (c,i) "\tRefTCompl " ;   go c (i+1) l
-        (TransTCompl,l) -> do putStrLn $ shows (c,i) "\tTransTCompl " ; go c (i+1) l
-        (ComplTCompl,l) -> do putStrLn $ shows (c,i) "\tComplTCompl " ; go c (i+1) l
-        (TCompl2    ,l) -> do putStrLn $ shows (c,i) "\tTCompl2 " ;     go c (i+1) l
+                Ins1 _ -> go c i l
+                Ins2 _ -> go c i l
+                InsH _ -> go c i l
 
-        (Del1      n,l) -> do putStrLn $ shows (c,i) "\tDel1 " ++ shows n " " ; go c i l
-        (Del2      n,l) -> do putStrLn $ shows (c,i) "\tDel2 " ++ shows n " " ; go c i l
-        (DelH      n,l) -> do putStrLn $ shows (c,i) "\tDelH " ++ shows n " " ; go c i l
-
-        (Ins1      s,l) -> do putStrLn $ shows (c,i) "\tIns1 " ++ shows s " " ; go c i l
-        (Ins2      s,l) -> do putStrLn $ shows (c,i) "\tIns2 " ++ shows s " " ; go c i l
-        (InsH      s,l) -> do putStrLn $ shows (c,i) "\tInsH " ++ shows s " " ; go c i l
+                _      -> go c (i+1) l
 
 
 normalizeLump :: Monad m => Stream (Of Lump) m r -> Stream (Of Lump) m r
@@ -245,6 +234,9 @@ noLump = PackLump (L.singleton 0)
 encodeLumpToMem :: MonadIO m => Stream (Of Lump) m r -> m (Of PackedLump r)
 encodeLumpToMem = fmap (mapOf PackLump) . S.toLazy . encodeLump . normalizeLump
 
+-- | Encodes a 'Lump' to a compact binary representation.  Some
+-- functionality is duplicated in 'encodeGenome' and 'noLump'; if the
+-- encoding is ever changed, it needs to be tracked over there.
 {-# INLINE encodeLump #-}
 encodeLump :: MonadIO m => Stream (Of Lump) m r -> S.ByteString m r
 encodeLump = go
@@ -464,7 +456,7 @@ mergeLumpsDense =
     Q.map (\vs ->
         let vs' = filter (U.any has_alt . v_calls) vs
         in if null vs' then [ (head vs) { v_alt = V2b 255 } ] else vs' ) .
-    Q.filter (not . null) .  -- shouldn't even happen
+    Q.filter (not . null) .
     mergeLumpsWith (V.minimum . V.map skiplen)
   where
     has_alt c = c .&. 0xC /= 0
@@ -789,7 +781,7 @@ fromAmbCode c | c == c2w 't' =  0
               | c == c2w 'k' =  3
               | c == c2w 'r' = 11
               | c == c2w 'y' =  1
-              | otherwise    = error $ "[fromAmbCode] What?! " ++ show c
+              | otherwise    = error $ "[fromAmbCode] Cthulhu fhtagn! " ++ show c
 
 encVar :: Nuc2b -> Word8 -> Lump
 encVar r c = encTwoNucs r $ fromAmbCode (c .|. 32)

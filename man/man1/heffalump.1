@@ -117,7 +117,7 @@ compute two simple kinds of relevant statistics on the fly.
 
 .SH OPTIONS
 
-\fBheffalump\fI is called with a command, and different commands accept
+\fBheffalump\fR is called with a command, and different commands accept
 different options, see below.  Commands are case-insensitive and a
 prefix is accepted as long as it is unambiguous.  A few options are
 global or recurring:
@@ -176,7 +176,9 @@ substantial amount of time, too.)
 \fB\-r\fR \fIref.2bit\fR
 \fB\-s\fR \fIsample.hetfa\fR
 
-Imports one \fIhetfa\fR file into \fIhef\fR format.
+Imports one \fIhetfa\fR file into \fIhef\fR format.  Note that the
+filter file that usually accompanies the \fIhetfa\fR file is not
+supported, because I consider this kind of arbitrary filter harmful.
 
 .TP
 \fB\-o\fR, \fB--output\fR=\fIfile.hef\fR
@@ -302,7 +304,7 @@ merged.
 
 A multitude of sampling schemes is available and was used in preliminary
 experiments, but none is fit for actual use.  Please refer to the source
-code to figure out what exactly they do.
+code to figure out how to enable them and what exactly they do.
 
 .TP
 \fB\-o\fR, \fB--output\fR=\fIfile.hef\fR
@@ -390,7 +392,7 @@ specifying it.
 \fB\-i\fR, \fB--individuals\fR=\fIfile.ind\fR
 Read individuals from \fIfile.ind\fR,  which lists individuals and the
 populations they belong to in the same format as used by
-\fBEigenstrat\fR.  \fBheffalump\fI will search the list of input files
+\fBEigenstrat\fR.  \fBheffalump\fR will search the list of input files
 for those whose base names match the individual names, and it will
 produce one column in the output for each distinct population.  If no
 individual file is specified, each individual becomes a singleton
@@ -501,15 +503,16 @@ formatted as a human readable table and sent to stdout.
 "Kayvergence ratio" is a crude estimate of population history computed
 from shared variants.  \fBheffalump\fR computes the "kayvergence ratio"
 for any combination of two "good genomes" and one "bad genome" from the
-input; the reference itself counts as an additional "good genome".  A
-formal test is performed whether the "bad genome" is an outgroup to the
-two "good genomes".
+input; the reference itself counts as an additional "good genome".  The
+p-value applies to the hypothesis that the "bad genome" is an outgroup
+to the two "good genomes".
 
-"D-statistics" is a formal test whether the allele sharing of four
+"D-statistics" tests the hypothesis that the allele sharing of four
 populations is consistent with a clean tree shaped history.
 \fBheffalump\fR computes the "D-statistics" for any combination of one
 "outgroup", two individuals from the "reference panel" and one "sample"
-from the input.
+from the input, where the assumed population history separates the
+sample and the outgroup from the reference panel.
 
 .TP
 \fB\-r\fR, \fB--reference\fR=\fIref.2bit\fR
@@ -547,7 +550,7 @@ which should be a \fIbed\fR file.
 \fB\-J\fR, \fB--blocksize\fR=\fInum\fR
 The variance and significance values are obtained from block Jackknifing
 the relevant statistics.  This option sets the block size to \fInum\fR
-bases (not variants).  Block will contain different numbers of
+bases (not variants).  Blocks will contain different numbers of
 informative sites, but this is automatically taken care of.  The exact
 size is uncritical as long as it large enough to overcome linkage
 between variants.  The default size of 5M is usually a good choice.
@@ -594,8 +597,8 @@ contain Indel information, and the primary output is Eigenstrat, which
 can't represent Indels, support for Indels would have been borrowing
 trouble.
 
-\fBheffalump\fR dintinguishes between diploid and haploid calls.  In
-theory, it supports \fIopportunistic genotype calling\fR, where some
+\fBheffalump\fR distinguishes between diploid and haploid calls.  In
+theory, it supports "opportunistic genotype calling", where some
 sites have two called alleles and some have only one.  In practice, no
 suitable input files have been seen in the wild.
 
@@ -604,15 +607,15 @@ This is annoying, but also rather difficult to fix right now.  Something
 like \fBbcftools\fR can be used to preprocess more complicated input.
 \fBbcftools\fR can also be used to transform plain \fIvcf\fR or gzip
 compressed \fIvcf\fR into \fIbcf\fR; the separate \fBvcfin\fR command
-for bgzip compressed \fIvcf\fR only exists to import legacy files that
-are too broken for digestion by \fBbcftools\fR.
+for bgzip compressed \fIvcf\fR only exists to import legacy files at MPI
+EVA that are too broken for digestion by \fBbcftools\fR.
 
 Reference genomes are stored in the same \fI2bit\fR format used by
 \fBblat\fR and the UCSC Genome Browser.  These files can be manipulated
 by Jim Kent's tools.  \fBheffalump\fR replicates some of this
-functionality, but does not currently support masking (i.e. lower case
-letters) when converting back to FastA.
+functionality for convenience, but does not currently support masking
+(i.e. lower case letters) when converting back to FastA.
 
 .SH AUTHOR
 
-Udo Stenzel <udo_stenzel@eva.mpg.de>
+Udo Stenzel <u.stenzel@web.de>

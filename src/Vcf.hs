@@ -17,15 +17,14 @@ import NewRef
 import Util
 import VcfScan
 
-type LumpXform = (Stream (Of Lump) IO () -> Stream (Of Lump) IO ())
 type GapCons = Int -> Lump
 
 data ConfXcf = ConfXcf
     { conf_output  :: FilePath
     , conf_ref     :: FilePath
     , conf_density :: GapCons
-    , conf_clean   :: Stream (Of RawVariant) IO () -> Stream (Of RawVariant) IO ()
-    , conf_ploidy  :: LumpXform
+    , conf_clean   :: Xform RawVariant
+    , conf_ploidy  :: Xform Lump
     , conf_key     :: String
     , conf_ext     :: String
     , conf_reader  :: FilePath -> (Stream (Of RawVariant) IO () -> IO ()) -> IO () }
@@ -102,7 +101,7 @@ dedupVcf = lift . Q.next >=> \case Left       r  -> pure r
 -- | Remove indel variants, since we can't very well use them.
 cleanVcf :: Monad m => Stream (Of RawVariant) m r -> Stream (Of RawVariant) m r
 cleanVcf = Q.filter $ \RawVariant{..} ->
-    B.length rv_vars  == B.length (B.filter (== ',') rv_vars) * 2 + 1
+    B.length rv_vars == B.length (B.filter (== ',') rv_vars) * 2 + 1
 
 -- | Removes "no call" variants.  When reading dense files, they are
 -- equivalent to missing entries.

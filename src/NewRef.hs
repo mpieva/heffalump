@@ -62,8 +62,8 @@ import qualified Streaming.Prelude              as Q
 import Util ( decomp, mk_opts, parseFileOpts )
 
 -- | This is a reference sequence.  It consists of stretches of Ns and
--- sequence.  Invariant:  the lengths for 'ManyNs' and 'SomeSeq' are
--- always strictly greater than zero.
+-- stretches of sequence.  Invariant:  the lengths for 'ManyNs' and
+-- 'SomeSeq' are always strictly greater than zero.
 
 data NewRefSeq = ManyNs !Int NewRefSeq
                  -- Primitive bases in 2bit encoding:  [0..3] = TCAG
@@ -86,6 +86,8 @@ data NewRefSeqs = NewRefSeqs { nrss_chroms  :: [ B.ByteString ]
 readTwoBit :: FilePath -> IO NewRefSeqs
 readTwoBit fp = parseTwoBit <$> makeAbsolute fp <*> unsafeMMapFile fp
 
+-- In theory, there could be 2bit files in big endian format out there.
+-- We don't support them, since I've never seen one in the wild.
 parseTwoBit :: FilePath -> B.ByteString -> NewRefSeqs
 parseTwoBit fp0 raw = case (getW32 0, getW32 4) of (0x1A412743, 0) -> parseEachSeq 16 0
                                                    _ -> error "This does not look like a 2bit file."
