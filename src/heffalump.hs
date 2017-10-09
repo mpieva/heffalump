@@ -41,26 +41,27 @@ main = do
                 "  "++pn++' ':k++replicate (kl-length k) ' '++"  -- "++h
 
     mains = let z a b c = (a,(b,c)) in
-        [ z "hetfa"       main_hetfa              "Import hetfa file"
-        , z "maf"         main_maf                "Import one genome from maf files"
-        , z "emf"         main_emf                "Import one genome from emf (Compara)"
-        , z "bcfin"      (main_xcf conf_bcf)      "Import one genome from bcf files"
-        , z "vcfin"      (main_xcf conf_vcf)      "Import one genome from vcf files"
-        , z "bamin"       main_bam                "Import crudely from bam files"
-        , z "patch"       main_patch              "Make a hetfa file by patching the reference"
-        , z "treemix"     main_treemix            "Merge heffalumps into Treemix format"
-        , z "eigenstrat"  main_eigenstrat         "Merge heffalumps into Eigenstrat format"
-        , z "vcfexport"   main_vcfout             "Merge heffalumps into vcf format"
-        , z "twobitinfo"  main_2bitinfo           "List reference sequences"
-        , z "twobittofa"  main_2bittofa           "Extract Fasta from 2bit"
-        , z "fatotwobit"  main_fato2bit           "Convert Fasta to 2bit"
-        , z "kayvergence" main_kayvergence        "Compute Kayvergence ratios"
-        , z "dstatistics" main_patterson          "Compute Patterson's D"
-        , z "yaddayadda"  main_yaddayadda         "Compute Yadda-Yadda-counts"
-        , z "dumppatch"   main_dumppatch          "(debugging aid)"
-        , z "dumplump"    main_dumplump           "(debugging aid)"
-        , z "--help"     (const usage)            "list commands and exit"
-        , z "--version"   main_version            "print version and exit" ]
+        [ z "hetfa"        main_hetfa             "Import hetfa file"
+        , z "maf"          main_maf               "Import one genome from maf files"
+        , z "emf"          main_emf               "Import one genome from emf (Compara)"
+        , z "bcfin"       (main_xcf conf_bcf)     "Import one genome from bcf files"
+        , z "vcfin"       (main_xcf conf_vcf)     "Import one genome from vcf files"
+        , z "bamin"        main_bam               "Import crudely from bam files"
+        , z "patch"        main_patch             "Make a hetfa file by patching the reference"
+        , z "treemix"      main_treemix           "Merge heffalumps into Treemix format"
+        , z "eigenstrat"   main_eigenstrat        "Merge heffalumps into Eigenstrat format"
+        , z "vcfexport"    main_vcfout            "Merge heffalumps into vcf format"
+        , z "twobitinfo"   main_2bitinfo          "List reference sequences"
+        , z "twobittofa"   main_2bittofa          "Extract Fasta from 2bit"
+        , z "fatotwobit"   main_fato2bit          "Convert Fasta to 2bit"
+        , z "kayvergence"  main_kayvergence       "Compute Kayvergence ratios"
+        , z "f4statistics"(main_patterson WantF4) "Compute Patterson's F4 and D"
+        , z "dstatistics" (main_patterson NoF4)   "Compute Patterson's D"
+        , z "yaddayadda"   main_yaddayadda        "Compute Yadda-Yadda-counts"
+        , z "dumppatch"    main_dumppatch         "(debugging aid)"
+        , z "dumplump"     main_dumplump          "(debugging aid)"
+        , z "--help"      (const usage)           "list commands and exit"
+        , z "--version"    main_version           "print version and exit" ]
 
 main_version :: [String] -> IO ()
 main_version _ = hPutStrLn stderr $ showVersion version

@@ -1,23 +1,22 @@
 module SillyStats (
     main_kayvergence,
     main_patterson,
-    main_yaddayadda
+    main_yaddayadda,
+    WantF4(..)
                   ) where
 
 -- A note regarding F4 statistics:  With F4 defined as
 -- E(#(BABA)-#(ABBA)), the number of valid sites becomes important.  The
 -- difficulty is that invariant sites count as well, but sites with
--- missing data don't.  Currently, we skip over both of those, which
--- does good things for performance.
+-- missing data don't.  By looking at every site, even those that are
+-- invariant, we get this correct.  The cost is that potentially long
+-- stretches have to be painstakingly traversed.
 --
--- What we could do:  Skip over stretches where everyone matches the
--- reference, and count them.  Skip over stretches where nobody has
--- data, and don't count them.  Sites where someone is missing data and
--- everyone else matches the reference need to be processed
--- individually.  This needs some modification to 'mergeLumpsWith'.
---
--- Right now, counting of sites is in, but the invariant sites are still
--- skipped.
+-- What we could improve:  Skip over stretches where everyone matches
+-- the reference, but count them.  Skip over stretches where nobody has
+-- data, and don't count them.  This needs some modification to
+-- 'mergeLumpsWith', which isn't too bad.  It also interacts badly with
+-- the filters applied to variants.
 
 import Bio.Prelude
 import Numeric.SpecFunctions            ( incompleteBeta )
@@ -328,25 +327,30 @@ filterCpG (Right nrs) = go (nrss_seqs nrs) 0
                 return (f,r')
 
 
-main_patterson :: [String] -> IO ()
-main_patterson args = do
-    ( hefs, Config{..} ) <- parseFileOpts defaultConfig (mk_opts "dstatistics" "[hef-file...]" opts_dstat) args
+data WantF4 = WantF4 | NoF4
+
+main_patterson :: WantF4 -> [String] -> IO ()
+main_patterson f4p args = do
+    let name WantF4 = "f4statistics" ; name NoF4 = "dstatistics"
+    ( hefs, Config{..} ) <- parseFileOpts defaultConfig (mk_opts (name f4p) "[hef-file...]" opts_dstat) args
     decodeMany conf_reference hefs $ \ref inps -> do
         region_filter <- mkBedFilter conf_regions (either error nrss_chroms ref)
 
         stats <- liftM (uncurry gen_stats)
                  $ accum_stats conf_blocksize (pattersons conf_noutgroups conf_nrefpanel)
-                 $ conf_filter ref $ region_filter $ Q.concat $ mergeLumps conf_noutgroups inps
+                 $ conf_filter ref $ region_filter $ Q.concat
+                 $ case f4p of WantF4 -> mergeLumpsDense            inps
+                               NoF4   -> mergeLumps conf_noutgroups inps
 
         let fmt1 (sn,cn,r1,r2) (SillyStats k n f4 r v p) =
                     [ Left conf_msg
-                    , Left "F4( "
+                    , Left $ case f4p of WantF4 -> "F4( " ; NoF4 -> "D( "
                     , Left $ r1 ++ ", "
                     , Left $ r2 ++ "; "
                     , Left $ sn ++ ", "
                     , Left $ cn
                     , Left " ) = "
-                    , Right $ showEFloat (Just 2) f4 ", D = "
+                    , Right $ case f4p of WantF4 -> showEFloat (Just 2) f4 ", D = " ; NoF4 -> ""
                     , Right $ showFFloat (Just 0) k "/"
                     , Right $ showFFloat (Just 0) n " = "
                     , Right $ showFFloat (Just 2) (100 * r) "% ± "
