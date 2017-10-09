@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
 module VcfScan where
 
 import Bio.Prelude
@@ -16,7 +15,7 @@ import qualified Data.Vector            as V
 #include "vcf-scan.h"
 
 -- | Supports one individual only.  (Project your VCF if you have more
--- than one.)
+-- than one; better yet, use BCF.)
 data RawVariant = RawVariant {
     rv_chrom :: !Int,                                -- chromosome number, hashed
     rv_pos   :: !Int,                                -- position (1-based)
@@ -128,10 +127,10 @@ tryDecompressBlocks :: Ptr CScanner -> IO Int
 tryDecompressBlocks psc = do
     ibeg <- #{ peek scanner, next_input } psc
     iend <- #{ peek scanner, last_input } psc
-    if iend `minusPtr` ibeg < 26                 -- BGZF header size?
+    if iend `minusPtr` ibeg < 26                -- min. BGZF header size
       then return (-1)
       else do
-        66 <- peekByteOff ibeg 12 :: IO Word8      -- BC tag
+        66 <- peekByteOff ibeg 12 :: IO Word8   -- BC tag
         67 <- peekByteOff ibeg 13 :: IO Word8
         bsize <- peekByteOff ibeg 16 :: IO Word16
         if iend `minusPtr` ibeg < fromIntegral bsize + 1
@@ -144,8 +143,6 @@ tryDecompressBlocks psc = do
             if workbuffer_size - (wlast `minusPtr` wbuf) < fromIntegral ucompsize
               then return 0
               else do
-                -- call to zlib here
-                -- hPutStrLn stderr $ "inflating " ++ show (bsize + 1) ++ " bytes into " ++ show ucompsize ++ " bytes."
                 inflate (ibeg `plusPtr` 18) (fromIntegral bsize + 1) wlast
                                             (fromIntegral ucompsize) (fromIntegral crc)
                 (#{ poke scanner, last_work }) psc (wlast `plusPtr` fromIntegral ucompsize)
@@ -185,20 +182,20 @@ c_inflateInit2 :: Ptr ZStream -> CInt -> IO CInt
 c_inflateInit2 z a = withCAString #{const_str ZLIB_VERSION} $ \versionStr ->
     c_inflateInit2_ z a versionStr (#{const sizeof(z_stream)} :: CInt)
 
-foreign import ccall unsafe "zlib.h inflateInit2_" c_inflateInit2_ ::
-    Ptr ZStream -> CInt -> Ptr CChar -> CInt -> IO CInt
+foreign import ccall unsafe "zlib.h inflateInit2_"
+    c_inflateInit2_ :: Ptr ZStream -> CInt -> Ptr CChar -> CInt -> IO CInt
 
-foreign import ccall unsafe "zlib.h inflate" c_inflate ::
-    Ptr ZStream -> CInt -> IO CInt
+foreign import ccall unsafe "zlib.h inflate"
+    c_inflate :: Ptr ZStream -> CInt -> IO CInt
 
-foreign import ccall unsafe "zlib.h inflateEnd" c_inflateEnd ::
-    Ptr ZStream -> IO CInt
+foreign import ccall unsafe "zlib.h inflateEnd"
+    c_inflateEnd :: Ptr ZStream -> IO CInt
 
-foreign import ccall unsafe "zlib.h crc32" c_crc32 ::
-    CULong -> Ptr Word8 -> CUInt -> IO CULong
+foreign import ccall unsafe "zlib.h crc32"
+    c_crc32 :: CULong -> Ptr Word8 -> CUInt -> IO CULong
 
 
-getVariant :: Scanner -> IO (Maybe RawVariant)
+getVariant :: Scanner -> IO (Either RawVariant ())
 getVariant sc = withScanner go sc
   where
     go psc hdl = scan_vcf1 psc >>= go' psc hdl
@@ -208,7 +205,7 @@ getVariant sc = withScanner go sc
         wb <- #{ peek scanner, next_work } psc
         we <- #{ peek scanner, last_work } psc
         if n <= 0 && wb == (we :: Ptr Word8)
-            then return Nothing
+            then return $ Right ()
             else do -- maybe newline is missing?
                     when (n <= 0) $ pokeByteOff we (-1) (10::Word8)
                     go psc hdl
@@ -224,7 +221,7 @@ getVariant sc = withScanner go sc
 
     getGt p = peekByteOff p (#{ offset scanner, gts })
 
-    variant :: Word16 -> Word32 -> B.ByteString -> Word16 -> Maybe RawVariant
-    variant r p vs gt = Just $! RawVariant (fromIntegral r) (fromIntegral p) vs gt
+    variant :: Word16 -> Word32 -> B.ByteString -> Word16 -> Either RawVariant ()
+    variant r p vs gt = Left $! RawVariant (fromIntegral r) (fromIntegral p) vs gt
 
 

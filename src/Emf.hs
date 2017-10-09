@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings, BangPatterns, ScopedTypeVariables #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Emf ( main_emf
            , Genome
            , encodeGenome
@@ -21,8 +21,6 @@ module Emf ( main_emf
 
 
 import Bio.Prelude               hiding ( compl )
-import Codec.Compression.GZip
-import Data.ByteString.Streaming        ( fromLazy )
 import Streaming
 import System.Console.GetOpt
 import System.Directory                 ( getDirectoryContents )
@@ -32,8 +30,9 @@ import System.IO
 import qualified Data.Attoparsec.ByteString.Char8   as A
 import qualified Data.ByteString.Char8              as B
 import qualified Data.ByteString.Lazy               as L
-import qualified Data.ByteString.Lazy.Char8         as C
+import qualified Data.ByteString.Streaming.Char8    as S
 import qualified Data.IntMap.Strict                 as I
+import qualified Streaming.Prelude                  as Q
 
 import Lump
 import NewRef
@@ -104,56 +103,56 @@ insertGenome (Genome m1) !c !p !l !s = ( warning, Genome m1' )
 -- accumulated in memory and finally emitted in the correct order.
 -- Chromosome names are mapped to target indices according to the
 -- reference genome.
---
--- XXX  Could (should?) use a streaming bytestring.
 
-parseMaf :: (B.ByteString, B.ByteString) -> [B.ByteString] -> Genome -> L.ByteString -> IO Genome
-parseMaf (from_spc, to_spc) chrs gnm0 inp = doParse gnm0 $ C.lines inp
+parseMaf :: (B.ByteString, B.ByteString) -> [B.ByteString] -> Genome -> S.ByteString IO r -> IO Genome
+parseMaf (from_spc, to_spc) chrs gnm0 = doParse gnm0 . mapsM (S.toStrict) . S.lines
   where
-    doParse :: Genome -> [C.ByteString] -> IO Genome
-    doParse gnm lns = case dropWhile (\l -> C.null l || C.all isSpace l || C.head l == '#') lns of
-        [         ]                         -> return gnm
-        (ahdr:lns') | "a":_ <- C.words ahdr -> do
-            let (slns,lns'') = span (not . C.all isSpace) lns'
+    doParse :: Genome -> Stream (Of B.ByteString) IO r -> IO Genome
+    doParse gnm = inspect . Q.dropWhile (\l -> B.all isSpace l || B.head l == '#') >=> \case
+        Left _                                      -> return gnm
+        Right (ahdr :> lns) | "a":_ <- B.words ahdr -> do
+            slns :> lns' <- Q.toList $ Q.span (not . B.all isSpace) lns
             gnm' <- foldl (>>=) (return gnm) $ do
                         ( [from_chr], from_pos, from_len, from_rev, from_seq ) <- extract from_spc slns
                         ( _to_chr,   _to_pos,  _to_len,  _to_rev,     to_seq ) <- extract to_spc   slns
-                        let (ref', smp') = L.unzip $ filter ((/=) 45 . fst) $ L.zip from_seq to_seq
+                        let (ref', smp') = B.unzip $ filter ((/=) '-' . fst) $ B.zip from_seq to_seq
 
                         return $ \g -> do
                             hPrintf stderr "%d:%d-%d\n" from_chr from_pos (from_pos+from_len)
                             insert1 g from_rev from_chr from_pos from_len ref' smp'
 
-            doParse gnm' lns''
-        ls -> error $ "WTF?! near \n" ++ C.unpack (C.unlines $ take 3 ls)
+            doParse gnm' lns'
+
+        Right (l :> ls) -> do ls' :> _ <- Q.toList $ Q.take 2 ls
+                              error $ "WTF?! near \n" ++ B.unpack (B.unlines $ l : ls')
 
 
-    insert1 :: Genome -> Bool -> Int -> Int -> Int -> L.ByteString -> L.ByteString -> IO Genome
+    insert1 :: Genome -> Bool -> Int -> Int -> Int -> B.ByteString -> B.ByteString -> IO Genome
     insert1 g False chrm pos len ref smp = do
-            plump :> _ <- encodeLumpToMem $ diff' ref (fromLazy smp)
+            plump :> _ <- encodeLumpToMem $ diff ref smp
             let (w,g') = insertGenome g chrm pos len plump
             unless (null w) $ hPutStrLn stderr w
             return g'
 
     insert1 g True chrm pos len ref smp = do
-            plump :> _ <- encodeLumpToMem $ diff' (revcompl ref) (fromLazy $ revcompl smp)
+            plump :> _ <- encodeLumpToMem $ diff (revcompl ref) (revcompl smp)
             let (w,g') = insertGenome g chrm (pos-len+1) len plump
             unless (null w) $ hPutStrLn stderr w
             return g'
 
 
-    extract :: B.ByteString -> [C.ByteString] -> [( [Int], Int, Int, Bool, C.ByteString )]
+    extract :: B.ByteString -> [B.ByteString] -> [( [Int], Int, Int, Bool, B.ByteString )]
     extract spc lns =
         [ ( chrom, pos, len, rev, seq_ )
         | sln <- lns
-        , "s":name:pos_:len_:str_:_olen:seq_:_ <- [ C.words sln ]
-        , C.fromChunks [ spc, "." ] `C.isPrefixOf` name || C.fromChunks [ spc ] == name
-        , let chr_ = C.drop (fromIntegral $ B.length spc + 1) name
-        , let chrom = take 1 $ findIndices ((==) chr_ . C.fromStrict) chrs
-                            ++ findIndices ((==) chr_ . (<>) "chr" . C.fromStrict) chrs
+        , "s":name:pos_:len_:str_:_olen:seq_:_ <- [ B.words sln ]
+        , B.snoc spc '.' `B.isPrefixOf` name || spc == name
+        , let chr_ = B.drop (fromIntegral $ B.length spc + 1) name
+        , let chrom = take 1 $ findIndices ((==) chr_) chrs
+                            ++ findIndices ((==) chr_ . (<>) "chr") chrs
                             ++ if chr_ == "chrM" then findIndices ((==) "MT") chrs else []
-        , (pos, "") <- maybeToList $ C.readInt pos_
-        , (len, "") <- maybeToList $ C.readInt len_
+        , (pos, "") <- maybeToList $ B.readInt pos_
+        , (len, "") <- maybeToList $ B.readInt len_
         , rev <- case str_ of "+" -> [False] ; "-" -> [True] ; _ -> [] ]
 
 
@@ -169,13 +168,14 @@ encodeGenome (Genome m1)
     step :: Int -> (Int, PackedLump) -> (Int -> L.ByteString) -> Int -> L.ByteString
     step start (len, PackLump lump) k pos
         -- Could we get duplicated or overlapping blocks?  We won't deal
-        -- with them properly, but we skip them just in case to get
-        -- correct output.
+        -- with them properly, but we skip them just in case, so we get
+        -- valid, if not correct output.
         | start >= pos = lots_of_Ns (start - pos) <> lump <> k (start+len)
         | otherwise    =                                     k start
 
     -- Argh, this wasn't supposed to be repeated here, but it's the most
-    -- straight forward way to do it.
+    -- straight forward way to do it.  If the encoding of 'Lump's (see
+    -- 'encodeLump') ever changes, this needs to be adapted.
     lots_of_Ns :: Int -> L.ByteString
     lots_of_Ns n
         | n == 0        = L.empty
@@ -200,20 +200,23 @@ data EmfBlock = EmfBlock { emf_tree :: Tree Label
                          , emf_seqs :: [B.ByteString] }
     deriving Show
 
--- XXX Would be so cool if this could stream.
-scanOneBlock :: [B.ByteString] -> ( EmfBlock, [B.ByteString] )
-scanOneBlock inp = ( EmfBlock tree seqs, drop 1 remainder )
+scanBlocks :: Monad m => Stream (Of B.ByteString) m r -> Stream (Of EmfBlock) m r
+scanBlocks inp = do
+        rngs :> inp1 <- lift . Q.toList .
+                        Q.zipWith parse_seq_name (Q.enumFrom 0) .
+                        Q.span (B.isPrefixOf "SEQ ") .              -- names and indices of sequences
+                        Q.dropWhile (B.all A.isSpace) .             -- and empty lines
+                        Q.dropWhile ("#" `B.isPrefixOf`) $ inp      -- get rid of comments
+
+        lift (Q.next inp1) >>= \case
+            -- We detect EOF here.  ('rngs' will be empty, too, which is not a problem.)
+            Left r -> pure r
+            Right (treeln, inp1a) -> do
+                Right ("DATA", inp2) <- lift $ Q.next inp1a
+                let tree = relabel rngs $ parse_tree treeln         -- topology of tree w/ indices
+                datalns :> remainder <- lift $ Q.toList $ Q.map (B.map toUpper) $ Q.span ("//" /=) inp2
+                EmfBlock tree (B.transpose datalns) `Q.cons` scanBlocks (Q.drop 1 remainder)
   where
-    (seqlns, treeln : "DATA" : inp2) = span (B.isPrefixOf "SEQ ") .           -- names and indices of sequences
-                                       dropWhile (B.all A.isSpace) $          -- and empty lines
-                                       dropWhile ("#" `B.isPrefixOf`) inp     -- get rid of comments
-
-    rngs = zipWith parse_seq_name [0..] seqlns
-    tree = relabel rngs $ parse_tree treeln                                   -- topology of tree w/ indices
-
-    (datalns, remainder) = span ("//" /=) inp2
-    seqs = B.transpose . map (B.map toUpper) $ datalns
-
     parse_seq_name i s = Label i (spc, B.drop 1 race) (str $ Range (Pos sqn (beg-1)) (end-beg+1))
       where
         ("SEQ":sr:sqn:beg':end':str':_) = B.words s
@@ -231,6 +234,7 @@ scanOneBlock inp = ( EmfBlock tree seqs, drop 1 remainder )
             <$> A.takeWhile (\c -> A.isAlpha_ascii c || A.isDigit c || c == '_' || c == '.')
             <*> (A.char '[' *> (A.char '+' <|> A.char '-'))
             <*> (A.char ']' *> A.char ':' *> A.double)
+
 
 data Label = Label Int Species Range deriving Show
 data Tree label = Branch (Tree label) (Tree label) label | Leaf label deriving Show
@@ -300,7 +304,7 @@ tree_has s (Branch u' v' _) = tree_has s u' ++ tree_has s v'
 collectTrees :: [B.ByteString] -> ( Tree Label -> [(Label, [Label])] ) -> Genome -> EmfBlock -> IO Genome
 collectTrees chrs select genome block
     = foldlM (\g f -> f g) genome
-            [ \g -> do plump :> _ <- encodeLumpToMem $ diff' ref_seq (fromLazy smp_seq)
+            [ \g -> do plump :> _ <- encodeLumpToMem $ diff ref_seq smp_seq
                        let (w,g') = insertGenome g ref_idx (p_start (r_pos rref)) (r_length rref) plump
                        hPutStrLn stderr $ "Inserted " ++ shows ref_idx ":" ++
                             shows (p_start (r_pos rref)) "-" ++
@@ -315,11 +319,11 @@ collectTrees chrs select genome block
                       [ emf_seqs block !! itgt | Label itgt _ _ <- tgt_lbls ]
             , let (rref, ref_seq, smp_seq) =
                     if p_start (r_pos rref_) >= 0
-                    then (             rref_,            L.fromStrict ref_seq_,            L.fromStrict smp_seq_)
-                    else (reverseRange rref_, revcompl $ L.fromStrict ref_seq_, revcompl $ L.fromStrict smp_seq_) ]
+                    then (             rref_,            ref_seq_,            smp_seq_)
+                    else (reverseRange rref_, revcompl $ ref_seq_, revcompl $ smp_seq_) ]
 
-revcompl :: L.ByteString -> L.ByteString
-revcompl = L.reverse . C.map compl
+revcompl :: B.ByteString -> B.ByteString
+revcompl = B.reverse . B.map compl
   where
     compl 'A' = 'T' ; compl 'T' = 'A' ; compl 'a' = 't' ; compl 't' = 'a'
     compl 'C' = 'G' ; compl 'G' = 'C' ; compl 'c' = 'g' ; compl 'g' = 'c'
@@ -337,18 +341,6 @@ consensus_seq (x:xs)
                | i <- [0 .. B.length x -1] ]
     | otherwise =
         error "consensus_seq: sequences have uneuqal lengths."
-
-
--- | Scans a directory with gzipped EMF files in arbitrary order.  (The
--- files are not sorted internally, so there is no point in trying any
--- particular order.)
-scan_all_emf :: [FilePath] -> IO [EmfBlock]
-scan_all_emf fs = do
-    foldr (\fp k -> do bs  <- unsafeInterleaveIO k
-                       let go [] = bs
-                           go ls = case scanOneBlock ls of (b,ls') -> b : go ls'
-                       go . map L.toStrict . C.lines . decompress <$> L.readFile fp)
-          (return []) fs
 
 
 data OptsEmf = OptsEmf {
@@ -383,18 +375,21 @@ opts_emf =
 
 main_emf :: [String] -> IO ()
 main_emf args = do
-    ( emfs, OptsEmf{..} ) <- parseOpts True opts_emf_default (mk_opts "emf" "[emf-file...]" opts_emf) args
+    ( emfs, OptsEmf{..} ) <- parseFileOpts opts_emf_default (mk_opts "emf" "[emf-file...]" opts_emf) args
     ref <- readTwoBit emf_reference
 
-    !genome <- foldM (collectTrees (nrss_chroms ref) (emf_select emf_ref_species)) emptyGenome
-               =<< scan_all_emf
+    let cons = collectTrees (nrss_chroms ref) (emf_select emf_ref_species)
+    !genome <- foldM (\g fp -> withFile fp ReadMode $
+                                    Q.foldM_ cons (return g) return . scanBlocks .
+                                    mapsM (S.toStrict) . S.lines . decomp . S.fromHandle
+                     ) emptyGenome
                -- this is just so the one path at MPI that makes sense
-               -- doesn't need to be typed over and over
+               -- doesn't need to be typed over and over again
                =<< case emfs of
                     [] -> let dir = "/mnt/expressions/martin/sequence_db/epo/epo_6_primate_v66"
                           in map (dir </>) . filter (".emf.gz" `isSuffixOf`) <$> getDirectoryContents dir
                     _  -> return emfs
 
     withFile emf_output WriteMode $ \hdl ->
-        L.hPut hdl $ encodeGenome genome
+            L.hPut hdl $ encodeGenome genome
 

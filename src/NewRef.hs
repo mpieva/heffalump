@@ -1,4 +1,4 @@
-{-# LANGUAGE BangPatterns, OverloadedStrings, CPP #-}
+{-# LANGUAGE CPP #-}
 module NewRef where
 
 -- ^ We'll use a 2bit file as reference.  Chromosomes in the file will
@@ -37,9 +37,10 @@ module NewRef where
 import Bio.Prelude                   hiding ( Ns )
 import Data.ByteString.Short         hiding ( length, null )
 import Foreign.Storable                     ( peekByteOff )
+import Streaming
 import System.Console.GetOpt
 import System.Directory                     ( makeAbsolute )
-import System.IO                            ( hPutStrLn, stdout, stderr )
+import System.IO                            ( hPutStrLn, stdout, stderr, withFile, IOMode(..) )
 import System.IO.Unsafe                     ( unsafeDupablePerformIO )
 
 #if MIN_VERSION_biohazard(0,6,16)
@@ -52,15 +53,17 @@ import qualified Data.ByteString                as B
 import qualified Data.ByteString.Builder        as B
 import qualified Data.ByteString.Char8          as C
 import qualified Data.ByteString.Lazy.Char8     as L
-import qualified Data.ByteString.Short          as S
+import qualified Data.ByteString.Short          as H
+import qualified Data.ByteString.Streaming.Char8      as S
 import qualified Data.ByteString.Unsafe         as B
 import qualified Data.Vector.Unboxed            as U
+import qualified Streaming.Prelude              as Q
 
-import Util ( decomp, mk_opts, parseOpts )
+import Util ( decomp, mk_opts, parseFileOpts )
 
 -- | This is a reference sequence.  It consists of stretches of Ns and
--- sequence.  Invariant:  the lengths for 'ManyNs' and 'SomeSeq' are
--- always strictly greater than zero.
+-- stretches of sequence.  Invariant:  the lengths for 'ManyNs' and
+-- 'SomeSeq' are always strictly greater than zero.
 
 data NewRefSeq = ManyNs !Int NewRefSeq
                  -- Primitive bases in 2bit encoding:  [0..3] = TCAG
@@ -83,6 +86,8 @@ data NewRefSeqs = NewRefSeqs { nrss_chroms  :: [ B.ByteString ]
 readTwoBit :: FilePath -> IO NewRefSeqs
 readTwoBit fp = parseTwoBit <$> makeAbsolute fp <*> unsafeMMapFile fp
 
+-- In theory, there could be 2bit files in big endian format out there.
+-- We don't support them, since I've never seen one in the wild.
 parseTwoBit :: FilePath -> B.ByteString -> NewRefSeqs
 parseTwoBit fp0 raw = case (getW32 0, getW32 4) of (0x1A412743, 0) -> parseEachSeq 16 0
                                                    _ -> error "This does not look like a 2bit file."
@@ -238,20 +243,21 @@ data Variant = Variant { v_chr   :: !Int                -- chromosome number
                        , v_calls :: !(U.Vector Word8) } -- Variant codes:  #ref + 4 * #alt
   deriving Show
 
-addRef :: NewRefSeqs -> [Variant] -> [Variant]
+addRef :: Monad m => NewRefSeqs -> Stream (Of Variant) m r -> Stream (Of Variant) m r
 addRef ref = go 0 (nrss_seqs ref)
   where
-    go _ [     ] = const []
+    go _ [     ] = lift . Q.effects
     go c (r0:rs) = go1 (r0 ()) 0
       where
-        go1 _ _ [    ] = []
-        go1 r p (v:vs)
-            | c /= v_chr v = go (c+1) rs (v:vs)
-            | p == v_pos v = case unconsNRS r of
-                Just (c',_) -> v { v_ref = c' } : go1 r p vs
-                Nothing     ->                    go1 r p vs
-            | p < v_pos v  = go1 (dropNRS (v_pos v - p) r) (v_pos v) (v:vs)
-            | otherwise    = error "expected sorted variants!"
+        go1 r p = lift . Q.next >=> \case
+            Left x              -> pure x
+            Right (v,vs)
+                | c /= v_chr v  -> go (c+1) rs (Q.cons v vs)
+                | p == v_pos v -> case unconsNRS r of
+                    Just (c',_) -> v { v_ref = c' } `Q.cons` go1 r p vs
+                    Nothing     ->                           go1 r p vs
+                | p < v_pos v   -> go1 (dropNRS (v_pos v - p) r) (v_pos v) (Q.cons v vs)
+                | otherwise     -> error "expected sorted variants!"
 
 
 has_help :: [String] -> Bool
@@ -316,14 +322,18 @@ opts_fato2bit = [ Option "o" ["output"] (ReqArg (\a _ -> return a) "FILE") "Writ
 
 main_fato2bit :: [String] -> IO ()
 main_fato2bit args = do
-    ( fs, fp ) <- parseOpts True (error "no output file given")
-                            (mk_opts "fatotwobit" "[fasta-file...]" opts_fato2bit) args
+    ( fs, fp ) <- parseFileOpts (error "no output file given")
+                                (mk_opts "fatotwobit" "[fasta-file...]" opts_fato2bit) args
 
-    L.writeFile fp . faToTwoBit . L.concat . map decomp =<<
-        mapM l'readFile (if null fs then ["-"] else fs)
+    withFiles (if null fs then ["-"] else fs) $
+        L.writeFile fp <=< faToTwoBit
   where
-    l'readFile "-" = L.getContents
-    l'readFile  f  = L.readFile f
+    withFiles [      ] k = k $ pure ()
+    withFiles ("-":fs) k = withFiles fs $ \s ->
+                               k $ decomp (S.fromHandle stdin) >> s
+    withFiles ( f :fs) k = withFile f ReadMode $ \h ->
+                             withFiles fs $ \s ->
+                               k $ decomp (S.fromHandle h) >> s
 
 
 -- List of pairs of 'Word32's.  Specialized and unpacked to conserve
@@ -345,51 +355,55 @@ encodeL2i = go 0 mempty mempty
 -- We also have to buffer everything, since the header with the sequence
 -- names must be written first.  Oh joy.
 
-faToTwoBit :: L.ByteString -> L.ByteString
-faToTwoBit s0 = L.concat $ B.toLazyByteString header : map snd seqs
+faToTwoBit :: Monad m => S.ByteString m r -> m L.ByteString
+faToTwoBit s0 = do
+    seqs <- get_each [] s0
+
+    let offset0 = 16 + 5 * length seqs + sum (map (H.length . fst) seqs)
+        offsets = scanl (\a b -> a + fromIntegral (L.length b)) offset0 $ map snd seqs
+
+        header = B.word32LE 0x1A412743 <> B.word32LE 0 <>
+                 B.word32LE (fromIntegral $ length seqs) <> B.word32LE 0 <>
+                 fold (zipWith (\nm off -> B.word8 (fromIntegral (H.length nm)) <>
+                                           B.shortByteString nm <>
+                                           B.word32LE (fromIntegral off))
+                               (map fst seqs) offsets)
+
+    return $ L.concat $ B.toLazyByteString header : map snd seqs
+
   where
-    seqs = get_each s0
-
-    offset0 = 16 + 5 * length seqs + sum (map (S.length . fst) seqs)
-    offsets = scanl (\a b -> a + fromIntegral (L.length b)) offset0 $ map snd seqs
-
-    header = B.word32LE 0x1A412743 <> B.word32LE 0 <>
-             B.word32LE (fromIntegral $ length seqs) <> B.word32LE 0 <>
-             fold (zipWith (\nm off -> B.word8 (fromIntegral (S.length nm)) <>
-                                       B.shortByteString nm <>
-                                       B.word32LE (fromIntegral off))
-                           (map fst seqs) offsets)
-
-    get_each s = let s1 = L.dropWhile (/= '>') s
-                     nm = L.takeWhile (not . isSpace) $ L.drop 1 s1
-                     s2 = L.dropWhile (/= '\n') s1
-                 in if L.null s1 then []
-                    else get_one (toShort $ L.toStrict nm) 0
-                                 (maxBound :!: L2i_Nil) (maxBound :!: L2i_Nil) (0 :!: 0 :!: []) s2
+    get_each acc s = do s1 <- S.uncons $ S.dropWhile (/= '>') s
+                        case s1 of
+                            Left    _    -> return $ reverse acc
+                            Right (_,s2) -> do
+                                nm :> s' <- S.toStrict $ S.break isSpace s2
+                                get_one acc (toShort nm) 0 (maxBound :!: L2i_Nil)
+                                        (maxBound :!: L2i_Nil) (0 :!: 0 :!: [])
+                                        (S.dropWhile (/= '\n') s')
 
 
-    get_one !nm !pos !_ns !_ms !_bs _s
+    get_one _acc !nm !pos _ns !_ms !_bs
         | pos .&. 0xFFFFFF == 0 && trace (show (nm,pos)) False = undefined
 
-    get_one !nm !pos !ns !ms !bs s = case L.uncons s of
-        Nothing -> fin
-        Just (c,s')
-            | isSpace c -> get_one nm pos ns ms bs s'
-            | c == '>'  -> fin
-            | otherwise -> get_one nm (succ pos)
+    get_one acc !nm !pos !ns !ms !bs = S.uncons >=> \case
+        Left    r       -> fin (pure r)
+        Right (c,s')
+            | isSpace c -> get_one acc nm pos ns ms bs s'
+            | c == '>'  -> fin (S.cons c s')
+            | otherwise -> get_one acc nm (succ pos)
                                    (collect_Ns ns pos c)
                                    (collect_ms ms pos c)
                                    (collect_bases bs c) s'
       where
-        fin = let ss' = case bs of (0 :!: _ :!: ss) -> ss
-                                   (n :!: w :!: ss) -> B.singleton (w `shiftL` (6-2*n)) : ss
-                  raw = B.toLazyByteString $
-                            B.word32LE pos <>
-                            encodeL2i (case ns of p :!: rs | p == maxBound -> rs ; p :!: rs -> L2i p pos rs) <>
-                            encodeL2i (case ms of p :!: rs | p == maxBound -> rs ; p :!: rs -> L2i p pos rs) <>
-                            B.word32LE 0 <>
-                            foldMap B.byteString (reverse ss')
-              in L.length raw `seq` (nm, raw) : get_each s
+        fin s = let ss' = case bs of (0 :!: _ :!: ss) -> ss
+                                     (n :!: w :!: ss) -> B.singleton (w `shiftL` (6-2*n)) : ss
+                    raw = B.toLazyByteString $
+                              B.word32LE pos <>
+                              encodeL2i (case ns of p :!: rs | p == maxBound -> rs ; p :!: rs -> L2i p pos rs) <>
+                              encodeL2i (case ms of p :!: rs | p == maxBound -> rs ; p :!: rs -> L2i p pos rs) <>
+                              B.word32LE 0 <>
+                              foldMap B.byteString (reverse ss')
+                in L.length raw `seq` get_each ((nm, raw) : acc) s
 
     collect_Ns (spos :!: rs) pos c
         | spos == maxBound && c `C.elem` "ACGTacgt" = maxBound :!: rs

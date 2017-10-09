@@ -7,13 +7,14 @@ module Stretch (
     ) where
 
 import Bio.Prelude               hiding ( Ns )
-import System.IO                        ( stderr )
+import Streaming
+import System.IO                        ( withFile, IOMode(..), stderr )
 
 import qualified Data.ByteString.Char8          as B
 import qualified Data.ByteString.Internal       as B
-import qualified Data.ByteString.Lazy.Char8     as L
-import qualified Data.ByteString.Lazy           as LB
+import qualified Data.ByteString.Streaming      as S
 import qualified Data.ByteString.Unsafe         as BB
+import qualified Streaming.Prelude              as Q
 
 import Util ( decomp )
 
@@ -25,38 +26,41 @@ instance Show NucCode where show = (:[]) . tr
 
 
 -- All stretch lengths are even, so we pre-divide them by two.
-data Stretch = Ns   !Int64            Stretch
-             | Eqs  !Int64            Stretch
-             | Eqs1 !Int64            Stretch
-             | Chrs !NucCode !NucCode Stretch
-             | Break                  Stretch
-             | Done
+data Stretch = Ns   !Int64
+             | Eqs  !Int64
+             | Eqs1 !Int64
+             | Chrs !NucCode !NucCode
+             | Break
     deriving Show
 
-debugStretch :: Stretch -> IO ()
+debugStretch :: MonadIO m => Stream (Of Stretch) m r -> m r
 debugStretch = debugStretch' 0 0
 
-debugStretch' :: Int -> Int64 -> Stretch -> IO ()
-debugStretch' _ _  Done        = return ()
-debugStretch' c i (Break    s) = do putStrLn $ shows (c,i) "\tBreak" ;                    debugStretch' (c+1) 0 s
-debugStretch' c i (Ns     n s) = do putStrLn $ shows (c,i) "\tNs   " ++ show n ;          debugStretch' c (i+2*n) s
-debugStretch' c i (Eqs    n s) = do putStrLn $ shows (c,i) "\tEqs  " ++ show n ;          debugStretch' c (i+2*n) s
-debugStretch' c i (Eqs1   n s) = do putStrLn $ shows (c,i) "\tEqs1 " ++ show n ;          debugStretch' c (i+2*n) s
-debugStretch' c i (Chrs x y s) = do putStrLn $ shows (c,i) "\tChrs " ++ [tr x,' ',tr y] ; debugStretch' c (i+2) s
+debugStretch' :: MonadIO m => Int -> Int64 -> Stream (Of Stretch) m r -> m r
+debugStretch' c i = Q.next >=> \case
+    Left r -> return r
+    Right (Break   ,s) -> do liftIO . putStrLn $ shows (c,i) "\tBreak" ;                    debugStretch' (c+1) 0 s
+    Right (Ns     n,s) -> do liftIO . putStrLn $ shows (c,i) "\tNs   " ++ show n ;          debugStretch' c (i+2*n) s
+    Right (Eqs    n,s) -> do liftIO . putStrLn $ shows (c,i) "\tEqs  " ++ show n ;          debugStretch' c (i+2*n) s
+    Right (Eqs1   n,s) -> do liftIO . putStrLn $ shows (c,i) "\tEqs1 " ++ show n ;          debugStretch' c (i+2*n) s
+    Right (Chrs x y,s) -> do liftIO . putStrLn $ shows (c,i) "\tChrs " ++ [tr x,' ',tr y] ; debugStretch' c (i+2) s
+
 
 -- | Main decoder.  Switches behavior based on header.
 {-# DEPRECATED decode "Switch to Lumps" #-}
-decode :: L.ByteString -> Stretch
-decode str | "HEF\0"   `L.isPrefixOf` str = decode_dip (L.drop 4 str)
-           | "HEF\1"   `L.isPrefixOf` str = decode_hap (L.drop 4 str)
-           | "HEF\3"   `L.isPrefixOf` str = error "I can't handle this new format."
+decode :: Monad m => S.ByteString m r -> Stream (Of Stretch) m r
+decode str = do hd :> tl <- lift . S.toStrict $ S.splitAt 4 str
+                case B.take 3 hd :> B.drop 3 hd of
+                    "HEF" :> "\0" -> decode_dip tl
+                    "HEF" :> "\1" -> decode_hap tl
+                    "HEF" :> "\3" -> error "I can't handle this new format."
 
-           -- legacy files (could start with anything, but
-           -- in practice start with (Ns 5000) or (Ns 5001)
-           | 176:113:2:_ <- LB.unpack str = decode_dip str
-           | 177:113:2:_ <- LB.unpack str = decode_dip str
+                    -- legacy files could start with anything, but
+                    -- in practice start with (Ns 5000) or (Ns 5001)
+                    "\176\113\2" :> _ -> decode_dip $ S.chunk hd >> tl
+                    "\177\113\2" :> _ -> decode_dip $ S.chunk hd >> tl
+                    _                 -> error "File format not recognixed."
 
-           | otherwise                    = error "File format not recognixed."
 
 -- We need to store 11 different symbols: "NACGTMRWSYK"  Long
 -- matching stretches and long stretches of no call ('N') shall be
@@ -85,7 +89,7 @@ decode str | "HEF\0"   `L.isPrefixOf` str = decode_dip (L.drop 4 str)
 -- Decoding produces one stretch until it finds the end marker or runs
 -- out of input.  We shall get one 'Stretch' for each chromosome.
 
-decode_dip, decode_hap :: L.ByteString -> Stretch
+decode_dip, decode_hap :: Monad m => S.ByteString m r -> Stream (Of Stretch) m r
 decode_dip = decode_v0 NucCode Eqs
 decode_hap = decode_v0 nc Eqs1
   where
@@ -98,38 +102,52 @@ decode_hap = decode_v0 nc Eqs1
 -- haploid and diploid individuals (aka "high coverage" and "low
 -- coverage" input).
 {-# DEPRECATED decode_v0 "Switch to Lumps" #-}
-decode_v0 :: (Word8 -> NucCode) -> (Int64 -> Stretch -> Stretch) -> L.ByteString -> Stretch
+decode_v0 :: Monad m => (Word8 -> NucCode) -> (Int64 -> Stretch)
+                     -> S.ByteString m r -> Stream (Of Stretch) m r
 decode_v0 nucCode eqs = go
   where
-    go s
-      | L.null  s = Done
-      | otherwise = case LB.head s of
-        w | w < 0x80 -> let (y,x) = w `divMod` 11 in Chrs (nucCode x) (nucCode y) $ go (LB.tail s)
-          | w ==0x80 -> Break $ go (LB.tail s)
+    go = lift . S.nextByte >=> \case
+       Left    r     -> pure r
+       Right (w,s')
+          | w < 0x80 -> let (y,x) = w `divMod` 11 in Chrs (nucCode x) (nucCode y) `Q.cons` go s'
+          | w ==0x80 -> Break `Q.cons` go s'
 
-          | w < 0xA0 -> Ns (fromIntegral (w .&. 0x1f)) $ go (LB.tail s)
-          | w < 0xB0 -> Ns (fromIntegral (w .&. 0x0f) .|.
-                            fromIntegral (LB.index s 1) `shiftL` 4) $ go (LB.drop 2 s)
-          | w < 0xB8 -> Ns (fromIntegral (w .&. 0x07) .|.
-                            fromIntegral (LB.index s 1) `shiftL` 3 .|.
-                            fromIntegral (LB.index s 2) `shiftL` 11) $ go (LB.drop 3 s)
-          | w < 0xBC -> Ns (fromIntegral (w .&. 0x03) .|.
-                            fromIntegral (LB.index s 1) `shiftL` 2 .|.
-                            fromIntegral (LB.index s 2) `shiftL` 10 .|.
-                            fromIntegral (LB.index s 3) `shiftL` 18) $ go (LB.drop 4 s)
-          | w < 0xBE -> Ns (fromIntegral (w .&. 0x01) .|.
-                            fromIntegral (LB.index s 1) `shiftL` 1 .|.
-                            fromIntegral (LB.index s 2) `shiftL` 9 .|.
-                            fromIntegral (LB.index s 3) `shiftL` 17 .|.
-                            fromIntegral (LB.index s 4) `shiftL` 25) $ go (LB.drop 5 s)
+          | w < 0xA0 -> Ns (fromIntegral (w .&. 0x1f)) `Q.cons` go s'
+          | w < 0xB0 -> do Right (w1,s1) <- lift $ S.nextByte s'
+                           Ns (fromIntegral (w .&. 0x0f) .|.
+                               fromIntegral w1 `shiftL` 4) `Q.cons` go s1
+          | w < 0xB8 -> do Right (w1,s1) <- lift $ S.nextByte s'
+                           Right (w2,s2) <- lift $ S.nextByte s1
+                           Ns (fromIntegral (w .&. 0x07) .|.
+                               fromIntegral w1 `shiftL` 3 .|.
+                               fromIntegral w2 `shiftL` 11) `Q.cons` go s2
+          | w < 0xBC -> do Right (w1,s1) <- lift $ S.nextByte s'
+                           Right (w2,s2) <- lift $ S.nextByte s1
+                           Right (w3,s3) <- lift $ S.nextByte s2
+                           Ns (fromIntegral (w .&. 0x03) .|.
+                               fromIntegral w1 `shiftL` 2 .|.
+                               fromIntegral w2 `shiftL` 10 .|.
+                               fromIntegral w3 `shiftL` 18) `Q.cons` go s3
+          | w < 0xBE -> do Right (w1,s1) <- lift $ S.nextByte s'
+                           Right (w2,s2) <- lift $ S.nextByte s1
+                           Right (w3,s3) <- lift $ S.nextByte s2
+                           Right (w4,s4) <- lift $ S.nextByte s3
+                           Ns (fromIntegral (w .&. 0x01) .|.
+                               fromIntegral w1 `shiftL` 1 .|.
+                               fromIntegral w2 `shiftL` 9 .|.
+                               fromIntegral w3 `shiftL` 17 .|.
+                               fromIntegral w4 `shiftL` 25) `Q.cons` go s4
           | w < 0xC0 -> error $ "WTF?! (too many Ns) " ++ show w
 
-          | w < 0xE0 -> eqs (fromIntegral (w .&. 0x1f)) $ go (L.tail s)
-          | w < 0xF0 -> eqs (fromIntegral (w .&. 0x0f) .|.
-                            fromIntegral (LB.index s 1) `shiftL` 4) $ go (LB.drop 2 s)
-          | w < 0xF8 -> eqs (fromIntegral (w .&. 0x07) .|.
-                            fromIntegral (LB.index s 1) `shiftL` 3 .|.
-                            fromIntegral (LB.index s 2) `shiftL` 11) $ go (LB.drop 3 s)
+          | w < 0xE0 -> eqs (fromIntegral (w .&. 0x1f)) `Q.cons` go s'
+          | w < 0xF0 -> do Right (w1,s1) <- lift $ S.nextByte s'
+                           eqs (fromIntegral (w .&. 0x0f) .|.
+                                fromIntegral w1 `shiftL` 4) `Q.cons` go s1
+          | w < 0xF8 -> do Right (w1,s1) <- lift $ S.nextByte s'
+                           Right (w2,s2) <- lift $ S.nextByte s1
+                           eqs (fromIntegral (w .&. 0x07) .|.
+                                fromIntegral w1 `shiftL` 3 .|.
+                                fromIntegral w2 `shiftL` 11) `Q.cons` go s2
           | otherwise -> error $ "WTF?! (too many matches) " ++ show w
 
 
@@ -144,6 +162,7 @@ tr :: NucCode -> Char
 tr (NucCode w) = B.w2c . BB.unsafeIndex iupac_chars . fromIntegral $ w .&. 0xF
 
 main_dumppatch :: [String] -> IO ()
-main_dumppatch [inf] = debugStretch . decode . decomp =<< L.readFile inf
+main_dumppatch [inf] = withFile inf ReadMode $
+                            debugStretch . decode . decomp . S.fromHandle
 main_dumppatch     _ = B.hPut stderr "Usage: dumppatch [foo.hef]\n"
 

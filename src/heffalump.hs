@@ -1,4 +1,3 @@
-{-# LANGUAGE LambdaCase #-}
 import Bio.Prelude
 import Paths_heffalump                  ( version )
 import Streaming
@@ -10,6 +9,7 @@ import qualified Data.ByteString.Char8           as B
 import qualified Data.ByteString.Lazy.Char8      as L
 import qualified Data.ByteString.Streaming       as S
 import qualified Data.IntMap                     as I
+import qualified Streaming.Prelude               as Q
 
 import Bamin
 import Eigenstrat
@@ -90,7 +90,7 @@ opts_hetfa =
 
 main_hetfa :: [String] -> IO ()
 main_hetfa args = do
-    ( _, ConfImportGen{..} ) <- parseOpts False defaultImportConf (mk_opts "hetfa" [] opts_hetfa) args
+    ConfImportGen{..} <- parseOpts defaultImportConf (mk_opts "hetfa" [] opts_hetfa) args
     refs <- readTwoBit conf_imp_reference
 
     runResourceT $ S.writeFile conf_imp_output $
@@ -119,7 +119,7 @@ importHetfa ref smps = S.mwrap $ do
                 pure r
   where
     enc2 :: MonadIO m => Int -> S.ByteString m r -> m (Of PackedLump r)
-    enc2 i sq = encodeLumpToMem $ diff2' (nrss_seqs ref !! i) sq >>= yields . Break
+    enc2 i sq = encodeLumpToMem $ diff2 (nrss_seqs ref !! i) sq <* Q.yield Break
 
     fold_1 :: MonadIO m => I.IntMap PackedLump -> Stream (FastaSeq m) m r -> m (I.IntMap PackedLump, r)
     fold_1 !acc s = inspect s >>= \case
@@ -156,12 +156,13 @@ conf_maf = ConfMaf (error "no output file specified")
 
 main_maf :: [String] -> IO ()
 main_maf args = do
-    (maffs,ConfMaf{..}) <- parseOpts True conf_maf (mk_opts "maf" "[maf-file...]" opts_maf) args
+    (maffs,ConfMaf{..}) <- parseFileOpts conf_maf (mk_opts "maf" "[maf-file...]" opts_maf) args
     ref <- readTwoBit conf_maf_reference
-    withFile conf_maf_output WriteMode $ \hdl ->
-        L.hPut hdl . encodeGenome =<<
-           foldM (\g f -> parseMaf (conf_maf_ref_species, conf_maf_oth_species)
-                                   (nrss_chroms ref) g . decomp =<< L.readFile f)
+    withFile conf_maf_output WriteMode $ \ohdl ->
+        L.hPut ohdl . encodeGenome =<<
+           foldM (\g f -> withFile f ReadMode $
+                            parseMaf (conf_maf_ref_species, conf_maf_oth_species)
+                                     (nrss_chroms ref) g . decomp . S.fromHandle)
                  emptyGenome maffs
 
 
@@ -192,35 +193,37 @@ opts_patch =
 
 main_patch :: [String] -> IO ()
 main_patch args = do
-    ( _, ConfPatch{..} ) <- parseOpts False defaultPatchConf (mk_opts "patch" [] opts_patch) args
-    raw <- decomp <$> L.readFile conf_patch_sample
-    ref <- readTwoBit $ either (\e -> fromMaybe e $ getRefPath raw) id conf_patch_reference
+    ConfPatch{..} <- parseOpts defaultPatchConf (mk_opts "patch" [] opts_patch) args
+    withFile conf_patch_sample ReadMode $ \hdli -> do
+        (mref, raw) <- getRefPath $ decomp $ S.fromHandle hdli
+        ref <- readTwoBit $ either (\e -> fromMaybe e mref) id conf_patch_reference
 
-    conf_patch_output $ \hdl ->
-        patchFasta hdl conf_patch_width (nrss_chroms ref)
-                   (nrss_seqs ref) (decode (Right ref) raw)
+        conf_patch_output $ \hdlo ->
+            patchFasta hdlo conf_patch_width
+                (nrss_chroms ref) (nrss_seqs ref) (decode (Right ref) raw)
 
 main_dumplump :: [String] -> IO ()
 main_dumplump [ref,inf] = do rs <- readTwoBit ref
-                             debugLump . decode (Right rs) . decomp =<< L.readFile inf
-main_dumplump [  inf  ] =    debugLump . decode (Left "no reference given") . decomp =<< L.readFile inf
+                             withFile inf ReadMode $ debugLump . decode (Right rs) . decomp . S.fromHandle
+main_dumplump [  inf  ] =    withFile inf ReadMode $ debugLump . decode (Left "no reference given") . decomp . S.fromHandle
 main_dumplump     _     =    hPutStrLn stderr "Usage: dumplump [foo.hef]"
 
 
-patchFasta :: Handle -> Int64 -> [B.ByteString] -> [() -> NewRefSeq] -> Fix Lump -> IO ()
+patchFasta :: Handle -> Int64 -> [B.ByteString] -> [() -> NewRefSeq] -> Stream (Of Lump) IO r -> IO r
 patchFasta hdl wd = p1
   where
-    p1 :: [B.ByteString] -> [() -> NewRefSeq] -> Fix Lump -> IO ()
-    p1 [    ]     _  _ = return ()
-    p1      _ [    ] _ = return ()
+    p1 [    ]     _  p = Q.effects p
+    p1      _ [    ] p = Q.effects p
     p1 (c:cs) (r:rs) p = do hPutStrLn hdl $ '>' : B.unpack c
                             p2 (p1 cs rs) 0 (patch (r ()) p)
 
-    p2 :: (Fix Lump -> IO ()) -> Int64 -> Frag -> IO ()
-    p2 k l f | l == wd = L.hPutStrLn hdl L.empty >> p2 k 0 f
-    p2 k l (Term p)    = when (l>0) (L.hPutStrLn hdl L.empty) >> k p
-    p2 k l (Short c f) = hPutChar hdl c >> p2 k (succ l) f
-    p2 k l (Long  s f) = case L.splitAt (wd-l) s of
-            _ | L.null s -> p2 k l f
-            (u,v)        -> L.hPutStr hdl u >> p2 k (l + L.length u) (Long v f)
+    p2 k l | l == wd = \f -> L.hPutStrLn hdl L.empty >> p2 k 0 f
+    p2 k l = inspect >=> \case
+        Left p            -> when (l>0) (L.hPutStrLn hdl L.empty) >> k p
+        Right (Short c f) -> hPutChar hdl c >> p2 k (succ l) f
+        Right (Long  s f) -> p3 k l s f
+
+    p3 k l s f = case L.splitAt (wd-l) s of
+        _ | L.null s  -> p2 k l f
+        (u,v)         -> L.hPutStr hdl u >> p3 k (l + L.length u) v f
 

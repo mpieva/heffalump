@@ -9,14 +9,15 @@ import qualified Data.ByteString.Char8          as B
 import qualified Data.ByteString.Lazy           as LB
 import qualified Data.ByteString.Lazy.Char8     as L
 import qualified Data.Vector.Unboxed            as U
+import qualified Streaming.Prelude              as Q
 
 import Bed
 import Lump
 import NewRef
 import Util
 
--- ^ The Eigenstrat and Ancestrymap exporters.  Includes silly
--- generation of names and hash functions.
+-- ^ The Eigenstrat and Ancestrymap exporters.  Includes generation of
+-- meaningless names and hash functions.
 
 
 -- We wrote Eigenstrat in the first iteration.  Eigenstrat is one
@@ -27,8 +28,8 @@ import Util
 -- printf("GENO %d %d %x %x", n_individuals, n_snps, individual_hash, snp_hash);
 --
 -- That's of course retarded, we can't know n_snps or snp_hash before we
--- generate the snp file.  So all we can do is reserve space and print
--- the header later.  m(
+-- generate the snp file.  So all we can do is reserve space and
+-- overwrite the header later.  m(
 --
 -- To generate individual_hash, we apply nick_hasharr to the vector of
 -- individual names; to generate snp_hash we apply nick_hasharr to the
@@ -38,7 +39,7 @@ import Util
 -- per individual, padded to a full byte, padded to at least 48 bytes.
 
 
--- Nickhash for strings.  XXX It's not clear if we got the signs right.
+-- Nickhash for strings.  (It's not clear if we got the signs right?)
 nick_hashit :: L.ByteString -> Int32
 nick_hashit = LB.foldl (\h c -> 23 * h + fromIntegral c) 0
 
@@ -95,17 +96,18 @@ opts_eigen =
 -- merge multiple files with the reference, write Eigenstrat format (geno & snp files)
 main_eigenstrat :: [String] -> IO ()
 main_eigenstrat args = do
-    ( hefs, ConfEigen{..} ) <- parseOpts True defaultConfEigen (mk_opts "eigenstrat" "[hef-file...]" opts_eigen) args
-    (refs, inps) <- decodeMany conf_reference hefs
-    region_filter <- mkBedFilter conf_regions (either error nrss_chroms refs)
+    ( hefs, ConfEigen{..} ) <- parseFileOpts defaultConfEigen
+                                             (mk_opts "eigenstrat" "[hef-file...]" opts_eigen) args
 
-    withFile (conf_output ++ ".snp") WriteMode $ \hsnp ->
+    decodeMany conf_reference hefs $ \refs inps -> do
+      region_filter <- mkBedFilter conf_regions (either error nrss_chroms refs)
+      withFile (conf_output ++ ".snp") WriteMode $ \hsnp ->
         withFile (conf_output ++ ".geno") WriteMode $ \hgeno -> do
             let vars = either (const id) addRef refs $
                        region_filter $
-                       bool singles_only concat conf_split $
+                       bool singles_only Q.concat conf_split $
                        mergeLumps conf_noutgroups inps
-            forM_ vars $ \Variant{..} ->
+            flip Q.mapM_ vars $ \Variant{..} ->
                 -- samples (not outgroups) must show ref and alt allele at least once
                 let ve = U.foldl' (.|.) 0 $ U.drop conf_noutgroups v_calls
                     is_ti = conf_all || isTransversion v_alt in
@@ -125,6 +127,6 @@ main_eigenstrat args = do
                         -- "Optional 5th and 6th columns are reference and variant alleles"
                         , [toRefCode v_ref], [toAltCode v_alt v_ref] ]
   where
-    singles_only = foldr (\xs xss -> case xs of [x] -> x : xss ; _ -> xss) []
+    singles_only = Q.concat . Q.map (\case [x] -> Just x ; _ -> Nothing)
 
 

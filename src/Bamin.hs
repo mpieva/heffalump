@@ -1,4 +1,3 @@
-{-# LANGUAGE LambdaCase #-}
 -- | Code to read a BAM file in.  We pileup, then sample a base
 -- randomly.  We end with the same format we would get if we ran 'vcflc'
 -- on an appropriately generated VCF file.
@@ -18,7 +17,7 @@ import qualified Data.ByteString.Lazy           as L
 import qualified Data.ByteString.Streaming      as S
 import qualified Data.IntMap.Strict             as I
 import qualified Data.Vector.Unboxed            as U
-import qualified Streaming                      as Q
+import qualified Streaming.Prelude              as Q
 
 import Lump
 import NewRef
@@ -40,7 +39,8 @@ data ConfBam = ConfBam {
   deriving Show
 
 conf_bam0 :: ConfBam
-conf_bam0 = ConfBam (error "no output file specified") (error "no reference file specified")
+conf_bam0 = ConfBam (error "no output file specified")
+                    (error "no reference file specified")
                     Ostrich False (Q 0) (Q 0) 0 0
 
 opts_bam :: [ OptDescr ( ConfBam -> IO ConfBam ) ]
@@ -76,7 +76,7 @@ opts_bam =
 
 main_bam :: [String] -> IO ()
 main_bam args = do
-    ( bams, cfg@ConfBam{..} ) <- parseOpts True conf_bam0 (mk_opts "bamin" "[bam-file...]" opts_bam) args
+    ( bams, cfg@ConfBam{..} ) <- parseFileOpts conf_bam0 (mk_opts "bamin" "[bam-file...]" opts_bam) args
     ref <- readTwoBit conf_bam_reference
     rnd_gen <- newStdGen
 
@@ -137,7 +137,6 @@ sample_piles g0 deam pick cs0 = eneeCheckIfDone (nextChrom g0 (nrss_seqs cs0) (R
                    in headStream >>
                       eneeCheckIfDone (generic g'' cs c' rs (v_loc var1 + 1))
                                       (k (Chunk [var1 { v_call = V2b (xor rb nc) }]))
-
             | otherwise
                 -> headStream >> generic g cs NewRefEnd rs (v_loc var1 + 1) k
 
@@ -164,36 +163,36 @@ encodePiles ref tgts = S.mwrap $ do
                                       m <$ skipToEof
 
                         Just  i -> do liftIO $ hPrintf stderr "\nTarget %s becomes index %d.\n" (unpack rn) i
-                                      lump Q.:> _ <- encodeLumpToMem $ importPile >> Q.yields (Break ())
+                                      lump Q.:> _ <- encodeLumpToMem $ importPile >> Q.yield Break
                                       liftIO $ hPrintf stderr "\nTarget %s becomes index %d, %d bytes.\n"
                                                     (unpack rn) i (L.length $ unpackLump lump)
                                       return $! I.insert i lump m
 
-importPile :: Monad m => Q.Stream Lump (Iteratee [Var1] m) ()
-importPile = normalizeLump' $ generic (Refseq 0) 0
+importPile :: Monad m => Q.Stream (Q.Of Lump) (Iteratee [Var1] m) ()
+importPile = normalizeLump $ generic (Refseq 0) 0
   where
-    generic !rs !pos = Q.effect $ tryHead >>= \case
-        Nothing -> return $ Q.yields (Break ())
+    generic !rs !pos = lift tryHead >>= \case
+        Nothing -> Q.yield Break
         Just var1
             -- switch to next chromosome
-            | rs /= v_refseq var1 -> return $ do
-                forM_ [succ rs .. v_refseq var1] $ \_ -> Q.yields (Break ())
+            | rs /= v_refseq var1 -> do
+                forM_ [succ rs .. v_refseq var1] $ \_ -> Q.yield Break
                 when (v_loc var1 > 0) $
-                    Q.yields $ Ns (fromIntegral $ v_loc var1) ()
-                Q.yields $ enc_var (v_call var1) ()
+                    Q.yield $ Ns (fromIntegral $ v_loc var1)
+                Q.yield $ enc_var (v_call var1)
                 generic (v_refseq var1) (v_loc var1 + 1)
 
             -- gap, creates Ns
-            | v_loc var1 >= pos -> return $ do
+            | v_loc var1 >= pos -> do
                 when (v_loc var1 > pos) $
-                    Q.yields $ Ns (fromIntegral $ v_loc var1 - pos) ()
-                Q.yields $ enc_var (v_call var1) ()
+                    Q.yield $ Ns (fromIntegral $ v_loc var1 - pos)
+                Q.yield $ enc_var (v_call var1)
                 generic rs (v_loc var1 + 1)
 
             | otherwise -> error $ "Got variant position " ++ show (v_refseq var1, v_loc var1)
                                 ++ " when expecting " ++ show pos ++ " or higher."
 
-    enc_var :: Var2b -> a -> Lump a
+    enc_var :: Var2b -> Lump
     enc_var (V2b 0) = Eqs1 1     -- ref equals alt, could both be N
     enc_var (V2b 1) = Trans1     -- transition
     enc_var (V2b 2) = Compl1     -- complement
@@ -261,8 +260,7 @@ post_collect ref pp vv = U.fromListN 5 $ go pp
               | otherwise        = [ a+a'+u', c+c', g+g', t+t'+u, 0 ]
 
     -- Mateja's second method depends on the reference allele:  if the
-    -- reference is C, we ignore the forward Ts and sample from the
-    -- rest.
+    -- reference is C, we ignore the forward Ts and sample from the rest.
     go Mateja2 | isC       = [ a+a'+u', c+c', g+g', t',     0 ]
                | isG       = [ a,       c+c', g+g', t+t'+u, 0 ]
                | otherwise = [ a+a'+u', c+c', g+g', t+t'+u, 0 ]
