@@ -25,7 +25,7 @@ data RawVariant = RawVariant {
 
 -- The way we hash chromosome names.
 hashChrom :: B.ByteString -> Int
-hashChrom = BB.foldl' (\a b -> 49 * a + fromIntegral b) 0
+hashChrom = BB.foldl' (\a b -> (49 * a + fromIntegral b) .&. 0xFFFF) 0
 
 data CScanner
 
