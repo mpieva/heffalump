@@ -72,7 +72,8 @@ heffalump \- compact storage of genotypes
 [\fB\-R\fR \fIregions.bed\fR]
 \fIinput.hef\fR...
 
-.B heffalump dstatistics
+.B heffalump
+[\fBdstatistics\fR|\fBf4statistics\fR]
 [\fB\-r\fR \fIref.2bit\fR]
 [\fB\-n\fR \fInumoutgroups\fR]
 [\fB\-k\fR \fInumrefpanel\fR]
@@ -112,8 +113,8 @@ files into one dataset useful as input for
 and a multitude of other tools, respectively.
 
 The functions
-.BR kayvergence " and " dstatistics
-compute two simple kinds of relevant statistics on the fly.
+.BR kayvergence ", " f4statistics " and " dstatistics
+compute three simple kinds of relevant statistics on the fly.
 
 .SH OPTIONS
 
@@ -144,8 +145,8 @@ files created with respect to the same reference can be processed
 together.  When operating on \fIhef\fR files, the same reference is
 usually needed, and then \fB\-r\fR needs to be specified explicitly only
 if the reference isn't found automatically.  A few operations (plain
-\fItreemix\fR output, \fIdstatistics\fR) can work without access to the
-reference.
+\fItreemix\fR output, \fIdstatistics\fR, \fIf4statistics\fR) can work
+without access to the reference.
 
 \fBheffalump\fR stores genomes as a list of difference to a reference.
 When importing things like \fIhetfa\fR, the reference is clearly needed to
@@ -265,12 +266,16 @@ Read the reference genome from \fIref.2bit\fR.
 The input is "dense", meaning it is expected to contain a record for
 every site.  Sites absent from the input are assumed to be uncalled,
 that is, missing data.
+.B heffalump
+will normally detect if the input is dense and act accordingly.
 
 .TP
 \fB\-S\fR, \fB--sparse\fR
 The input is "sparse", meaning it is expected to contain only records
 for variant sites.  Sites absent from the input are assumed to match the
 reference.
+.B heffalump
+will normally detect if the input is sparse and act accordingly.
 
 .TP
 \fB\-H\fR, \fB--high\fR
@@ -485,9 +490,9 @@ output them.
 Restrict output to variants in the regions found in \fIregions.bed\fR,
 which should be a \fIbed\fR file.
 
-.SS Kayvergence/Dstatistics
+.SS Kayvergence/Dstatistics/F4statistics
 
-\fBheffalump\fR [\fBkayvergence\fR|\fBdstatistics\fR]
+\fBheffalump\fR [\fBkayvergence\fR|\fBdstatistics\fR|\fBf4statistics\fR]
 [\fB\-r\fR \fIref.2bit\fR]
 [\fB\-n\fR \fInumoutgroups\fR]
 [\fB\-k\fR \fInumrefpanel\fR]
@@ -497,8 +502,9 @@ which should be a \fIbed\fR file.
 \fIinput.hef\fR...
 
 Merges multiple \fIhef\fR files and computes either "Kayvergence ratios"
-or "D-statistics" on suitable combinations of the inputs.  Output is
-formatted as a human readable table and sent to stdout.
+or "D-statistics" and "F4-statistics" on suitable combinations of the
+inputs.  Output is formatted as a human readable table and sent to
+stdout.
 
 "Kayvergence ratio" is a crude estimate of population history computed
 from shared variants.  \fBheffalump\fR computes the "kayvergence ratio"
@@ -513,6 +519,12 @@ populations is consistent with a clean tree shaped history.
 "outgroup", two individuals from the "reference panel" and one "sample"
 from the input, where the assumed population history separates the
 sample and the outgroup from the reference panel.
+
+"F4-statistics" is a proportion of shared changes between two sets of
+two populations.  It is very similar to "D-statistics", but normalized
+in a different way.  \fBheffalump f4statistics\fR works just like
+\fBheffalump dstatistics\fR, but computes both \fIF4\fR and \fID\fR.
+It's also a bit more expensive than computing just \fID\fR.
 
 .TP
 \fB\-r\fR, \fB--reference\fR=\fIref.2bit\fR

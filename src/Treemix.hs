@@ -77,7 +77,7 @@ main_treemix args = do
       conf_output $ \hdl ->
         toHandle hdl $ gzip $ toStreamingByteString $
 
-        (<> foldr (\a k -> byteString a <> char7 ' ' <> k) (char7 '\n') pops) $
+        (<>) (foldr (\a k -> byteString a <> char7 ' ' <> k) (char7 '\n') pops) $
         concatBuilders $ Q.map
             (\Variant{..} -> let ve = U.foldl' (.|.) 0 $ U.drop conf_noutgroups v_calls
                                  is_ti = not conf_transv || isTransversion v_alt

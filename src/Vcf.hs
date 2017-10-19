@@ -18,22 +18,23 @@ import Util
 import VcfScan
 
 type GapCons = Int -> Lump
+type StreamRV = Stream (Of RawVariant) IO ()
+
+data Density = Sparse | Dense
 
 data ConfXcf = ConfXcf
     { conf_output  :: FilePath
     , conf_ref     :: FilePath
-    , conf_density :: GapCons
-    , conf_clean   :: Xform RawVariant
+    , conf_density :: NewRefSeqs -> StreamRV -> IO (Of Density StreamRV)
     , conf_ploidy  :: Xform Lump
     , conf_key     :: String
     , conf_ext     :: String
-    , conf_reader  :: FilePath -> (Stream (Of RawVariant) IO () -> IO ()) -> IO () }
+    , conf_reader  :: FilePath -> (StreamRV -> IO ()) -> IO () }
 
 conf_vcf :: ConfXcf
 conf_vcf = ConfXcf (error "no output file specified")
                    (error "no reference specified")
-                   (error "specify either --dense or --sparse")
-                   id id "vcfin" "vcf" readVcf
+                   detect_density id "vcfin" "vcf" readVcf
 
 conf_bcf :: ConfXcf
 conf_bcf = conf_vcf { conf_key = "bcfin", conf_ext = "bcf", conf_reader = readBcf }
@@ -51,8 +52,8 @@ opts_xcf =
     set_output a c = return $ c { conf_output  = a }
     set_ref    a c = return $ c { conf_ref     = a }
 
-    set_dense    c = return $ c { conf_density = Ns,   conf_clean = cleanMissing }
-    set_sparse   c = return $ c { conf_density = Eqs2, conf_clean = id           }
+    set_dense    c = return $ c { conf_density = const $ pure . (:>)  Dense }
+    set_sparse   c = return $ c { conf_density = const $ pure . (:>) Sparse }
     set_low      c = return $ c { conf_ploidy  = make_hap }
     set_high     c = return $ c { conf_ploidy  = id       }
 
@@ -63,12 +64,13 @@ main_xcf conf0 args = do
                                  fspec = "["++conf_ext conf0++"-file...]"
                              in parseFileOpts conf0 opts args
     ref <- readTwoBit conf_ref
-    withMany conf_reader vcfs $ \inp ->
+    withMany conf_reader vcfs $ \inp0 -> do
+        density :> inp <- conf_density ref inp0
         withFile conf_output WriteMode $ \hdl ->
             S.hPut hdl . encode ref . conf_ploidy
-            . importVcf conf_density (nrss_chroms ref)
+            . importVcf (case density of Dense -> Ns ; Sparse -> Eqs2) (nrss_chroms ref)
             . progress conf_output . dedupVcf
-            . conf_clean . cleanVcf $ inp
+            . (case density of Dense -> cleanMissing ; Sparse -> id) . cleanVcf $ inp
   where
     progress :: MonadIO m => String -> Stream (Of RawVariant) m r -> Stream (Of RawVariant) m r
     progress fp = go 0 0
@@ -182,3 +184,50 @@ importVcf ns = (.) normalizeLump . go
                          | rv_gt .&. 0xFCFE == 0x0002 = False     -- "0|.", "0/.", "0|0", "0/0"
                          | otherwise                  = True
 
+
+-- | Trying to detect density.  A sequence of entries for, say, 128
+-- consecutive positions is a pretty strong tell that the stream is
+-- dense.  Otherwise, a gap of, say, 32 positions where the reference
+-- does not also have a gap, is a pretty strong tell it is sparse.  Just
+-- by looking at the first couple thousand records, we know.  Else, the
+-- command line options are still there.
+detect_density :: NewRefSeqs -> StreamRV -> IO (Of Density StreamRV)
+detect_density ref =
+    Q.toList . Q.splitAt 2048 >=> \(vars :> rest) ->
+    if is_dense vars then do
+        hPutStrLn stderr "Hmm, this looks like a dense data set."
+        return (Dense :> (Q.each vars >> rest))
+    else if is_sparse vars then do
+        hPutStrLn stderr "Hmm, this looks like a sparse data set."
+        return (Sparse :> (Q.each vars >> rest))
+    else do
+        hPutStrLn stderr "Hmm, this data set does not make sense to me."
+        hPutStrLn stderr "Specify either --dense or --sparse to import it correctly."
+        exitFailure
+  where
+    is_dense = is_dense' 0 0 (0::Int)
+
+    is_dense' !_ !_ 128 _ = True
+    is_dense' !_ !_ !_ [] = False
+    is_dense' !c !p !n (v:vs) | rv_chrom v /= c = is_dense' (rv_chrom v) (rv_pos v)   1   vs
+                              | rv_pos v == p   = is_dense' (rv_chrom v) (rv_pos v)   n   vs
+                              | rv_pos v == p+1 = is_dense' (rv_chrom v) (rv_pos v) (n+1) vs
+                              | otherwise       = is_dense' (rv_chrom v) (rv_pos v)   1   vs
+
+    is_sparse [    ] = False
+    is_sparse (v:vs) = is_sparse' (find_ref $ rv_chrom v) (rv_chrom v) 0 (0::Int) (v:vs)
+
+    is_sparse' _ !_ !_ 32   _         = True
+    is_sparse' _ !_ !_ !_ [    ]      = False
+    is_sparse' r !c !p !n (v:vs)
+        | rv_chrom v /= c             = is_sparse (v:vs)
+        | rv_pos v < p                = is_sparse' r c p n vs
+        | otherwise = case viewNRS r of
+            NilRef                   -> is_sparse' r  c (rv_pos v)  n  vs
+            l :== r'                 -> is_sparse' r' c (p+l)   0   (v:vs)
+            _ :^  r' | rv_pos v == p -> is_sparse' r' c (p+1)   0      vs
+                     | otherwise     -> is_sparse' r' c (p+1) (n+1) (v:vs)
+
+    find_ref h = maybe NewRefEnd id . msum $
+                 zipWith (\c f -> if hashChrom c == h then Just (f ()) else Nothing)
+                         (nrss_chroms ref) (nrss_seqs ref)
