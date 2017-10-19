@@ -1,5 +1,3 @@
-- F4 could be more efficient (jump over matching strecthes)
-
 - hashing chromosome names was probably a bad idea
 
 - xCF import from multiple files could sort internally, just like all

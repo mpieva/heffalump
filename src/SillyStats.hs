@@ -10,13 +10,9 @@ module SillyStats (
 -- difficulty is that invariant sites count as well, but sites with
 -- missing data don't.  By looking at every site, even those that are
 -- invariant, we get this correct.  The cost is that potentially long
--- stretches have to be painstakingly traversed.
---
--- What we could improve:  Skip over stretches where everyone matches
--- the reference, but count them.  Skip over stretches where nobody has
--- data, and don't count them.  This needs some modification to
--- 'mergeLumpsWith', which isn't too bad.  It also interacts badly with
--- the filters applied to variants.
+-- stretches have to be painstakingly traversed.  Unfortunately, trying
+-- to improve on that interferes with the filters.  While the Bed filter
+-- could be generalized, but the CpG filter couldn't be implemented.
 
 import Bio.Prelude
 import Numeric.SpecFunctions            ( incompleteBeta )
