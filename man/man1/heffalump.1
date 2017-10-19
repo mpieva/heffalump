@@ -266,12 +266,16 @@ Read the reference genome from \fIref.2bit\fR.
 The input is "dense", meaning it is expected to contain a record for
 every site.  Sites absent from the input are assumed to be uncalled,
 that is, missing data.
+.B heffalump
+will normally detect if the input is dense and act accordingly.
 
 .TP
 \fB\-S\fR, \fB--sparse\fR
 The input is "sparse", meaning it is expected to contain only records
 for variant sites.  Sites absent from the input are assumed to match the
 reference.
+.B heffalump
+will normally detect if the input is sparse and act accordingly.
 
 .TP
 \fB\-H\fR, \fB--high\fR
