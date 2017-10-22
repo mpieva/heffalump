@@ -1,6 +1,6 @@
 module BcfScan ( readBcf, decodeBcf ) where
 
--- Minimalistic BCF reader.  We only care about the genotype of the
+-- ^ Minimalistic BCF reader.  We only care about the genotype of the
 -- first individual.  Should allow for a handful of shortcuts...
 --
 -- This assumes that GT is the first field encodes for each sample.  If
@@ -9,7 +9,7 @@ module BcfScan ( readBcf, decodeBcf ) where
 -- increase in code complexity.
 
 import Bio.Prelude
-import Util                     ( decomp )
+import Util                     ( decomp, unexpected )
 import VcfScan                  ( RawVariant(..), hashChrom )
 
 import Foreign.C.Types          ( CChar )
@@ -29,9 +29,9 @@ import qualified Streaming.Prelude               as Q
 readBcf :: FilePath -> (Stream (Of RawVariant) IO () -> IO r) -> IO r
 readBcf fp k = withFile fp ReadMode $ k . decodeBcf . decomp . S.fromHandle
 
--- Skip over header, for now we won't parse it.  This fails if GT is not
--- the first individual field that's encoded, but that should always be
--- the case.
+-- Parses the contigs declared in the header, but skips over everything
+-- else.  This fails if GT is not the first individual field that's
+-- encoded, but that should always be the case.
 decodeBcf :: MonadIO m => S.ByteString m r -> Stream (Of RawVariant) m r
 decodeBcf = lift . S.toStrict . S.splitAt 9 >=> parse_hdr
   where
@@ -133,7 +133,7 @@ peek32 = peekByteOff
 
 get_gts :: Ptr CChar -> IO Word16
 get_gts p = do !k1 <- peek8 p 0
-               let !ks = case k1 of 1 -> 2; 2 -> 3; 3 -> 5; _ -> error "WTF?"  -- key size, value ignored
+               let !ks = case k1 of 1 -> 2; 2 -> 3; 3 -> 5; _ -> unexpected "" -- key size, value ignored
                !tp_byte <- peek8 p ks
                 -- we support haploid and diploid, and Word8 and Word16
                case tp_byte of

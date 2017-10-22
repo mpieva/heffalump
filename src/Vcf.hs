@@ -12,8 +12,8 @@ import qualified Data.ByteString.Streaming       as S
 import qualified Streaming.Prelude               as Q
 
 import BcfScan
+import Genome
 import Lump
-import NewRef
 import Util
 import VcfScan
 
@@ -25,7 +25,7 @@ data Density = Sparse | Dense
 data ConfXcf = ConfXcf
     { conf_output  :: FilePath
     , conf_ref     :: FilePath
-    , conf_density :: NewRefSeqs -> StreamRV -> IO (Of Density StreamRV)
+    , conf_density :: RefSeqs -> StreamRV -> IO (Of Density StreamRV)
     , conf_ploidy  :: Xform Lump
     , conf_key     :: String
     , conf_ext     :: String
@@ -68,7 +68,7 @@ main_xcf conf0 args = do
         density :> inp <- conf_density ref inp0
         withFile conf_output WriteMode $ \hdl ->
             S.hPut hdl . encode ref . conf_ploidy
-            . importVcf (case density of Dense -> Ns ; Sparse -> Eqs2) (nrss_chroms ref)
+            . importVcf (case density of Dense -> Ns ; Sparse -> Eqs2) (rss_chroms ref)
             . progress conf_output . dedupVcf
             . (case density of Dense -> cleanMissing ; Sparse -> id) . cleanVcf $ inp
   where
@@ -191,7 +191,7 @@ importVcf ns = (.) normalizeLump . go
 -- does not also have a gap, is a pretty strong tell it is sparse.  Just
 -- by looking at the first couple thousand records, we know.  Else, the
 -- command line options are still there.
-detect_density :: NewRefSeqs -> StreamRV -> IO (Of Density StreamRV)
+detect_density :: RefSeqs -> StreamRV -> IO (Of Density StreamRV)
 detect_density ref =
     Q.toList . Q.splitAt 2048 >=> \(vars :> rest) ->
     if is_dense vars then do
@@ -222,12 +222,12 @@ detect_density ref =
     is_sparse' r !c !p !n (v:vs)
         | rv_chrom v /= c             = is_sparse (v:vs)
         | rv_pos v < p                = is_sparse' r c p n vs
-        | otherwise = case viewNRS r of
+        | otherwise = case viewRS r of
             NilRef                   -> is_sparse' r  c (rv_pos v)  n  vs
             l :== r'                 -> is_sparse' r' c (p+l)   0   (v:vs)
             _ :^  r' | rv_pos v == p -> is_sparse' r' c (p+1)   0      vs
                      | otherwise     -> is_sparse' r' c (p+1) (n+1) (v:vs)
 
-    find_ref h = maybe NewRefEnd id . msum $
+    find_ref h = maybe RefEnd id . msum $
                  zipWith (\c f -> if hashChrom c == h then Just (f ()) else Nothing)
-                         (nrss_chroms ref) (nrss_seqs ref)
+                         (rss_chroms ref) (rss_seqs ref)

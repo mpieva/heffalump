@@ -10,6 +10,7 @@ module Util
     , readSampleFa
     , readNumIO
     , FastaSeq(..)
+    , unexpected
     ) where
 
 import Bio.Prelude
@@ -173,6 +174,9 @@ parseFasta = go . ignoreBody . S.lines
             -- body line:  continue
             Right ( _ ,line') -> ignoreBody $ effect (S.effects line')
 
+unexpected :: String -> a
+unexpected msg = error $ "Ph'nglui mglw'nafh Cthulhu R'lyeh wgah'nagl fhtagn."
+        ++ if null msg then "" else "\n (" ++ msg ++ ")"
 
 readNumIO :: String -> IO Int
 readNumIO s = case reads s of

@@ -1,5 +1,5 @@
 {-# LANGUAGE CPP #-}
-module NewRef where
+module Genome where
 
 -- ^ We'll use a 2bit file as reference.  Chromosomes in the file will
 -- be used in exactly this order, everything else is ignored.
@@ -7,31 +7,34 @@ module NewRef where
 -- When reading input, we always supply the reference file.  Sometimes we
 -- don't actually need the reference sequence, but we still use it to
 -- decide which chromomes to include, and sometimes how to reorder them.
--- (We should probably leave the list of terget chromosomes in the hef
--- files themselves; that way, we can ensure that two hefs cn be mnerged
--- safely.)
+-- We also compute a checksum over the list of target chromosomes and
+-- leave it in the hef files themselves; that way, we can ensure that
+-- two hefs can be merged safely.
 --
 -- Applications for import:
 --
 --   VCF, BCF files:  A bunch of files, usually in the wrong order.  We
 --                    read each, split them into chromosomes, then use
 --                    the 2bit file to put them in the correct order.
+--                    (XXX  Right now, we just concatenate them!)
 --
---   BAM files:  must be ordered somehow, we require the reference, we
---               can reorder chromosomes after we're done
+--   BAM files:  Must be sorted, but the order of target sequences is
+--               arbitrary.  We require the reference, and reorder valid
+--               chromosomes after we're done importing.
 --
---   EMF, MAF:  will not be sorted.  We require the reference so we can
---              put everything into a proper order.
+--   EMF, MAF:  Will not be sorted.  We parse pieces in arbitrary order,
+--              and require the reference so we can put everything into
+--              a proper order at the end.
 --
 -- Applications for export:
 --
---   D-stats, Treemix:  reference is no longer needed!
+--   D-stats, Treemix:  The reference is no longer needed!
 --
---   Eigenstrat:  can be done without the reference (but will look
---                ridiculous).  Output of proper SNP files
---                requires the reference.
+--   Eigenstrat:  Can be done without the reference, but will look
+--                ridiculous.  Output of proper SNP files requires the
+--                reference.
 --
---   VCF:  clearly requires the reference.
+--   VCF:  Clearly requires the reference.
 
 
 import Bio.Prelude                   hiding ( Ns )
@@ -49,46 +52,46 @@ import Bio.Util.MMap                        ( unsafeMMapFile )
 import System.IO.Posix.MMap                 ( unsafeMMapFile )
 #endif
 
-import qualified Data.ByteString                as B
-import qualified Data.ByteString.Builder        as B
-import qualified Data.ByteString.Char8          as C
-import qualified Data.ByteString.Lazy.Char8     as L
-import qualified Data.ByteString.Short          as H
-import qualified Data.ByteString.Streaming.Char8      as S
-import qualified Data.ByteString.Unsafe         as B
-import qualified Data.Vector.Unboxed            as U
-import qualified Streaming.Prelude              as Q
+import qualified Data.ByteString                    as B
+import qualified Data.ByteString.Builder            as B
+import qualified Data.ByteString.Char8              as C
+import qualified Data.ByteString.Lazy.Char8         as L
+import qualified Data.ByteString.Short              as H
+import qualified Data.ByteString.Streaming.Char8    as S
+import qualified Data.ByteString.Unsafe             as B
+import qualified Data.Vector.Unboxed                as U
+import qualified Streaming.Prelude                  as Q
 
-import Util ( decomp, mk_opts, parseFileOpts )
+import Util ( decomp, mk_opts, parseFileOpts, unexpected )
 
 -- | This is a reference sequence.  It consists of stretches of Ns and
 -- stretches of sequence.  Invariant:  the lengths for 'ManyNs' and
 -- 'SomeSeq' are always strictly greater than zero.
 
-data NewRefSeq = ManyNs !Int NewRefSeq
-                 -- Primitive bases in 2bit encoding:  [0..3] = TCAG
-               | SomeSeq {-# UNPACK #-} !B.ByteString  -- ^ underlying data
-                         {-# UNPACK #-} !Int           -- ^ offset in bases(!)
-                         {-# UNPACK #-} !Int           -- ^ length in bases
-                         NewRefSeq
-               | NewRefEnd
+data RefSeq = ManyNs !Int RefSeq
+              -- Primitive bases in 2bit encoding:  [0..3] = TCAG
+            | SomeSeq {-# UNPACK #-} !B.ByteString  -- ^ underlying data
+                      {-# UNPACK #-} !Int           -- ^ offset in bases(!)
+                      {-# UNPACK #-} !Int           -- ^ length in bases
+                      RefSeq
+            | RefEnd
 
-instance Show NewRefSeq where
+instance Show RefSeq where
     showsPrec _ (ManyNs      n r) = (++) "ManyNs " . shows n . (++) " $ " . shows r
     showsPrec _ (SomeSeq _ _ l r) = (++) "SomeSeq " . shows l . (++) " $ " . shows r
-    showsPrec _ NewRefEnd         = (++) "NewRefEnd"
+    showsPrec _  RefEnd           = (++) "RefEnd"
 
-data NewRefSeqs = NewRefSeqs { nrss_chroms  :: [ B.ByteString ]
-                             , nrss_lengths :: [ Int ]
-                             , nrss_seqs    :: [ () -> NewRefSeq ]
-                             , nrss_path    :: !B.ByteString }
+data RefSeqs = RefSeqs { rss_chroms  :: [ B.ByteString ]
+                       , rss_lengths :: [ Int ]
+                       , rss_seqs    :: [ () -> RefSeq ]
+                       , rss_path    :: !B.ByteString }
 
-readTwoBit :: FilePath -> IO NewRefSeqs
+readTwoBit :: FilePath -> IO RefSeqs
 readTwoBit fp = parseTwoBit <$> makeAbsolute fp <*> unsafeMMapFile fp
 
 -- In theory, there could be 2bit files in big endian format out there.
 -- We don't support them, since I've never seen one in the wild.
-parseTwoBit :: FilePath -> B.ByteString -> NewRefSeqs
+parseTwoBit :: FilePath -> B.ByteString -> RefSeqs
 parseTwoBit fp0 raw = case (getW32 0, getW32 4) of (0x1A412743, 0) -> parseEachSeq 16 0
                                                    _ -> error "This does not look like a 2bit file."
   where
@@ -96,32 +99,32 @@ parseTwoBit fp0 raw = case (getW32 0, getW32 4) of (0x1A412743, 0) -> parseEachS
     getW32 o | o + 4 >= B.length raw = error $ "out of bounds access: " ++ show (o, B.length raw)
              | otherwise = unsafeDupablePerformIO $ B.unsafeUseAsCString raw $ \p -> peekByteOff p o
 
-    num_seq    = getW32 8
+    num_seq  = getW32 8
 
-    parseEachSeq  _  n | num_seq == n = NewRefSeqs [] [] [] (fromString fp0)
+    parseEachSeq  _  n | num_seq == n = RefSeqs [] [] [] (fromString fp0)
     parseEachSeq off n = case parseEachSeq (off+5+nmsize) (n+1) of
-                            NewRefSeqs cs ls ss fp ->
-                                NewRefSeqs (name:cs) (dnasize:ls) ((\() -> the_seq):ss) fp
+                            RefSeqs cs ls ss fp ->
+                                RefSeqs (name:cs) (dnasize:ls) ((\() -> the_seq):ss) fp
       where
         !nmsize  = fromIntegral $ B.index raw off
         !name    = B.take nmsize $ B.drop (1+off) raw
         !offset  = fromIntegral . getW32 $ off+1+nmsize
 
-        !dnasize = fromIntegral . getW32 $ offset
-        !nBlockCount = fromIntegral . getW32 $ offset + 4
+        !dnasize        = fromIntegral . getW32 $ offset
+        !nBlockCount    = fromIntegral . getW32 $ offset + 4
         !maskBlockCount = fromIntegral . getW32 $ offset + 8 + 8*nBlockCount
-        !packedDnaOff = offset + 16 + 8 * (nBlockCount+maskBlockCount)
+        !packedDnaOff   = offset + 16 + 8 * (nBlockCount+maskBlockCount)
 
         -- We will need to decode the N blocks, but we ignore the M blocks.
         n_blocks = [ (u,v) | i <- [ 0 .. nBlockCount-1 ]
                            , let u = fromIntegral . getW32 $ offset+8 + 4*i
-                                 v = fromIntegral . getW32 $ offset+8 + 4*(i+nBlockCount) ]
+                           , let v = fromIntegral . getW32 $ offset+8 + 4*(i+nBlockCount) ]
 
         the_seq = unfoldSeq dnasize n_blocks 0 (packedDnaOff*4)
 
 
-    unfoldSeq dnasize  _ chroff _fileoff | chroff >= dnasize = NewRefEnd
-    unfoldSeq dnasize [] chroff  fileoff = SomeSeq raw fileoff (dnasize-chroff) NewRefEnd
+    unfoldSeq dnasize  _ chroff _fileoff | chroff >= dnasize = RefEnd
+    unfoldSeq dnasize [] chroff  fileoff = SomeSeq raw fileoff (dnasize-chroff) RefEnd
 
     unfoldSeq dnasize ((nstart,nlen):ns) chroff fileoff
 
@@ -131,51 +134,48 @@ parseTwoBit fp0 raw = case (getW32 0, getW32 4) of (0x1A412743, 0) -> parseEachS
         | chroff == nstart = ManyNs nlen
                            $ unfoldSeq dnasize ns (chroff+nlen) (fileoff+nlen)
 
-        | otherwise = error "WTF?!"
+        | otherwise = unexpected ""
 
 
-
-{-# INLINE lengthNRS #-}
-lengthNRS :: NewRefSeq -> Int64
-lengthNRS = go 0
+{-# INLINE lengthRS #-}
+lengthRS :: RefSeq -> Int64
+lengthRS = go 0
   where
     go !acc (ManyNs      l s) = go (acc + fromIntegral l) s
     go !acc (SomeSeq _ _ l s) = go (acc + fromIntegral l) s
-    go !acc NewRefEnd         = acc
+    go !acc  RefEnd           = acc
 
-
-{-# INLINE nullNRS #-}
-nullNRS :: NewRefSeq -> Bool
-nullNRS = go
+{-# INLINE nullRS #-}
+nullRS :: RefSeq -> Bool
+nullRS = go
   where
     go (ManyNs      0 s) = go s
     go (SomeSeq _ _ 0 s) = go s
-    go  NewRefEnd        = True
+    go  RefEnd           = True
     go  _                = False
 
+{-# INLINE dropRS #-}
+dropRS :: Int -> RefSeq -> RefSeq
+dropRS 0                s              = s
+dropRS _  RefEnd                       = RefEnd
+dropRS n (ManyNs      l s) | n > l     = dropRS (n-l) s
+                           | n < l     = ManyNs (l-n) s
+                           | otherwise = s
+dropRS n (SomeSeq r o l s) | n > l     = dropRS (n-l) s
+                           | n < l     = SomeSeq r (o+n) (l-n) s
+                           | otherwise = s
 
-{-# INLINE dropNRS #-}
-dropNRS :: Int -> NewRefSeq -> NewRefSeq
-dropNRS 0         s = s
-dropNRS _ NewRefEnd = NewRefEnd
-dropNRS n (ManyNs l s) | n > l     = dropNRS (n-l) s
-                       | n < l     = ManyNs (l-n) s
-                       | otherwise = s
-dropNRS n (SomeSeq r o l s) | n > l     = dropNRS (n-l) s
-                            | n < l     = SomeSeq r (o+n) (l-n) s
-                            | otherwise = s
+{-# INLINE takeRS #-}
+takeRS :: Int -> RefSeq -> RefSeq
+takeRS 0                _              = RefEnd
+takeRS _  RefEnd                       = RefEnd
+takeRS n (ManyNs      l s) | n >= l    = ManyNs l $ takeRS (n-l) s
+                           | otherwise = ManyNs n RefEnd
+takeRS n (SomeSeq r o l s) | n <= l    = SomeSeq r o n RefEnd
+                           | otherwise = SomeSeq r o l $ takeRS (n-l) s
 
-{-# INLINE takeNRS #-}
-takeNRS :: Int -> NewRefSeq -> NewRefSeq
-takeNRS 0         _ = NewRefEnd
-takeNRS _ NewRefEnd = NewRefEnd
-takeNRS n (ManyNs l s) | n >= l    = ManyNs l $ takeNRS (n-l) s
-                       | otherwise = ManyNs n NewRefEnd
-takeNRS n (SomeSeq r o l s) | n <= l    = SomeSeq r o n NewRefEnd
-                            | otherwise = SomeSeq r o l $ takeNRS (n-l) s
-
-unpackNRS :: NewRefSeq -> L.ByteString
-unpackNRS = L.unfoldr $ fmap (first toCode) . unconsNRS
+unpackRS :: RefSeq -> L.ByteString
+unpackRS = L.unfoldr $ fmap (first toCode) . unconsRS
   where
     toCode (N2b 0) = 'T'
     toCode (N2b 1) = 'C'
@@ -214,22 +214,22 @@ instance Show Var2b where
     show (V2b 3) = "X"
     show      _  = "?"
 
-{-# INLINE unconsNRS #-}
-unconsNRS :: NewRefSeq -> Maybe ( Nuc2b, NewRefSeq )
-unconsNRS NewRefEnd = Nothing
-unconsNRS (ManyNs 1 s) = Just (N2b 255, s)
-unconsNRS (ManyNs l s) = Just (N2b 255, ManyNs (l-1) s)
-unconsNRS (SomeSeq raw off len s) = Just (c, s')
+{-# INLINE unconsRS #-}
+unconsRS :: RefSeq -> Maybe ( Nuc2b, RefSeq )
+unconsRS  RefEnd                 = Nothing
+unconsRS (ManyNs            1 s) = Just (N2b 255, s)
+unconsRS (ManyNs            l s) = Just (N2b 255, ManyNs (l-1) s)
+unconsRS (SomeSeq raw off len s) = Just (c, s')
   where
     c  = N2b . fromIntegral $ (B.index raw (off `shiftR` 2) `shiftR` (6 - 2 * (off .&. 3))) .&. 3
     s' = if len == 1 then s else SomeSeq raw (off+1) (len-1) s
 
 data RefSeqView a = !Int :== a | !Nuc2b :^ a | NilRef
 
-viewNRS :: NewRefSeq -> RefSeqView NewRefSeq
-viewNRS  NewRefEnd              = NilRef
-viewNRS (ManyNs            l s) = l :== s
-viewNRS (SomeSeq raw off len s) = c :^  s'
+viewRS :: RefSeq -> RefSeqView RefSeq
+viewRS  RefEnd                 = NilRef
+viewRS (ManyNs            l s) = l :== s
+viewRS (SomeSeq raw off len s) = c :^  s'
   where
     c  = N2b . fromIntegral $ (B.index raw (off `shiftR` 2) `shiftR` (6 - 2 * (off .&. 3))) .&. 3
     s' = if len == 1 then s else SomeSeq raw (off+1) (len-1) s
@@ -243,8 +243,8 @@ data Variant = Variant { v_chr   :: !Int                -- chromosome number
                        , v_calls :: !(U.Vector Word8) } -- Variant codes:  #ref + 4 * #alt
   deriving Show
 
-addRef :: Monad m => NewRefSeqs -> Stream (Of Variant) m r -> Stream (Of Variant) m r
-addRef ref = go 0 (nrss_seqs ref)
+addRef :: Monad m => RefSeqs -> Stream (Of Variant) m r -> Stream (Of Variant) m r
+addRef ref = go 0 (rss_seqs ref)
   where
     go _ [     ] = lift . Q.effects
     go c (r0:rs) = go1 (r0 ()) 0
@@ -253,10 +253,10 @@ addRef ref = go 0 (nrss_seqs ref)
             Left x              -> pure x
             Right (v,vs)
                 | c /= v_chr v  -> go (c+1) rs (Q.cons v vs)
-                | p == v_pos v -> case unconsNRS r of
+                | p == v_pos v -> case unconsRS r of
                     Just (c',_) -> v { v_ref = c' } `Q.cons` go1 r p vs
                     Nothing     ->                           go1 r p vs
-                | p < v_pos v   -> go1 (dropNRS (v_pos v - p) r) (v_pos v) (Q.cons v vs)
+                | p < v_pos v   -> go1 (dropRS (v_pos v - p) r) (v_pos v) (Q.cons v vs)
                 | otherwise     -> error "expected sorted variants!"
 
 
@@ -278,7 +278,7 @@ main_2bitinfo fs
     | otherwise = forM_ (eff_args fs) $ \f -> do
         ref <- readTwoBit f
         sequence_ $ zipWith (printf "%s\t%d\n" . C.unpack)
-                            (nrss_chroms ref) (nrss_lengths ref)
+                            (rss_chroms ref) (rss_lengths ref)
 
 main_2bittofa :: [String] -> IO ()
 main_2bittofa fs = case eff_args fs of
@@ -291,24 +291,24 @@ main_2bittofa fs = case eff_args fs of
     [] -> return () -- can't happen
 
     [fp] -> do ref <- readTwoBit fp
-               forM_ (nrss_chroms ref `zip` nrss_seqs ref) $ \(ch,sq) ->
+               forM_ (rss_chroms ref `zip` rss_seqs ref) $ \(ch,sq) ->
                     putStrLn ('>' : C.unpack ch) >> twoBitToFa (sq ())
 
     (fp:rns) -> do ref <- readTwoBit fp
                    forM_ rns $ \rn ->
-                        case findIndex ((==) rn . C.unpack) (nrss_chroms ref) of
+                        case findIndex ((==) rn . C.unpack) (rss_chroms ref) of
                             Just i  -> do putStrLn $ '>' : rn
-                                          twoBitToFa $ (nrss_seqs ref !! i) ()
+                                          twoBitToFa $ (rss_seqs ref !! i) ()
                             Nothing -> do let (ch,':':s1) = break ((==) ':') rn
                                           [(start,'-':s2)] <- return $ reads s1
                                           [(end,"")] <- return $ reads s2
-                                          Just i <- return $ findIndex ((==) ch . C.unpack) (nrss_chroms ref)
+                                          Just i <- return $ findIndex ((==) ch . C.unpack) (rss_chroms ref)
 
                                           printf ">%s:%d-%d\n" ch start end
-                                          twoBitToFa $ dropNRS start $ takeNRS end $ (nrss_seqs ref !! i) ()
+                                          twoBitToFa $ dropRS start $ takeRS end $ (rss_seqs ref !! i) ()
 
-twoBitToFa :: NewRefSeq -> IO ()
-twoBitToFa = splitLns . unpackNRS
+twoBitToFa :: RefSeq -> IO ()
+twoBitToFa = splitLns . unpackRS
   where
     splitLns s
         | L.null s = return ()
@@ -426,7 +426,7 @@ faToTwoBit s0 = do
     --             sequence TCAG is represented as 00011011.
     collect_bases (n :!: w :!: ss) c
         = let code = case c of 'C'->1;'c'->1;'A'->2;'a'->2;'G'->3;'g'->3;_->0
-              w' = shiftL w 2 .|. code
+              w'   = shiftL w 2 .|. code
           in if n == 3 then 0 :!: 0 :!: put w' ss else succ n :!: w' :!: ss
 
     -- Keep appending bytes to a collection of 'ByteString's in such a

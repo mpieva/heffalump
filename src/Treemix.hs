@@ -15,8 +15,8 @@ import qualified Data.Vector.Unboxed             as U
 import qualified Streaming.Prelude               as Q
 
 import Bed
+import Genome
 import Lump
-import NewRef
 import Util
 
 data ConfTmx = ConfTmx {
@@ -44,17 +44,17 @@ opts_treemix =
     , Option "y" ["y-chromosome"]  (NoArg  set_ychrom       ) "Analyze only Y chromsome"
     , Option "R" ["regions"]       (ReqArg set_rgns   "FILE") "Restrict to regions in bed-file FILE" ]
   where
-    set_output "-" c =                    return $ c { conf_output     =     ($ stdout) }
-    set_output  a  c =                    return $ c { conf_output     = withFile a WriteMode }
-    set_ref     a  c =                    return $ c { conf_reference  =         Just a }
-    set_indiv   a  c =                    return $ c { conf_indivs     =         Just a }
-    set_nout    a  c = readIO a >>= \n -> return $ c { conf_noutgroups =              n }
-    set_transv     c =                    return $ c { conf_transv     =           True }
-    set_chrs    a  c =                    return $ c { conf_chroms     =           re a }
-    set_autosomes  c =             return $ c { conf_chroms = re "^(chr)?[0-9]+[a-z]?$" }
-    set_xchrom     c =                    return $ c { conf_chroms     = re "^(chr)?X$" }
-    set_ychrom     c =                    return $ c { conf_chroms     = re "^(chr)?Y$" }
-    set_rgns    a  c =                    return $ c { conf_regions    =         Just a }
+    set_output "-" c =                    return $ c { conf_output     =                ($ stdout) }
+    set_output  a  c =                    return $ c { conf_output     =      withFile a WriteMode }
+    set_ref     a  c =                    return $ c { conf_reference  =                    Just a }
+    set_indiv   a  c =                    return $ c { conf_indivs     =                    Just a }
+    set_nout    a  c = readIO a >>= \n -> return $ c { conf_noutgroups =                         n }
+    set_transv     c =                    return $ c { conf_transv     =                      True }
+    set_chrs    a  c =                    return $ c { conf_chroms     =                      re a }
+    set_autosomes  c =                    return $ c { conf_chroms     = re "^(chr)?[0-9]+[a-z]?$" }
+    set_xchrom     c =                    return $ c { conf_chroms     =            re "^(chr)?X$" }
+    set_ychrom     c =                    return $ c { conf_chroms     =            re "^(chr)?Y$" }
+    set_rgns    a  c =                    return $ c { conf_regions    =                    Just a }
 
     re :: String -> Maybe Regex
     re = Just . makeRegex
@@ -73,7 +73,7 @@ main_treemix args = do
         Nothing -> return (map (B.pack . takeBaseName) hefs, length hefs, U.enumFromN 0 (length hefs))
 
     decodeMany conf_reference hefs $ \ref inps -> do
-      region_filter <- mkBedFilter conf_regions (either error nrss_chroms ref)
+      region_filter <- mkBedFilter conf_regions (either error rss_chroms ref)
       conf_output $ \hdl ->
         toHandle hdl $ gzip $ toStreamingByteString $
 
@@ -93,7 +93,7 @@ main_treemix args = do
                              in if ve .&. 3 /= 0 && ve .&. 12 /= 0 && is_ti
                                then U.foldr show1 (char7 '\n') $ U.zip refcounts altcounts
                                else mempty) $
-        region_filter $ chrom_filter (either error nrss_chroms ref) conf_chroms $
+        region_filter $ chrom_filter (either error rss_chroms ref) conf_chroms $
         Q.concat $ mergeLumps conf_noutgroups inps
 
 chrom_filter :: Monad m => [B.ByteString] -> Maybe Regex -> Stream (Of Variant) m r -> Stream (Of Variant) m r

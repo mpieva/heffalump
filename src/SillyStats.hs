@@ -26,8 +26,8 @@ import qualified Data.Vector.Unboxed             as U
 import qualified Streaming.Prelude               as Q
 
 import Bed
+import Genome
 import Lump
-import NewRef
 import Util
 
 data Config = Config {
@@ -35,7 +35,7 @@ data Config = Config {
     conf_noutgroups :: Int,
     conf_nrefpanel  :: Int,
     conf_nafricans  :: Int,
-    conf_filter     :: Either String NewRefSeqs -> Xform Variant,
+    conf_filter     :: Either String RefSeqs -> Xform Variant,
     conf_regions    :: Maybe FilePath,
     conf_msg        :: String,
     conf_reference  :: Maybe FilePath }
@@ -213,7 +213,7 @@ main_kayvergence :: [String] -> IO ()
 main_kayvergence args = do
     ( hefs, Config{..} ) <- parseFileOpts defaultConfig (mk_opts "kayvergence" "[hef-file...]" opts_kiv) args
     decodeMany conf_reference hefs $ \ref inps -> do
-        region_filter <- mkBedFilter conf_regions (either error nrss_chroms ref)
+        region_filter <- mkBedFilter conf_regions (either error rss_chroms ref)
 
         stats <- liftM (uncurry gen_stats) $
                  accum_stats conf_blocksize (kayvergence conf_noutgroups) $
@@ -296,9 +296,9 @@ opts_dstat =
     set_tvonly   c = return $ c { conf_filter = const (Q.filter (isTransversion . v_alt)) }
     set_rgns   a c = return $ c { conf_regions = Just a }
 
-filterCpG :: Monad m => Either String NewRefSeqs -> Stream (Of Variant) m r -> Stream (Of Variant) m r
+filterCpG :: Monad m => Either String RefSeqs -> Stream (Of Variant) m r -> Stream (Of Variant) m r
 filterCpG (Left  err) = error $ "CpG filtering needs a reference, " ++ err
-filterCpG (Right nrs) = go (nrss_seqs nrs) 0
+filterCpG (Right nrs) = go (rss_seqs nrs) 0
   where
     -- We prepend one N to the reference so we can see
     -- if we're on the G of a CpG.
@@ -310,13 +310,13 @@ filterCpG (Right nrs) = go (nrss_seqs nrs) 0
         Right (v,vs)
             | v_chr v > c                -> go rs (succ c) (Q.cons v vs)
             | v_chr v < c || v_pos v < p -> error "[Variant] should be sorted."
-            | otherwise                  -> maybe (k (pure ()) NewRefEnd) (uncurry k) isCpG
+            | otherwise                  -> maybe (k (pure ()) RefEnd) (uncurry k) isCpG
           where
             k f r' = f >> go1 rs r' c (succ p) vs
             isCpG = do
-                (x,r')  <- unconsNRS $ dropNRS (v_pos v - p) r
-                (y,r'') <- unconsNRS r'
-                (z,_)   <- unconsNRS r''
+                (x,r')  <- unconsRS $ dropRS (v_pos v - p) r
+                (y,r'') <- unconsRS r'
+                (z,_)   <- unconsRS r''
                 let f | x == N2b 1 && y == N2b 3 = pure ()
                       | y == N2b 1 && z == N2b 3 = pure ()
                       | otherwise                = Q.yield v
@@ -330,7 +330,7 @@ main_patterson f4p args = do
     let name WantF4 = "f4statistics" ; name NoF4 = "dstatistics"
     ( hefs, Config{..} ) <- parseFileOpts defaultConfig (mk_opts (name f4p) "[hef-file...]" opts_dstat) args
     decodeMany conf_reference hefs $ \ref inps -> do
-        region_filter <- mkBedFilter conf_regions (either error nrss_chroms ref)
+        region_filter <- mkBedFilter conf_regions (either error rss_chroms ref)
 
         stats <- liftM (uncurry gen_stats)
                  $ accum_stats conf_blocksize (pattersons conf_noutgroups conf_nrefpanel)
@@ -449,7 +449,7 @@ main_yaddayadda args = do
     ( hefs, Config{..} ) <- parseFileOpts defaultConfig
                                           (mk_opts "yaddayadda" "[hef-file...]" opts_yadda) args
     decodeMany conf_reference hefs $ \ref inps -> do
-        region_filter <- mkBedFilter conf_regions (either error nrss_chroms ref)
+        region_filter <- mkBedFilter conf_regions (either error rss_chroms ref)
 
         stats <- liftM (uncurry gen_stats)
                  $ accum_stats conf_blocksize (yaddayadda conf_noutgroups conf_nafricans conf_nrefpanel)
