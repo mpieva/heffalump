@@ -1,6 +1,3 @@
-- xCF import from multiple files could sort internally, just like all
-  the other importers.
-
 - Support indels where it makes sense ([bv]cf, bam, emf/maf)
   The data strustures are fine, but all parsers and formatters need
   enhancement.

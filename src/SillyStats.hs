@@ -35,7 +35,7 @@ data Config = Config {
     conf_noutgroups :: Int,
     conf_nrefpanel  :: Int,
     conf_nafricans  :: Int,
-    conf_filter     :: Either String RefSeqs -> Xform Variant,
+    conf_filter     :: Either String RefSeqs -> Stream (Of Variant) IO () -> Stream (Of Variant) IO (),
     conf_regions    :: Maybe FilePath,
     conf_msg        :: String,
     conf_reference  :: Maybe FilePath }

@@ -210,16 +210,14 @@ normalizeLump = Q.unfoldr (Q.next >=> either (return . Left) go)
 
 -- | Lowers all calls to haploid.
 -- (Not sure this is really a good idea anymore...)
-make_hap :: Monad m => Stream (Of Lump) m r -> Stream (Of Lump) m r
-make_hap = Q.map step
-  where
-    step  Trans2  = Trans1
-    step  Compl2  = Compl1
-    step  TCompl2 = TCompl1
-    step (Eqs2 n) = Eqs1 n
-    step (Del2 n) = Del1 n
-    step (Ins2 s) = Ins1 s
-    step       x  = x
+make_hap :: Lump -> Lump
+make_hap  Trans2  = Trans1
+make_hap  Compl2  = Compl1
+make_hap TCompl2  = TCompl1
+make_hap (Eqs2 n) = Eqs1 n
+make_hap (Del2 n) = Del1 n
+make_hap (Ins2 s) = Ins1 s
+make_hap       x  = x
 
 newtype PackedLump = PackLump { unpackLump :: L.ByteString }
 

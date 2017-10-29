@@ -1,6 +1,5 @@
 module Util
-    ( Xform
-    , decomp
+    ( decomp
     , gunzip
     , gzip
     , mk_opts
@@ -22,8 +21,6 @@ import qualified Data.ByteString                 as B
 import qualified Data.ByteString.Streaming       as Q ( nextByte, cons' )
 import qualified Data.ByteString.Streaming.Char8 as S
 import qualified Codec.Compression.Zlib.Internal as Z
-
-type Xform a = Stream (Of a) IO () -> Stream (Of a) IO ()
 
 -- | Checks if the input is GZip at all, returns it unchanged if it
 -- isn't.  Else runs gunzip.

@@ -16,7 +16,6 @@ module Genome where
 --   VCF, BCF files:  A bunch of files, usually in the wrong order.  We
 --                    read each, split them into chromosomes, then use
 --                    the 2bit file to put them in the correct order.
---                    (XXX  Right now, we just concatenate them!)
 --
 --   BAM files:  Must be sorted, but the order of target sequences is
 --               arbitrary.  We require the reference, and reorder valid
@@ -380,10 +379,6 @@ faToTwoBit s0 = do
                                 get_one acc (toShort nm) 0 (maxBound :!: L2i_Nil)
                                         (maxBound :!: L2i_Nil) (0 :!: 0 :!: [])
                                         (S.dropWhile (/= '\n') s')
-
-
-    get_one _acc !nm !pos _ns !_ms !_bs
-        | pos .&. 0xFFFFFF == 0 && trace (show (nm,pos)) False = undefined
 
     get_one acc !nm !pos !ns !ms !bs = S.uncons >=> \case
         Left    r       -> fin (pure r)
