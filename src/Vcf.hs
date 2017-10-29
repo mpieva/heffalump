@@ -29,7 +29,7 @@ data ConfXcf = ConfXcf
     , conf_ploidy  :: Xform Lump
     , conf_key     :: String
     , conf_ext     :: String
-    , conf_reader  :: FilePath -> (StreamRV -> IO ()) -> IO () }
+    , conf_reader  :: [Bytes] -> FilePath -> (StreamRV -> IO ()) -> IO () }
 
 conf_vcf :: ConfXcf
 conf_vcf = ConfXcf (error "no output file specified")
@@ -61,16 +61,17 @@ opts_xcf =
 main_xcf :: ConfXcf -> [String] -> IO ()
 main_xcf conf0 args = do
     ( vcfs, ConfXcf{..} ) <- let opts = mk_opts (conf_key conf0) fspec opts_xcf
-                                 fspec = "["++conf_ext conf0++"-file...]"
+                                 fspec = "[" ++ conf_ext conf0 ++ "-file...]"
                              in parseFileOpts conf0 opts args
     ref <- readTwoBit conf_ref
-    withMany conf_reader vcfs $ \inp0 -> do
+    withMany (conf_reader $ rss_chroms ref) vcfs $ \inp0 -> do
         density :> inp <- conf_density ref inp0
         withFile conf_output WriteMode $ \hdl ->
             S.hPut hdl . encode ref . conf_ploidy
             . importVcf (case density of Dense -> Ns ; Sparse -> Eqs2) (rss_chroms ref)
             . progress conf_output . dedupVcf
-            . (case density of Dense -> cleanMissing ; Sparse -> id) . cleanVcf $ inp
+            . (case density of Dense -> cleanMissing ; Sparse -> id)
+            . cleanVcf $ inp
   where
     progress :: MonadIO m => String -> Stream (Of RawVariant) m r -> Stream (Of RawVariant) m r
     progress fp = go 0 0
@@ -100,10 +101,12 @@ dedupVcf = lift . Q.next >=> \case Left       r  -> pure r
     match v1 v2 = rv_chrom v1 == rv_chrom v2 && rv_pos v1 == rv_pos v2
 
 
--- | Remove indel variants, since we can't very well use them.
+-- | Remove indel variants, since we can't very well use them, and
+-- \"variants\" with invalid chromosome numbers, since we clearly don't
+-- want them.
 cleanVcf :: Monad m => Stream (Of RawVariant) m r -> Stream (Of RawVariant) m r
 cleanVcf = Q.filter $ \RawVariant{..} ->
-    B.length rv_vars == B.length (B.filter (== ',') rv_vars) * 2 + 1
+    rv_chrom >= 0 && B.length rv_vars == B.length (B.filter (== ',') rv_vars) * 2 + 1
 
 -- | Removes "no call" variants.  When reading dense files, they are
 -- equivalent to missing entries.
@@ -113,19 +116,21 @@ cleanMissing = Q.filter $ \RawVariant{..} ->
 
 -- Reads a VCF file and returns 'RawVariant's, which is not exactly
 -- practical.
-readVcf :: FilePath -> (Stream (Of RawVariant) IO () -> IO r) -> IO r
-readVcf fp k = do
-    sc <- initVcf fp
+readVcf :: [Bytes] -> FilePath -> (Stream (Of RawVariant) IO () -> IO r) -> IO r
+readVcf cs fp k = do
+    sc <- initVcf fp cs
     k $ Q.untilRight (getVariant sc)
 
+-- XXX  The chromosomes shouldn't be needed here anymore.  But maybe the
+-- structure will change to run on one chromosome at a time anyway?
 importVcf :: Monad m => GapCons -> [ B.ByteString ] -> Stream (Of RawVariant) m r -> Stream (Of Lump) m r
-importVcf ns = (.) normalizeLump . go
+importVcf ns = (.) normalizeLump . go . zipWith const [0..]
   where
     -- We start the coordinate at one(!), for VCF is one-based.
     -- Pseudo-variants of the "no call" type must be filtered
     -- beforehand, see 'cleanVcf'.
     go [    ] = Q.cons Break . lift . Q.effects
-    go (c:cs) = generic (hashChrom c) 1
+    go (c:cs) = generic c 1
       where
         generic !hs pos = lift . Q.next >=> \case
             Left r                    -> Q.cons Break $ pure r
@@ -228,6 +233,4 @@ detect_density ref =
             _ :^  r' | rv_pos v == p -> is_sparse' r' c (p+1)   0      vs
                      | otherwise     -> is_sparse' r' c (p+1) (n+1) (v:vs)
 
-    find_ref h = maybe RefEnd id . msum $
-                 zipWith (\c f -> if hashChrom c == h then Just (f ()) else Nothing)
-                         (rss_chroms ref) (rss_seqs ref)
+    find_ref ix = case drop ix $ rss_seqs ref of s:_ -> s () ; [] -> RefEnd

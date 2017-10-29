@@ -1,15 +1,16 @@
 module VcfScan where
 
 import Bio.Prelude
+import Data.ByteString.Short.Internal ( ShortByteString, createFromPtr, toShort )
 import Foreign.C.String
 import Foreign.C.Types
 import Foreign.Marshal.Alloc ( mallocBytes, allocaBytes )
 import Foreign.Marshal.Utils ( moveBytes )
 import System.IO
 
-import qualified Data.ByteString        as BB
 import qualified Data.ByteString.Char8  as B
 import qualified Data.Vector            as V
+import qualified Data.HashMap.Strict    as M
 
 #include "zlib.h"
 #include "vcf-scan.h"
@@ -17,20 +18,17 @@ import qualified Data.Vector            as V
 -- | Supports one individual only.  (Project your VCF if you have more
 -- than one; better yet, use BCF.)
 data RawVariant = RawVariant {
-    rv_chrom :: !Int,                                -- chromosome number, hashed
+    rv_chrom :: !Int,                                -- chromosome index (0-based)
     rv_pos   :: !Int,                                -- position (1-based)
-    rv_vars  :: !B.ByteString,                       -- vars, comma separated, incl. ref
+    rv_vars  :: !Bytes,                              -- vars, comma separated, incl. ref
     rv_gt    :: !Word16 }                            -- genotype
         deriving (Show, Eq)
-
--- The way we hash chromosome names.
-hashChrom :: B.ByteString -> Int
-hashChrom = BB.foldl' (\a b -> (49 * a + fromIntegral b) .&. 0xFFFF) 0
 
 data CScanner
 
 data Scanner = Scanner { fhandle :: !Handle
                        , filename :: FilePath
+                       , chrom_tab :: !(HashMap ShortByteString Int)
                        , c_scanner :: !(ForeignPtr CScanner) }
 
 withScanner :: (Ptr CScanner -> Handle -> IO a) -> Scanner -> IO a
@@ -40,13 +38,13 @@ ibuffer_size, workbuffer_size :: Int
 ibuffer_size = 2000000
 workbuffer_size = 127*1024
 
-type Samples = V.Vector B.ByteString
+type Samples = V.Vector Bytes
 
 -- | Initialize scanner.  Allocates an input and a working buffer, fills
 -- the working buffer from the input, scans the header and sets up the
 -- c structure.
-initVcf :: FilePath -> IO Scanner
-initVcf fp = do
+initVcf :: FilePath -> [Bytes] -> IO Scanner
+initVcf fp chroms = do
     psc <- mallocBytes (#{const sizeof(scanner)})
     hdl <- openFile fp ReadMode
 
@@ -74,7 +72,8 @@ initVcf fp = do
                      when (r == 0) lp
 
     (#{ poke scanner, nsmp } psc (length smps))
-    Scanner hdl fp <$> newForeignPtr free_scanner psc
+    let ctab = M.fromList $ zip (map toShort chroms) [0..]
+    Scanner hdl fp ctab <$> newForeignPtr free_scanner psc
 
 foreign import ccall unsafe "vcf_scan.h &free_scanner"
     free_scanner :: FunPtr (Ptr CScanner -> IO ())
@@ -210,10 +209,15 @@ getVariant sc = withScanner go sc
                     when (n <= 0) $ pokeByteOff we (-1) (10::Word8)
                     go psc hdl
 
-    go' psc  _  _ = variant <$> #{ peek scanner, refseq } psc
+    go' psc  _  _ = variant <$> getChrom psc
                             <*> #{ peek scanner, pos } psc
                             <*> getVars psc
                             <*> getGt psc
+
+    getChrom p = do a <- #{ peek scanner, refseq } p
+                    e <- #{ peek scanner, erefseq } p
+                    c <- createFromPtr a (e `minusPtr` a)
+                    return $ M.lookupDefault (-1) c (chrom_tab sc)
 
     getVars p = do a <- #{ peek scanner, alleles } p
                    e <- #{ peek scanner, ealleles } p
@@ -221,7 +225,7 @@ getVariant sc = withScanner go sc
 
     getGt p = peekByteOff p (#{ offset scanner, gts })
 
-    variant :: Word16 -> Word32 -> B.ByteString -> Word16 -> Either RawVariant ()
-    variant r p vs gt = Left $! RawVariant (fromIntegral r) (fromIntegral p) vs gt
+    variant :: Int -> Word32 -> Bytes -> Word16 -> Either RawVariant ()
+    variant r p vs gt = Left $! RawVariant r (fromIntegral p) vs gt
 
 

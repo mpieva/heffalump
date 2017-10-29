@@ -10,7 +10,7 @@ module BcfScan ( readBcf, decodeBcf ) where
 
 import Bio.Prelude
 import Util                     ( decomp, unexpected )
-import VcfScan                  ( RawVariant(..), hashChrom )
+import VcfScan                  ( RawVariant(..) )
 
 import Foreign.C.Types          ( CChar )
 import Foreign.Ptr              ( Ptr, plusPtr )
@@ -23,17 +23,18 @@ import qualified Data.ByteString.Char8           as C
 import qualified Data.ByteString.Internal        as B
 import qualified Data.ByteString.Streaming       as S
 import qualified Data.ByteString.Unsafe          as B
+import qualified Data.HashMap.Strict             as M
 import qualified Data.Vector.Unboxed             as V
 import qualified Streaming.Prelude               as Q
 
-readBcf :: FilePath -> (Stream (Of RawVariant) IO () -> IO r) -> IO r
-readBcf fp k = withFile fp ReadMode $ k . decodeBcf . decomp . S.fromHandle
+readBcf :: [Bytes] -> FilePath -> (Stream (Of RawVariant) IO () -> IO r) -> IO r
+readBcf cs fp k = withFile fp ReadMode $ k . decodeBcf cs . decomp . S.fromHandle
 
 -- Parses the contigs declared in the header, but skips over everything
 -- else.  This fails if GT is not the first individual field that's
 -- encoded, but that should always be the case.
-decodeBcf :: MonadIO m => S.ByteString m r -> Stream (Of RawVariant) m r
-decodeBcf = lift . S.toStrict . S.splitAt 9 >=> parse_hdr
+decodeBcf :: MonadIO m => [Bytes] -> S.ByteString m r -> Stream (Of RawVariant) m r
+decodeBcf cs = lift . S.toStrict . S.splitAt 9 >=> parse_hdr
   where
     parse_hdr (hdr :> rest)
         | "BCF\2" == B.take 4 hdr
@@ -41,7 +42,7 @@ decodeBcf = lift . S.toStrict . S.splitAt 9 >=> parse_hdr
                  txt :> body <- lift . S.toStrict $ S.splitAt l_text rest
                  lift (S.nextChunk body) >>= \case
                     Left r -> pure r
-                    Right (s,ss) -> getvars (mkSymTab txt) ss s
+                    Right (s,ss) -> getvars (mkSymTab cs txt) ss s
         | otherwise = error "not a BCFv2 file"
 
     slow_word32 o s =     fromIntegral (B.index s $ o+0)
@@ -50,7 +51,7 @@ decodeBcf = lift . S.toStrict . S.splitAt 9 >=> parse_hdr
                       .|. fromIntegral (B.index s $ o+3) `shiftL` 24
 
 
-getvars :: MonadIO m => V.Vector Int -> S.ByteString m r -> B.ByteString -> Stream (Of RawVariant) m r
+getvars :: MonadIO m => V.Vector Int -> S.ByteString m r -> Bytes -> Stream (Of RawVariant) m r
 getvars !tab strs !str = go 0
   where
     go !off
@@ -150,11 +151,12 @@ get_gts p = do !k1 <- peek8 p 0
 
                     _    -> error $ "only haploid or diploid calls are supported " ++ showHex tp_byte []
 
-mkSymTab :: C.ByteString -> V.Vector Int
-mkSymTab = V.fromList . mapMaybe parse . C.lines
+mkSymTab :: [Bytes] -> C.ByteString -> V.Vector Int
+mkSymTab cs = V.fromList . mapMaybe parse . C.lines
   where
     parse l = case C.splitAt (C.length key) l of
-        (u,v) | u == key  -> Just $! hashChrom (C.takeWhile (/=',') v)
+        (u,v) | u == key  -> flip M.lookup ctab $ C.takeWhile (/=',') v
               | otherwise -> Nothing
-    key = "##contig=<ID="
+    !key  = "##contig=<ID="
+    !ctab = M.fromList $ zip cs [0..]
 

@@ -1,5 +1,3 @@
-- hashing chromosome names (vcfscan) was probably a bad idea
-
 - xCF import from multiple files could sort internally, just like all
   the other importers.
 

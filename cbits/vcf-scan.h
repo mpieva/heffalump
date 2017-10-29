@@ -13,10 +13,11 @@ typedef struct scanner {
     char *last_work ;
 
     // output structure
+    char *refseq ;          // points to chrom
+    char *erefseq ;          // points to chrom
     char *alleles ;         // points to ref, must be copied out immediately
     char *ealleles ;
     uint32_t pos ;
-    uint16_t refseq ;       // hashed, mapped externally
     uint16_t nsmp ;         // number of samples
     uint8_t gts[2] ;        // genotypes (two bytes per sample)
 } scanner ;
