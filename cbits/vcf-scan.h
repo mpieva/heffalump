@@ -18,7 +18,6 @@ typedef struct scanner {
     char *alleles ;         // points to ref, must be copied out immediately
     char *ealleles ;
     uint32_t pos ;
-    uint16_t nsmp ;         // number of samples
     uint8_t gts[2] ;        // genotypes (two bytes per sample)
 } scanner ;
 
