@@ -69,13 +69,9 @@ int scan_vcf1( struct scanner *sc )
 {
     char *p = sc->next_work, *pe = sc->last_work ;
     while( p != pe ) {
-        // hash the refseq
-        uint16_t rs = 0 ;
-        while( *p != '\t' ) {
-            rs = 49 * rs + *p ;
-            inc();
-        }
-        sc->refseq = rs ;
+        sc->refseq = p ;
+        while( *p != '\t' ) inc() ;
+        sc->erefseq = p ;
         inc() ;
 
         // parse position (positive int)

@@ -2,18 +2,20 @@ module Vcf ( main_xcf, conf_vcf, conf_bcf ) where
 
 -- ^ Stuff related to Vcf and Bcf
 
-import Bio.Prelude hiding ( Ns )
+import Bio.Prelude               hiding ( Ns )
+import Data.ByteString.Builder          ( hPutBuilder )
+import Data.ByteString.Lazy             ( hPut )
 import Streaming
 import System.Console.GetOpt
 import System.IO
 
 import qualified Data.ByteString.Char8           as B
-import qualified Data.ByteString.Streaming       as S
+import qualified Data.IntMap.Strict              as I
 import qualified Streaming.Prelude               as Q
 
 import BcfScan
+import Genome
 import Lump
-import NewRef
 import Util
 import VcfScan
 
@@ -25,11 +27,11 @@ data Density = Sparse | Dense
 data ConfXcf = ConfXcf
     { conf_output  :: FilePath
     , conf_ref     :: FilePath
-    , conf_density :: NewRefSeqs -> StreamRV -> IO (Of Density StreamRV)
-    , conf_ploidy  :: Xform Lump
+    , conf_density :: RefSeqs -> StreamRV -> IO (Of Density StreamRV)
+    , conf_ploidy  :: Lump -> Lump
     , conf_key     :: String
     , conf_ext     :: String
-    , conf_reader  :: FilePath -> (StreamRV -> IO ()) -> IO () }
+    , conf_reader  :: [Bytes] -> FilePath -> (StreamRV -> IO ()) -> IO () }
 
 conf_vcf :: ConfXcf
 conf_vcf = ConfXcf (error "no output file specified")
@@ -61,16 +63,28 @@ opts_xcf =
 main_xcf :: ConfXcf -> [String] -> IO ()
 main_xcf conf0 args = do
     ( vcfs, ConfXcf{..} ) <- let opts = mk_opts (conf_key conf0) fspec opts_xcf
-                                 fspec = "["++conf_ext conf0++"-file...]"
+                                 fspec = "[" ++ conf_ext conf0 ++ "-file...]"
                              in parseFileOpts conf0 opts args
     ref <- readTwoBit conf_ref
-    withMany conf_reader vcfs $ \inp0 -> do
+    withMany (conf_reader $ rss_chroms ref) vcfs $ \inp0 -> do
         density :> inp <- conf_density ref inp0
-        withFile conf_output WriteMode $ \hdl ->
-            S.hPut hdl . encode ref . conf_ploidy
-            . importVcf (case density of Dense -> Ns ; Sparse -> Eqs2) (nrss_chroms ref)
-            . progress conf_output . dedupVcf
-            . (case density of Dense -> cleanMissing ; Sparse -> id) . cleanVcf $ inp
+        withFile conf_output WriteMode $ \hdl -> do
+            yenome <- Q.fold_ (\y (k,v) -> I.insertWith srsly k v y) I.empty id
+                      . mapsM (\s0 -> do
+                              -- get one variant to know the chromsome, store it
+                              -- together with the packed form of the whole chromsome
+                              Right (v1,s1) <- Q.next s0
+                              pl :> r <- encodeLumpToMem . Q.map conf_ploidy $
+                                         importVcf (case density of Dense -> Ns ; Sparse -> Eqs2) (v1 `Q.cons` s1)
+                              return $! (rv_chrom v1, pl) :> r )
+                      . Q.groupBy ((==) `on` rv_chrom)
+                      . progress conf_output . dedupVcf
+                      . (case density of Dense -> cleanMissing ; Sparse -> id)
+                      . cleanVcf $ inp
+
+            hPutBuilder hdl $ encodeHeader ref
+            forM_ [0 .. length (rss_chroms ref) - 1] $ \i ->
+                hPut hdl . unpackLump $ I.findWithDefault noLump i yenome
   where
     progress :: MonadIO m => String -> Stream (Of RawVariant) m r -> Stream (Of RawVariant) m r
     progress fp = go 0 0
@@ -86,6 +100,9 @@ main_xcf conf0 args = do
     withMany _ [ ] k = k $ pure ()
     withMany r (fp:fps) k = r fp $ \s -> withMany r fps $ k . (>>) s
 
+    srsly _ _ = error "Repeated chromosome.  Is the input really sorted by coordinate?"
+
+
 -- | Some idiot decided to output multiple records for the same position
 -- into some VCF files.  If we hit that, we take the first.  (Einmal mit
 -- Profis arbeiten!)
@@ -100,10 +117,12 @@ dedupVcf = lift . Q.next >=> \case Left       r  -> pure r
     match v1 v2 = rv_chrom v1 == rv_chrom v2 && rv_pos v1 == rv_pos v2
 
 
--- | Remove indel variants, since we can't very well use them.
+-- | Remove indel variants, since we can't very well use them, and
+-- \"variants\" with invalid chromosome numbers, since we clearly don't
+-- want them.
 cleanVcf :: Monad m => Stream (Of RawVariant) m r -> Stream (Of RawVariant) m r
 cleanVcf = Q.filter $ \RawVariant{..} ->
-    B.length rv_vars == B.length (B.filter (== ',') rv_vars) * 2 + 1
+    rv_chrom >= 0 && B.length rv_vars == B.length (B.filter (== ',') rv_vars) * 2 + 1
 
 -- | Removes "no call" variants.  When reading dense files, they are
 -- equivalent to missing entries.
@@ -113,36 +132,32 @@ cleanMissing = Q.filter $ \RawVariant{..} ->
 
 -- Reads a VCF file and returns 'RawVariant's, which is not exactly
 -- practical.
-readVcf :: FilePath -> (Stream (Of RawVariant) IO () -> IO r) -> IO r
-readVcf fp k = do
-    sc <- initVcf fp
+readVcf :: [Bytes] -> FilePath -> (Stream (Of RawVariant) IO () -> IO r) -> IO r
+readVcf cs fp k = do
+    sc <- initVcf fp cs
     k $ Q.untilRight (getVariant sc)
 
-importVcf :: Monad m => GapCons -> [ B.ByteString ] -> Stream (Of RawVariant) m r -> Stream (Of Lump) m r
-importVcf ns = (.) normalizeLump . go
+-- | Imports one chromosome worth of VCF style 'RawVariant's into a
+-- stream of 'Lump's with a 'Break' tacked onto the end.  This assumes
+-- that all variants have the same chromsome, it's best preceeded by
+-- 'Streaming.Prelude.groupBy'.  Pseudo-variants of the "no call" type
+-- must be filtered beforehand, see 'cleanVcf'.
+importVcf :: Monad m => GapCons -> Stream (Of RawVariant) m r -> Stream (Of Lump) m r
+importVcf ns = normalizeLump . generic 1 -- Start the coordinate at one, for VCF is one-based.
   where
-    -- We start the coordinate at one(!), for VCF is one-based.
-    -- Pseudo-variants of the "no call" type must be filtered
-    -- beforehand, see 'cleanVcf'.
-    go [    ] = Q.cons Break . lift . Q.effects
-    go (c:cs) = generic (hashChrom c) 1
-      where
-        generic !hs pos = lift . Q.next >=> \case
-            Left r                    -> Q.cons Break $ pure r
-            Right (var1,vars)
-                | hs /= rv_chrom var1 -> Q.cons Break $ go cs (var1 `Q.cons` vars)
+    generic pos = lift . Q.next >=> \case
+        Left r                    -> Q.cons Break $ pure r
+        Right (var1,vars)
+            -- long gap, creates Ns or Eqs2
+            | rv_pos var1 > pos   -> Q.cons (ns (rv_pos var1 - pos)) $
+                                     generic (rv_pos var1) (var1 `Q.cons` vars)
 
-                -- long gap, creates Ns or Eqs2
-                | rv_pos var1 > pos   -> Q.cons (ns (rv_pos var1 - pos)) $
-                                         generic hs (rv_pos var1) (var1 `Q.cons` vars)
+            -- positions must match now
+            | rv_pos var1 < pos   -> error $ "Got variant position " ++ show (rv_pos var1)
+                                          ++ " when expecting " ++ show pos ++ " or higher."
 
-                -- positions must match now
-                | rv_pos var1 < pos   -> error $ "Got variant position " ++ show (rv_pos var1)
-                                              ++ " when expecting " ++ show pos ++ " or higher."
-
-                | isVar var1          -> Q.cons (get_var_code var1) $ generic hs (succ pos) vars
-                | otherwise           -> Q.cons (Eqs2     1       ) $ generic hs (succ pos) vars
-
+            | isVar var1          -> Q.cons (get_var_code var1) $ generic (succ pos) vars
+            | otherwise           -> Q.cons (Eqs2     1       ) $ generic (succ pos) vars
 
     -- *sigh*  Have to turn a numeric genotype into a 'NucCode'.  We
     -- have characters for the variants, and we need to map a pair of
@@ -191,7 +206,7 @@ importVcf ns = (.) normalizeLump . go
 -- does not also have a gap, is a pretty strong tell it is sparse.  Just
 -- by looking at the first couple thousand records, we know.  Else, the
 -- command line options are still there.
-detect_density :: NewRefSeqs -> StreamRV -> IO (Of Density StreamRV)
+detect_density :: RefSeqs -> StreamRV -> IO (Of Density StreamRV)
 detect_density ref =
     Q.toList . Q.splitAt 2048 >=> \(vars :> rest) ->
     if is_dense vars then do
@@ -222,12 +237,10 @@ detect_density ref =
     is_sparse' r !c !p !n (v:vs)
         | rv_chrom v /= c             = is_sparse (v:vs)
         | rv_pos v < p                = is_sparse' r c p n vs
-        | otherwise = case viewNRS r of
+        | otherwise = case viewRS r of
             NilRef                   -> is_sparse' r  c (rv_pos v)  n  vs
             l :== r'                 -> is_sparse' r' c (p+l)   0   (v:vs)
             _ :^  r' | rv_pos v == p -> is_sparse' r' c (p+1)   0      vs
                      | otherwise     -> is_sparse' r' c (p+1) (n+1) (v:vs)
 
-    find_ref h = maybe NewRefEnd id . msum $
-                 zipWith (\c f -> if hashChrom c == h then Just (f ()) else Nothing)
-                         (nrss_chroms ref) (nrss_seqs ref)
+    find_ref ix = case drop ix $ rss_seqs ref of s:_ -> s () ; [] -> RefEnd

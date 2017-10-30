@@ -6,14 +6,13 @@ import System.IO
 
 import qualified Data.Foldable                  as F
 import qualified Data.ByteString.Char8          as B
-import qualified Data.ByteString.Lazy           as LB
-import qualified Data.ByteString.Lazy.Char8     as L
+import qualified Data.ByteString.Lazy           as L
 import qualified Data.Vector.Unboxed            as U
 import qualified Streaming.Prelude              as Q
 
 import Bed
+import Genome
 import Lump
-import NewRef
 import Util
 
 -- ^ The Eigenstrat and Ancestrymap exporters.  Includes generation of
@@ -41,10 +40,10 @@ import Util
 
 -- Nickhash for strings.  (It's not clear if we got the signs right?)
 nick_hashit :: L.ByteString -> Int32
-nick_hashit = LB.foldl (\h c -> 23 * h + fromIntegral c) 0
+nick_hashit = L.foldl (\h c -> 23 * h + fromIntegral c) 0
 
--- Nickhash for vectors of strings.  (This needs incremental updates,
--- but that's easy.
+-- Nickhash for vectors of strings.  (This will need incremental
+-- updates, but that's easy.)
 nick_hasharr :: F.Foldable v => v L.ByteString -> Int32
 nick_hasharr = F.foldl (\h s -> 17 * h `xor` nick_hashit s) 0
 
@@ -100,7 +99,7 @@ main_eigenstrat args = do
                                              (mk_opts "eigenstrat" "[hef-file...]" opts_eigen) args
 
     decodeMany conf_reference hefs $ \refs inps -> do
-      region_filter <- mkBedFilter conf_regions (either error nrss_chroms refs)
+      region_filter <- mkBedFilter conf_regions (either error rss_chroms refs)
       withFile (conf_output ++ ".snp") WriteMode $ \hsnp ->
         withFile (conf_output ++ ".geno") WriteMode $ \hgeno -> do
             let vars = either (const id) addRef refs $

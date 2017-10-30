@@ -1,6 +1,5 @@
 module Util
-    ( Xform
-    , decomp
+    ( decomp
     , gunzip
     , gzip
     , mk_opts
@@ -10,6 +9,7 @@ module Util
     , readSampleFa
     , readNumIO
     , FastaSeq(..)
+    , unexpected
     ) where
 
 import Bio.Prelude
@@ -21,8 +21,6 @@ import qualified Data.ByteString                 as B
 import qualified Data.ByteString.Streaming       as Q ( nextByte, cons' )
 import qualified Data.ByteString.Streaming.Char8 as S
 import qualified Codec.Compression.Zlib.Internal as Z
-
-type Xform a = Stream (Of a) IO () -> Stream (Of a) IO ()
 
 -- | Checks if the input is GZip at all, returns it unchanged if it
 -- isn't.  Else runs gunzip.
@@ -173,6 +171,9 @@ parseFasta = go . ignoreBody . S.lines
             -- body line:  continue
             Right ( _ ,line') -> ignoreBody $ effect (S.effects line')
 
+unexpected :: String -> a
+unexpected msg = error $ "Ph'nglui mglw'nafh Cthulhu R'lyeh wgah'nagl fhtagn."
+        ++ if null msg then "" else "\n (" ++ msg ++ ")"
 
 readNumIO :: String -> IO Int
 readNumIO s = case reads s of

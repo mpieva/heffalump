@@ -11,8 +11,8 @@ import qualified Data.Vector.Unboxed             as U
 import qualified Streaming.Prelude               as Q
 
 import Bed ( mkBedFilter )
+import Genome
 import Lump
-import NewRef
 import Util ( parseFileOpts, mk_opts )
 
 data ConfVcfOut = ConfVcfOut {
@@ -49,8 +49,8 @@ main_vcfout args = do
                                               (mk_opts "vcfexport" "[hef-file...]" opts_vcfout) args
 
     decodeMany conf_reference hefs $ \refs inps -> do
-        region_filter <- mkBedFilter conf_regions (either error nrss_chroms refs)
-        let chrs = either error (V.fromList . nrss_chroms) refs
+        region_filter <- mkBedFilter conf_regions (either error rss_chroms refs)
+        let chrs = either error (V.fromList . rss_chroms) refs
         B.putStr $ "##fileformat=VCFv4.1\n" <>
                    "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n" <>
                    "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT" <>

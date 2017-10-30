@@ -19,8 +19,8 @@ import qualified Data.IntMap.Strict             as I
 import qualified Data.Vector.Unboxed            as U
 import qualified Streaming.Prelude              as Q
 
+import Genome
 import Lump
-import NewRef
 import Util
 
 data Pick = Ostrich | Ignore_T | Ignore_A | Ignore_C | Ignore_G
@@ -116,8 +116,8 @@ type Var0 = Var (U.Vector Int)
 -- Properly called 'Var' in 2bit encoding.
 type Var1 = Var Var2b
 
-sample_piles :: Monad m => StdGen -> Bool -> Pick -> NewRefSeqs -> Enumeratee [ Var0 ] [ Var1 ] m r
-sample_piles g0 deam pick cs0 = eneeCheckIfDone (nextChrom g0 (nrss_seqs cs0) (Refseq 0))
+sample_piles :: Monad m => StdGen -> Bool -> Pick -> RefSeqs -> Enumeratee [ Var0 ] [ Var1 ] m r
+sample_piles g0 deam pick cs0 = eneeCheckIfDone (nextChrom g0 (rss_seqs cs0) (Refseq 0))
   where
     nextChrom _ [    ]  _ = return . liftI
     nextChrom g (c:cs) rs = generic g cs (c ()) rs 0
@@ -128,9 +128,9 @@ sample_piles g0 deam pick cs0 = eneeCheckIfDone (nextChrom g0 (nrss_seqs cs0) (R
             | rs /= v_refseq var1
                 -> nextChrom g cs (succ rs) k
 
-            | v_loc var1 < pos -> error "Huh?"
+            | v_loc var1 < pos -> unexpected "unsorted bam?"
 
-            | Just (N2b rb,c') <- unconsNRS $ dropNRS (fromIntegral $ v_loc var1 - pos) c
+            | Just (N2b rb,c') <- unconsRS $ dropRS (fromIntegral $ v_loc var1 - pos) c
                 -> let (vv, g')      = if deam then deaminate (v_call var1) g else (v_call var1, g)
                        cc            = post_collect (N2b rb) pick vv
                        (N2b nc, g'') = sample_from cc g'
@@ -138,9 +138,9 @@ sample_piles g0 deam pick cs0 = eneeCheckIfDone (nextChrom g0 (nrss_seqs cs0) (R
                       eneeCheckIfDone (generic g'' cs c' rs (v_loc var1 + 1))
                                       (k (Chunk [var1 { v_call = V2b (xor rb nc) }]))
             | otherwise
-                -> headStream >> generic g cs NewRefEnd rs (v_loc var1 + 1) k
+                -> headStream >> generic g cs RefEnd rs (v_loc var1 + 1) k
 
-encodePiles :: NewRefSeqs -> Refs -> S.ByteString (Iteratee [Var1] IO) ()
+encodePiles :: RefSeqs -> Refs -> S.ByteString (Iteratee [Var1] IO) ()
 encodePiles ref tgts = S.mwrap $ do
     map1 <- collect I.empty
 
@@ -148,7 +148,7 @@ encodePiles ref tgts = S.mwrap $ do
             "Found only unexpected sequences.  Is this the right reference?"
 
     return $ do S.fromLazy $ toLazyByteString $ encodeHeader ref
-                forM_ [0 .. length (nrss_chroms ref) - 1] $
+                forM_ [0 .. length (rss_chroms ref) - 1] $
                         \i -> S.fromLazy $ unpackLump $ I.findWithDefault noLump i map1
   where
     collect :: MonadIO m => IntMap PackedLump -> Iteratee [Var1] m (IntMap PackedLump)
@@ -157,7 +157,7 @@ encodePiles ref tgts = S.mwrap $ do
     scan1 :: MonadIO m => IntMap PackedLump -> Refseq -> Iteratee [Var1] m (IntMap PackedLump)
     scan1 m rs = takeWhileE ((==) rs . v_refseq) >=> lift . run $
                     let rn = sq_name $ getRef tgts rs
-                    in case findIndex ((==) rn) (nrss_chroms ref) of
+                    in case findIndex ((==) rn) (rss_chroms ref) of
 
                         Nothing -> do liftIO $ hPrintf stderr "\nSkipping %s.\n" (unpack rn)
                                       m <$ skipToEof
@@ -208,7 +208,7 @@ deaminate :: U.Vector Int -> StdGen -> (U.Vector Int, StdGen)
 deaminate vv gen0 = ( vv', gen2 )
   where
     [a,c,g,t,a',c',g',t',0,0] = U.toList vv
-    vv' = U.fromListN 8 [a,c-dc,g,t,a',c',g'-dg,t',dc,dg]
+    vv' = U.fromList [a,c-dc,g,t,a',c',g'-dg,t',dc,dg]
 
     (dc, gen1) = ifrac 50 c  gen0
     (dg, gen2) = ifrac 50 g' gen1

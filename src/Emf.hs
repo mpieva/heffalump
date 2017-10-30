@@ -34,8 +34,8 @@ import qualified Data.ByteString.Streaming.Char8    as S
 import qualified Data.IntMap.Strict                 as I
 import qualified Streaming.Prelude                  as Q
 
+import Genome
 import Lump
-import NewRef
 import Util
 
 -- | We get disjointed blocks, and they are not guaranteed to be in order.
@@ -124,7 +124,7 @@ parseMaf (from_spc, to_spc) chrs gnm0 = doParse gnm0 . mapsM (S.toStrict) . S.li
             doParse gnm' lns'
 
         Right (l :> ls) -> do ls' :> _ <- Q.toList $ Q.take 2 ls
-                              error $ "WTF?! near \n" ++ B.unpack (B.unlines $ l : ls')
+                              unexpected (B.unpack (B.unlines $ l : ls'))
 
 
     insert1 :: Genome -> Bool -> Int -> Int -> Int -> B.ByteString -> B.ByteString -> IO Genome
@@ -229,7 +229,9 @@ scanBlocks inp = do
         Left  e -> error $ "parse of TREE line failed with " ++ e ++ " on " ++ show s
         Right r -> r
 
-    treep = Branch <$> (A.char '(' *> treep) <*> (A.char ',' *> treep) <*> (A.char ')' *> label) <|> Leaf <$> label
+    treep =   Branch <$> (A.char '(' *> treep) <*> (A.char ',' *> treep) <*> (A.char ')' *> label)
+            <|> Leaf <$> label
+
     label = (\x y z -> (x `B.append` B.pack ['[',y,']'], z))
             <$> A.takeWhile (\c -> A.isAlpha_ascii c || A.isDigit c || c == '_' || c == '.')
             <*> (A.char '[' *> (A.char '+' <|> A.char '-'))
@@ -240,14 +242,14 @@ data Label = Label Int Species Range deriving Show
 data Tree label = Branch (Tree label) (Tree label) label | Leaf label deriving Show
 
 relabel :: [Label] -> Tree (B.ByteString, Double) -> Tree Label
-relabel ls (Leaf (lbl,_)) = Leaf (find_label lbl ls)
+relabel ls (Leaf       (lbl,_)) = Leaf                                 (find_label lbl ls)
 relabel ls (Branch u v (lbl,_)) = Branch (relabel ls u) (relabel ls v) (find_label lbl ls)
 
 find_label :: B.ByteString -> [Label] -> Label
 find_label lbl ls = case filter ((==) lbl . get_short) ls of
     [l] -> l
     []  -> error $ "not found: " ++ show lbl ++ " in " ++ show ls
-    _   -> error $ "WTF?  " ++ show lbl ++ " in " ++ show ls
+    _   -> unexpected (show lbl ++ " in " ++ show ls)
 
 get_short :: Label -> B.ByteString
 get_short (Label _ (spc,race) (Range (Pos chrom pos) len)) = B.concat $
@@ -330,7 +332,6 @@ revcompl = B.reverse . B.map compl
     compl  x  =  x
 
 
-
 consensus_seq :: [B.ByteString] -> B.ByteString
 consensus_seq [    ] = B.empty
 consensus_seq [  x ] = x
@@ -378,7 +379,7 @@ main_emf args = do
     ( emfs, OptsEmf{..} ) <- parseFileOpts opts_emf_default (mk_opts "emf" "[emf-file...]" opts_emf) args
     ref <- readTwoBit emf_reference
 
-    let cons = collectTrees (nrss_chroms ref) (emf_select emf_ref_species)
+    let cons = collectTrees (rss_chroms ref) (emf_select emf_ref_species)
     !genome <- foldM (\g fp -> withFile fp ReadMode $
                                     Q.foldM_ cons (return g) return . scanBlocks .
                                     mapsM (S.toStrict) . S.lines . decomp . S.fromHandle

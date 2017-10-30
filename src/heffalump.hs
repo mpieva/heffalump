@@ -14,8 +14,8 @@ import qualified Streaming.Prelude               as Q
 import Bamin
 import Eigenstrat
 import Emf
+import Genome
 import Lump
-import NewRef
 import SillyStats
 import Stretch ( main_dumppatch )
 import Treemix
@@ -101,13 +101,13 @@ main_hetfa args = do
 -- | Import Hetfa by diffing it against a reference.  We must read the
 -- Hetfa in the order of the file (Fasta doesn't have an index), but
 -- write it in the order of the reference.  So we parse a chromosome at
--- a time, sort in memory and dump it at the end.
+-- a time, sort the diffs in memory and dump it at the end.
 --
--- Chromosomes in input that don't have match in the reference are
+-- Chromosomes in input that don't have a match in the reference are
 -- silently ignored.  Chromsomes that don't show up in the input are
--- emitted as empty sequences.  Only f no sequence matches, we produce
--- an error message.
-importHetfa :: MonadIO m => NewRefSeqs -> Stream (FastaSeq m) m r -> S.ByteString m r
+-- emitted as empty sequences.  Only if no sequence matches do we
+-- produce an error message.
+importHetfa :: MonadIO m => RefSeqs -> Stream (FastaSeq m) m r -> S.ByteString m r
 importHetfa ref smps = S.mwrap $ do
     (map1,r) <- fold_1 I.empty smps
 
@@ -115,17 +115,17 @@ importHetfa ref smps = S.mwrap $ do
             "Found only unexpected sequences.  Is this the right reference?"
 
     return $ do S.fromLazy $ B.toLazyByteString $ encodeHeader ref
-                forM_ [0 .. length (nrss_chroms ref) - 1] $
+                forM_ [0 .. length (rss_chroms ref) - 1] $
                         \i -> S.fromLazy $ unpackLump $ I.findWithDefault noLump i map1
                 pure r
   where
     enc2 :: MonadIO m => Int -> S.ByteString m r -> m (Of PackedLump r)
-    enc2 i sq = encodeLumpToMem $ diff2 (nrss_seqs ref !! i) sq <* Q.yield Break
+    enc2 i sq = encodeLumpToMem $ diff2 (rss_seqs ref !! i) sq <* Q.yield Break
 
     fold_1 :: MonadIO m => I.IntMap PackedLump -> Stream (FastaSeq m) m r -> m (I.IntMap PackedLump, r)
     fold_1 !acc s = inspect s >>= \case
         Left r -> return $ (acc,r)
-        Right (FastaSeq nm sq) -> case findIndex (nm ==) (nrss_chroms ref) of
+        Right (FastaSeq nm sq) -> case findIndex (nm ==) (rss_chroms ref) of
             Nothing -> S.effects sq >>= fold_1 acc
             Just  i -> do lump :> s' <- enc2 i sq
                           liftIO $ hPrint stderr (i, L.length $ unpackLump lump)
@@ -163,7 +163,7 @@ main_maf args = do
         L.hPut ohdl . encodeGenome =<<
            foldM (\g f -> withFile f ReadMode $
                             parseMaf (conf_maf_ref_species, conf_maf_oth_species)
-                                     (nrss_chroms ref) g . decomp . S.fromHandle)
+                                     (rss_chroms ref) g . decomp . S.fromHandle)
                  emptyGenome maffs
 
 
@@ -201,7 +201,7 @@ main_patch args = do
 
         conf_patch_output $ \hdlo ->
             patchFasta hdlo conf_patch_width
-                (nrss_chroms ref) (nrss_seqs ref) (decode (Right ref) raw)
+                (rss_chroms ref) (rss_seqs ref) (decode (Right ref) raw)
 
 main_dumplump :: [String] -> IO ()
 main_dumplump [ref,inf] = do rs <- readTwoBit ref
@@ -210,7 +210,7 @@ main_dumplump [  inf  ] =    withFile inf ReadMode $ debugLump . decode (Left "n
 main_dumplump     _     =    hPutStrLn stderr "Usage: dumplump [foo.hef]"
 
 
-patchFasta :: Handle -> Int64 -> [B.ByteString] -> [() -> NewRefSeq] -> Stream (Of Lump) IO r -> IO r
+patchFasta :: Handle -> Int64 -> [B.ByteString] -> [() -> RefSeq] -> Stream (Of Lump) IO r -> IO r
 patchFasta hdl wd = p1
   where
     p1 [    ]     _  p = Q.effects p

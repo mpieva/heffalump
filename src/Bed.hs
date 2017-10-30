@@ -9,7 +9,7 @@ import qualified Data.Vector.Algorithms.Intro   as U ( sort )
 import qualified Data.Vector.Unboxed            as U
 import qualified Streaming.Prelude              as Q
 
-import NewRef ( Variant(..) )
+import Genome ( Variant(..) )
 
 newtype Bed = Bed ( U.Vector (Int32,Int32,Int32) )
 

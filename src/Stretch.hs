@@ -13,17 +13,16 @@ import System.IO                        ( withFile, IOMode(..), stderr )
 import qualified Data.ByteString.Char8          as B
 import qualified Data.ByteString.Internal       as B
 import qualified Data.ByteString.Streaming      as S
-import qualified Data.ByteString.Unsafe         as BB
+import qualified Data.ByteString.Unsafe         as B
 import qualified Streaming.Prelude              as Q
 
-import Util ( decomp )
+import Util ( decomp, unexpected )
 
 -- ^ A genome is encoded by taking the difference to the reference and
 -- run-length coding the result.
 
 newtype NucCode = NucCode Word8 deriving Eq
 instance Show NucCode where show = (:[]) . tr
-
 
 -- All stretch lengths are even, so we pre-divide them by two.
 data Stretch = Ns   !Int64
@@ -39,11 +38,11 @@ debugStretch = debugStretch' 0 0
 debugStretch' :: MonadIO m => Int -> Int64 -> Stream (Of Stretch) m r -> m r
 debugStretch' c i = Q.next >=> \case
     Left r -> return r
-    Right (Break   ,s) -> do liftIO . putStrLn $ shows (c,i) "\tBreak" ;                    debugStretch' (c+1) 0 s
+    Right (Break   ,s) -> do liftIO . putStrLn $ shows (c,i) "\tBreak" ;                    debugStretch' (c+1)  0  s
     Right (Ns     n,s) -> do liftIO . putStrLn $ shows (c,i) "\tNs   " ++ show n ;          debugStretch' c (i+2*n) s
     Right (Eqs    n,s) -> do liftIO . putStrLn $ shows (c,i) "\tEqs  " ++ show n ;          debugStretch' c (i+2*n) s
     Right (Eqs1   n,s) -> do liftIO . putStrLn $ shows (c,i) "\tEqs1 " ++ show n ;          debugStretch' c (i+2*n) s
-    Right (Chrs x y,s) -> do liftIO . putStrLn $ shows (c,i) "\tChrs " ++ [tr x,' ',tr y] ; debugStretch' c (i+2) s
+    Right (Chrs x y,s) -> do liftIO . putStrLn $ shows (c,i) "\tChrs " ++ [tr x,' ',tr y] ; debugStretch' c (i+2)   s
 
 
 -- | Main decoder.  Switches behavior based on header.
@@ -137,7 +136,7 @@ decode_v0 nucCode eqs = go
                                fromIntegral w2 `shiftL` 9 .|.
                                fromIntegral w3 `shiftL` 17 .|.
                                fromIntegral w4 `shiftL` 25) `Q.cons` go s4
-          | w < 0xC0 -> error $ "WTF?! (too many Ns) " ++ show w
+          | w < 0xC0 -> unexpected (show w)
 
           | w < 0xE0 -> eqs (fromIntegral (w .&. 0x1f)) `Q.cons` go s'
           | w < 0xF0 -> do Right (w1,s1) <- lift $ S.nextByte s'
@@ -148,7 +147,7 @@ decode_v0 nucCode eqs = go
                            eqs (fromIntegral (w .&. 0x07) .|.
                                 fromIntegral w1 `shiftL` 3 .|.
                                 fromIntegral w2 `shiftL` 11) `Q.cons` go s2
-          | otherwise -> error $ "WTF?! (too many matches) " ++ show w
+          | otherwise -> unexpected (show w)
 
 
 -- | We store diploid calls.  For this we need 11 codes:  no call(1),
@@ -159,7 +158,7 @@ iupac_chars = "NACGTMRWSYKacgtN"
 
 {-# INLINE tr #-}
 tr :: NucCode -> Char
-tr (NucCode w) = B.w2c . BB.unsafeIndex iupac_chars . fromIntegral $ w .&. 0xF
+tr (NucCode w) = B.w2c . B.unsafeIndex iupac_chars . fromIntegral $ w .&. 0xF
 
 main_dumppatch :: [String] -> IO ()
 main_dumppatch [inf] = withFile inf ReadMode $
