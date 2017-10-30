@@ -1,10 +1,12 @@
+- Could VCF import run through the ordinary plain/gzip/bgzip logic?
+
 - Support indels where it makes sense ([bv]cf, bam, emf/maf)
-  The data strustures are fine, but all parsers and formatters need
+  The data structures are fine, but all parsers and formatters need
   enhancement.
 
 - Retain phasing information ([bv]cf only?)
-  There is no obvious way to store phasing information in heffalumps, so
-  this requires an update to binary encoding.
+  There is currently no obvious way to store phasing information in
+  heffalumps, so this requires an update to binary encoding.
 
 - Write packed geno-whatever instead of Eigenstrat?
   Easy to do, hard to test.

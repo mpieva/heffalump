@@ -1,3 +1,4 @@
+{-# LANGUAGE RankNTypes #-}
 module Vcf ( main_xcf, conf_vcf, conf_bcf ) where
 
 -- ^ Stuff related to Vcf and Bcf
@@ -10,19 +11,33 @@ import System.Console.GetOpt
 import System.IO
 
 import qualified Data.ByteString.Char8           as B
+import qualified Data.ByteString.Lazy            as L
 import qualified Data.IntMap.Strict              as I
+import qualified Data.Vector.Unboxed             as U
 import qualified Streaming.Prelude               as Q
 
 import BcfScan
+import Bed
 import Genome
 import Lump
 import Util
 import VcfScan
 
-type GapCons = Int -> Lump
+-- | Position and length to list of 'Lump's.  Used to create either 'Ns'
+-- or 'Eqs2' to enable dense and sparse input, also used to create
+-- possibly multiple 'Ns' and 'Eqs2' when unbreaking piecewise broken
+-- input.
+type GapCons = Int -> Int -> [Lump]
+
+-- | One 'GapCons' function for each chromosome.  Usually a const
+-- function, but table driven when unbreaking piecewise broken input.
+type Density = Int -> GapCons
+
 type StreamRV = Stream (Of RawVariant) IO ()
 
-data Density = Sparse | Dense
+dense, sparse :: Density
+dense  _ _ = pure . Ns
+sparse _ _ = pure . Eqs2
 
 data ConfXcf = ConfXcf
     { conf_output  :: FilePath
@@ -48,14 +63,19 @@ opts_xcf =
     , Option "r" ["reference"] (ReqArg set_ref "FILE") "Read reference from FILE (.2bit)"
     , Option "D" ["dense"]          (NoArg  set_dense) "Input stores all sites"
     , Option "S" ["sparse"]         (NoArg set_sparse) "Input stores only variants"
+    , Option ""  ["patchwork"] (ReqArg set_bed "FILE") "Read HQ regions from FILE (.bed)"
     , Option "L" ["low"]            (NoArg    set_low) "Low coverage, stores haploid calls"
     , Option "H" ["high"]           (NoArg   set_high) "High coverage, stores diploid calls" ]
   where
     set_output a c = return $ c { conf_output  = a }
     set_ref    a c = return $ c { conf_ref     = a }
 
-    set_dense    c = return $ c { conf_density = const $ pure . (:>)  Dense }
-    set_sparse   c = return $ c { conf_density = const $ pure . (:>) Sparse }
+    set_bed f c = do raw <- L.readFile f
+                     let mkdens refs str = do bed <- (parseBed (rss_chroms refs) raw)
+                                              return $ toDensity bed :> str
+                     return $ c { conf_density = mkdens }
+    set_dense    c = return $ c { conf_density = const $ pure . (:>)  dense }
+    set_sparse   c = return $ c { conf_density = const $ pure . (:>) sparse }
     set_low      c = return $ c { conf_ploidy  = make_hap }
     set_high     c = return $ c { conf_ploidy  = id       }
 
@@ -75,11 +95,10 @@ main_xcf conf0 args = do
                               -- together with the packed form of the whole chromsome
                               Right (v1,s1) <- Q.next s0
                               pl :> r <- encodeLumpToMem . Q.map conf_ploidy $
-                                         importVcf (case density of Dense -> Ns ; Sparse -> Eqs2) (v1 `Q.cons` s1)
+                                         importVcf (density $ rv_chrom v1) (v1 `Q.cons` s1)
                               return $! (rv_chrom v1, pl) :> r )
                       . Q.groupBy ((==) `on` rv_chrom)
                       . progress conf_output . dedupVcf
-                      . (case density of Dense -> cleanMissing ; Sparse -> id)
                       . cleanVcf $ inp
 
             hPutBuilder hdl $ encodeHeader ref
@@ -106,6 +125,9 @@ main_xcf conf0 args = do
 -- | Some idiot decided to output multiple records for the same position
 -- into some VCF files.  If we hit that, we take the first.  (Einmal mit
 -- Profis arbeiten!)
+-- XXX  The idiocy applies to multiple SNPs at the same location.  Once
+-- we support Indels, the logic in here has to change, because Indels
+-- usually share the coordinate of a nearby SNP.
 dedupVcf :: MonadIO m => Stream (Of RawVariant) m r -> Stream (Of RawVariant) m r
 dedupVcf = lift . Q.next >=> \case Left       r  -> pure r
                                    Right (v1,vs) -> go v1 vs
@@ -120,15 +142,10 @@ dedupVcf = lift . Q.next >=> \case Left       r  -> pure r
 -- | Remove indel variants, since we can't very well use them, and
 -- \"variants\" with invalid chromosome numbers, since we clearly don't
 -- want them.
+-- XXX  If we want to support Indel variants, this has to go.
 cleanVcf :: Monad m => Stream (Of RawVariant) m r -> Stream (Of RawVariant) m r
 cleanVcf = Q.filter $ \RawVariant{..} ->
     rv_chrom >= 0 && B.length rv_vars == B.length (B.filter (== ',') rv_vars) * 2 + 1
-
--- | Removes "no call" variants.  When reading dense files, they are
--- equivalent to missing entries.
-cleanMissing :: Monad m => Stream (Of RawVariant) m r -> Stream (Of RawVariant) m r
-cleanMissing = Q.filter $ \RawVariant{..} ->
-    rv_gt /= 0x0000 && rv_gt /= 0xff00
 
 -- Reads a VCF file and returns 'RawVariant's, which is not exactly
 -- practical.
@@ -149,7 +166,7 @@ importVcf ns = normalizeLump . generic 1 -- Start the coordinate at one, for VCF
         Left r                    -> Q.cons Break $ pure r
         Right (var1,vars)
             -- long gap, creates Ns or Eqs2
-            | rv_pos var1 > pos   -> Q.cons (ns (rv_pos var1 - pos)) $
+            | rv_pos var1 > pos   -> Q.each (ns pos (rv_pos var1 - pos)) >>
                                      generic (rv_pos var1) (var1 `Q.cons` vars)
 
             -- positions must match now
@@ -170,14 +187,11 @@ importVcf ns = normalizeLump . generic 1 -- Start the coordinate at one, for VCF
 
         -- haploid call or one allele missing
         | rv_gt .&. 0xFF00 == 0xFF00 || rv_gt .&. 0xFF00 == 0x0000 =
-                encTwoVars $ 16 + (char_to_2b c1 `xor` char_to_2b n0)
+                 encTwoVars $ 16 + (char_to_2b c1 `xor` char_to_2b n0)
 
-        -- diploid call; one called allele must be the reference
+        -- diploid call
         | otherwise = encTwoVars $ (char_to_2b c1 `xor` char_to_2b n0)
                                  + (char_to_2b c2 `xor` char_to_2b n0) * 4
-
-        -- diploid call, but unrepresentable
-        | otherwise = Ns 1
       where
         v1 = fromIntegral $ rv_gt            .&. 0x00FE - 2
         v2 = fromIntegral $ rv_gt `shiftR` 8 .&. 0x00FE - 2
@@ -211,10 +225,10 @@ detect_density ref =
     Q.toList . Q.splitAt 2048 >=> \(vars :> rest) ->
     if is_dense vars then do
         hPutStrLn stderr "Hmm, this looks like a dense data set."
-        return (Dense :> (Q.each vars >> rest))
+        return (dense :> (Q.each vars >> rest))
     else if is_sparse vars then do
         hPutStrLn stderr "Hmm, this looks like a sparse data set."
-        return (Sparse :> (Q.each vars >> rest))
+        return (sparse :> (Q.each vars >> rest))
     else do
         hPutStrLn stderr "Hmm, this data set does not make sense to me."
         hPutStrLn stderr "Specify either --dense or --sparse to import it correctly."
@@ -244,3 +258,34 @@ detect_density ref =
                      | otherwise     -> is_sparse' r' c (p+1) (n+1) (v:vs)
 
     find_ref ix = case drop ix $ rss_seqs ref of s:_ -> s () ; [] -> RefEnd
+
+
+-- XXX  This is too intricate to be right on the first attempt.
+--      I don't trust it.
+toDensity :: Bed -> Int -> Int -> Int -> [Lump]
+toDensity (Bed vee) rs p0 l0
+    = go (fromIntegral p0) (fromIntegral $ p0+l0)
+    . takeWhile (\(rs',_,_) -> fromIntegral rs' == rs)
+    . U.toList $ U.drop (binarySearchL 0 (U.length vee -1)) vee
+  where
+    go s e                [] = Ns   (fromIntegral $  e-s) : []               -- done, default to LQ
+    go s e rgns@((_,s1,e1):rgns')
+        | s1 <= s && e <= e1 = Eqs2 (fromIntegral $  e-s) : []               -- done, contained in HQ rgn
+        | s1 <= s && s <  e1 = Eqs2 (fromIntegral $ e1-s) : go e1 e rgns'    -- overlap left
+        | s1 <= s            = error "logic fail"                            -- shouldn't happen
+        | s1 < e             = Ns   (fromIntegral $ s1-s) : go s1 e rgns     -- overlap right
+        | otherwise          = Ns   (fromIntegral $  e-s) : []               -- done, contained in LQ rgn
+
+    -- finds the first entry that could overlap [p0,p0+l0)
+    binarySearchL u v
+        | u == v    = u
+        | big       = binarySearchL   u   m
+        | otherwise = binarySearchL (m+1) v
+      where
+        m          = (u+v) `div` 2
+        (r1,s1,e1) = vee U.! m
+        big        = fromIntegral r1 > rs ||
+                     ( fromIntegral r1 == rs &&
+                       s1+e1 > fromIntegral p0 )
+
+

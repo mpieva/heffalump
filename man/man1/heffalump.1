@@ -244,7 +244,7 @@ importing \fImaf\fR.
 \fBheffalump\fR [\fBbcfin\fR|\fBvcfin\fR]
 \fB\-o\fR \fIoutput.hef\fR
 \fB\-r\fR \fIref.2bit\fR
-[\fB\-D\fR|\fB\-S\fR] [\fB\-L\fR|\fB\-H\fR] 
+[\fB\-D\fR|\fB\-S\fR|\fB--patchwork\fR] [\fB\-L\fR|\fB\-H\fR] 
 \fIinput-file\fR...
 
 Imports the first individual from a set of \fIbcf\fR or bgzip-compressed
@@ -276,6 +276,26 @@ for variant sites.  Sites absent from the input are assumed to match the
 reference.
 .B heffalump
 will normally detect if the input is sparse and act accordingly.
+
+.TP
+\fB--patchwork\fR=\fIpatches.bed\fR
+The input is "sparse", but of such low quality that the missing
+positions cannot always be assumed to match the reference.  The file
+.I patches.bed
+lists high quality regions.
+.B heffalump
+will assume the missing positions within high quality regions match the
+reference, while missing positions outside high quality regions are not
+called.  Put another way,
+.B heffalump
+behaves as if
+.B --dense
+was specified for the regions in the bed file, but 
+.B --sparse
+for the remaining parts of the genome.  This option is only intended to
+repair badly prepared VCF input; if you need
+.BR --patchwork ,
+it would be better to fix the problem upstream.
 
 .TP
 \fB\-H\fR, \fB--high\fR

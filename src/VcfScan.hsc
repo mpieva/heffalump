@@ -71,7 +71,6 @@ initVcf fp chroms = do
                      r <- skip_hdr psc
                      when (r == 0) lp
 
-    (#{ poke scanner, nsmp } psc (length smps))
     let ctab = M.fromList $ zip (map toShort chroms) [0..]
     Scanner hdl fp ctab <$> newForeignPtr free_scanner psc
 
