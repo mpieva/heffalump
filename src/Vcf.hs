@@ -1,5 +1,5 @@
 {-# LANGUAGE RankNTypes #-}
-module Vcf ( main_xcf, conf_vcf, conf_bcf ) where
+module Vcf ( main_xcf, conf_vcf, conf_bcf, toDensity ) where
 
 -- ^ Stuff related to Vcf and Bcf
 
@@ -260,48 +260,48 @@ detect_density ref =
     find_ref ix = case drop ix $ rss_seqs ref of s:_ -> s () ; [] -> RefEnd
 
 
--- XXX  This is too intricate to be right on the first attempt.
---      I don't trust it.
 toDensity :: Bed -> Int -> Int -> Int -> [Lump]
 toDensity (Bed vee) rs p0 l0
     = go (fromIntegral p0) (fromIntegral $ p0+l0)
-    . takeWhile (\(rs',_,_) -> fromIntegral rs' == rs)
-    . U.toList $ U.drop (binarySearchL 0 (U.length vee -1)) vee
+    . U.toList . U.drop (binSearch 0 (U.length vee -1)) $ vee
   where
-    go s e                [] = Ns   (fromIntegral $  e-s) : []                                -- done, default to LQ
-    go s e rgns@((_,s1,e1):rgns')
-        | s1 <= s && s1 <= e && s <= e1 && e <= e1 = Eqs2 (fromIntegral $  e-s) : []            -- done, contained in HQ rgn
-        | s1 <= s && s1 <= e && s <= e1            = Eqs2 (fromIntegral $  e1-s): go e1 e rgns' -- overlap left
-        | s1 <= s && s1 <= e            && e <= e1 = error "We don't support strandedness"      -- TODO
-        | s1 <= s && s1 <= e                       = Ns (fromIntegral $  e-s): []              -- done, contained in LQ rgn
-        | s1 <= s && s1 >= e            && e1 >= e = error "We don't support strandedness"      -- TODO
-        | s1 <= s && s1 >= e                       = error "logic fail"                         -- shouldn't happen
-       
+--    go s e                [] = Ns   (fromIntegral $  e-s) : []                                -- done, default to LQ
+--    go s e rgns@((_,s1,e1):rgns')
+--        | s1 <= s && s1 <= e && s <= e1 && e <= e1 = Eqs2 (fromIntegral $  e-s) : []            -- done, contained in HQ rgn
+--        | s1 <= s && s1 <= e && s <= e1            = Eqs2 (fromIntegral $  e1-s): go e1 e rgns' -- overlap left
+--        | s1 <= s && s1 <= e            && e <= e1 = error "We don't support strandedness"      -- TODO
+--        | s1 <= s && s1 <= e                       = Ns (fromIntegral $  e-s): []              -- done, contained in LQ rgn
+--        | s1 <= s && s1 >= e            && e1 >= e = error "We don't support strandedness"      -- TODO
+--        | s1 <= s && s1 >= e                       = error "logic fail"                         -- shouldn't happen
+--       
+--
+--        | s1 >= s && s1 <= e && e1 >= s && e1 >= e = Ns (fromIntegral $ s1-s) : go s1 e  rgns    -- overlap right
+--        | s1 >= s && s1 <= e && e1 >= s            = Ns (fromIntegral $ s1-s) : go s1 e1 rgns    -- overlap right
+--        | s1 >= s && s1 <= e            && e1 >= e = error "logic fail"                          -- shouldn't happen
+--        | s1 >= s && s1 <= e                       = error "We don't support strandedness"       -- TODO
+--        | s1 >= s && s1 >= e && e1 >= s && e1 >= e = Ns (fromIntegral $  e-s): []              -- done, contained in LQ rgn
+--        | s1 >= s && s1 >= e            && e1 <= e = error "We don't support strandedness"       -- TODO
+--        | s1 >= s && s1 >= e                       = error "logic fail"                         -- shouldn't happen
+--
+    go s e rgns@((r1,s1,e1):rgns')
+        | r1 == r0 && s1 < e = case () of
+            _ | s1 <= s && e <= e1 -> eqs  (e-s) : []               -- done, contained in HQ rgn
+              | s1 <= s && s <  e1 -> eqs (e1-s) : go e1 e rgns'    -- overlap left
+              | s1 > s             -> ns  (s1-s) : go s1 e rgns     -- overlap right
+              | otherwise          ->              go s  e rgns'    -- shouldn't happen
+    go s e _                        = ns   (e-s) : []               -- done, contained in LQ rgn
 
-        | s1 >= s && s1 <= e && e1 >= s && e1 >= e = Ns (fromIntegral $ s1-s) : go s1 e  rgns    -- overlap right
-        | s1 >= s && s1 <= e && e1 >= s            = Ns (fromIntegral $ s1-s) : go s1 e1 rgns    -- overlap right
-        | s1 >= s && s1 <= e            && e1 >= e = error "logic fail"                          -- shouldn't happen
-        | s1 >= s && s1 <= e                       = error "We don't support strandedness"       -- TODO
-        | s1 >= s && s1 >= e && e1 >= s && e1 >= e = Ns (fromIntegral $  e-s): []              -- done, contained in LQ rgn
-        | s1 >= s && s1 >= e            && e1 <= e = error "We don't support strandedness"       -- TODO
-        | s1 >= s && s1 >= e                       = error "logic fail"                         -- shouldn't happen
-
-
---        | s1 <= s && e1 <  e  = Eqs2 (fromIntegral $ e1-s) : go e1 e rgns'    -- overlap left
---        | s1 <= s && s  >  e1 = error "logic fail"                            -- shouldn't happen
---        | s1 < e             = Ns   (fromIntegral $ s1-s) : go s1 e rgns     -- overlap right
---        | otherwise          = Ns   (fromIntegral $  e-s) : []               -- done, contained in LQ rgn
+    r0  = fromIntegral rs
+    ns  = Ns   . fromIntegral
+    eqs = Eqs2 . fromIntegral
 
     -- finds the first entry that could overlap [p0,p0+l0)
-    binarySearchL u v
-        | u == v    = u
-        | big       = binarySearchL   u   m
-        | otherwise = binarySearchL (m+1) v
+    binSearch u v
+        | u >= v    = u
+        | bigger    = binSearch   u   m
+        | otherwise = binSearch (m+1) v
       where
-        m          = (u+v) `div` 2
-        (r1,s1,e1) = vee U.! m
-        big        = fromIntegral r1 > rs ||
-                     ( fromIntegral r1 == rs &&
-                       s1+e1 > fromIntegral p0 )
-
+        m         = (u+v) `div` 2      -- ensures m >= u && m < v
+        (r1,_,e1) = vee U.! m
+        bigger    = r1 == r0 && e1 > fromIntegral p0 || r1 > r0
 
