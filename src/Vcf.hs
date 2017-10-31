@@ -59,21 +59,26 @@ conf_bcf = conf_vcf { conf_key = "bcfin", conf_ext = "bcf", conf_reader = readBc
 
 opts_xcf :: [ OptDescr ( ConfXcf -> IO ConfXcf ) ]
 opts_xcf =
-    [ Option "o" ["output"] (ReqArg set_output "FILE") "Write output to FILE (.hef)"
-    , Option "r" ["reference"] (ReqArg set_ref "FILE") "Read reference from FILE (.2bit)"
-    , Option "D" ["dense"]          (NoArg  set_dense) "Input stores all sites"
-    , Option "S" ["sparse"]         (NoArg set_sparse) "Input stores only variants"
-    , Option ""  ["patchwork"] (ReqArg set_bed "FILE") "Read HQ regions from FILE (.bed)"
-    , Option "L" ["low"]            (NoArg    set_low) "Low coverage, stores haploid calls"
-    , Option "H" ["high"]           (NoArg   set_high) "High coverage, stores diploid calls" ]
+    [ Option "o" ["output"]        (ReqArg set_output "FILE") "Write output to FILE (.hef)"
+    , Option "r" ["reference"]        (ReqArg set_ref "FILE") "Read reference from FILE (.2bit)"
+    , Option "D" ["dense"]                 (NoArg  set_dense) "Input stores all sites"
+    , Option "S" ["sparse"]                (NoArg set_sparse) "Input stores only variants"
+    , Option ""  ["good-patches"] (ReqArg set_bed_pos "FILE") "Read hi-qual regions from FILE (.bed)"
+    , Option ""  ["poor-patches"] (ReqArg set_bed_neg "FILE") "Read lo-qual regions from FILE (.bed)"
+    , Option "L" ["low"]                   (NoArg    set_low) "Low coverage, stores haploid calls"
+    , Option "H" ["high"]                  (NoArg   set_high) "High coverage, stores diploid calls" ]
   where
     set_output a c = return $ c { conf_output  = a }
     set_ref    a c = return $ c { conf_ref     = a }
 
-    set_bed f c = do raw <- L.readFile f
-                     let mkdens refs str = do bed <- (parseBed (rss_chroms refs) raw)
-                                              return $ toDensity bed :> str
-                     return $ c { conf_density = mkdens }
+    set_bed_pos = set_bed toDensity_positive
+    set_bed_neg = set_bed toDensity_negative
+
+    set_bed k f c = do raw <- L.readFile f
+                       let mkdens refs str = do bed <- (parseBed (rss_chroms refs) raw)
+                                                return $ k bed :> str
+                       return $ c { conf_density = mkdens }
+
     set_dense    c = return $ c { conf_density = const $ pure . (:>)  dense }
     set_sparse   c = return $ c { conf_density = const $ pure . (:>) sparse }
     set_low      c = return $ c { conf_ploidy  = make_hap }
@@ -166,7 +171,7 @@ importVcf ns = normalizeLump . generic 1 -- Start the coordinate at one, for VCF
         Left r                    -> Q.cons Break $ pure r
         Right (var1,vars)
             -- long gap, creates Ns or Eqs2
-            | rv_pos var1 > pos   -> Q.each (ns pos (rv_pos var1 - pos)) >>
+            | rv_pos var1 > pos   -> Q.each (ns (pos-1) (rv_pos var1 - pos)) >>
                                      generic (rv_pos var1) (var1 `Q.cons` vars)
 
             -- positions must match now
@@ -260,11 +265,19 @@ detect_density ref =
     find_ref ix = case drop ix $ rss_seqs ref of s:_ -> s () ; [] -> RefEnd
 
 
-toDensity :: Bed -> Int -> Int -> Int -> [Lump]
-toDensity (Bed vee) rs p0 l0
+toDensity_positive :: Bed -> Int -> Int -> Int -> [Lump]
+toDensity_positive = toDensity (Eqs2 . fromIntegral) (Ns . fromIntegral)
+
+toDensity_negative :: Bed -> Int -> Int -> Int -> [Lump]
+toDensity_negative = toDensity (Ns . fromIntegral) (Eqs2 . fromIntegral)
+
+toDensity :: (Int32 -> Lump) -> (Int32 -> Lump) -> Bed -> Int -> Int -> Int -> [Lump]
+toDensity eqs ns (Bed vee) rs p0 l0
     = go (fromIntegral p0) (fromIntegral $ p0+l0)
     . U.toList . U.drop (binSearch 0 (U.length vee -1)) $ vee
   where
+    r0  = fromIntegral rs
+
     go s e rgns@((r1,s1,e1):rgns')
         | r1 == r0 && s1 < e = case () of
             _ | s1 <= s && e <= e1 -> eqs  (e-s) : []               -- done, contained in HQ rgn
@@ -272,10 +285,6 @@ toDensity (Bed vee) rs p0 l0
               | s1 > s             -> ns  (s1-s) : go s1 e rgns     -- overlap right
               | otherwise          ->              go s  e rgns'    -- shouldn't happen
     go s e _                        = ns   (e-s) : []               -- done, contained in LQ rgn
-
-    r0  = fromIntegral rs
-    ns  = Ns   . fromIntegral
-    eqs = Eqs2 . fromIntegral
 
     -- finds the first entry that could overlap [p0,p0+l0)
     binSearch u v
