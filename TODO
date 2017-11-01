@@ -1,5 +1,3 @@
-- Could VCF import run through the ordinary plain/gzip/bgzip logic?
-
 - Support indels where it makes sense ([bv]cf, bam, emf/maf)
   The data structures are fine, but all parsers and formatters need
   enhancement.
