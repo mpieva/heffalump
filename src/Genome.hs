@@ -196,7 +196,7 @@ toAltCode (V2b 255)    _  = '.'
 toAltCode (V2b v) (N2b r) = C.index "TCAGXPOI" $ fromIntegral (xor r v .&. 7)
 
 toRefCode :: Nuc2b -> Char
-toRefCode = toAltCode (V2b 0)
+toRefCode (N2b r) = C.index "NTCAG" . fromIntegral $ r+1
 
 
 instance Show Nuc2b where
