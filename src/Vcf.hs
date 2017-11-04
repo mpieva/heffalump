@@ -12,6 +12,7 @@ import System.IO
 
 import qualified Data.ByteString.Char8           as B
 import qualified Data.ByteString.Lazy            as L
+import qualified Data.ByteString.Streaming       as S
 import qualified Data.IntMap.Strict              as I
 import qualified Data.Vector.Unboxed             as U
 import qualified Streaming.Prelude               as Q
@@ -152,12 +153,11 @@ cleanVcf :: Monad m => Stream (Of RawVariant) m r -> Stream (Of RawVariant) m r
 cleanVcf = Q.filter $ \RawVariant{..} ->
     rv_chrom >= 0 && B.length rv_vars == B.length (B.filter (== ',') rv_vars) * 2 + 1
 
--- Reads a VCF file and returns 'RawVariant's, which is not exactly
--- practical.
 readVcf :: [Bytes] -> FilePath -> (Stream (Of RawVariant) IO () -> IO r) -> IO r
-readVcf cs fp k = do
-    sc <- initVcf fp cs
-    k $ Q.untilRight (getVariant sc)
+readVcf cs fp k =
+    withFile fp ReadMode $ \hdl ->
+        withScanner cs (decomp $ S.hGetContentsN (1024*1024) hdl) $ \psc ctab str ->
+            k $ Q.unfoldr (getVariant psc ctab) str
 
 -- | Imports one chromosome worth of VCF style 'RawVariant's into a
 -- stream of 'Lump's with a 'Break' tacked onto the end.  This assumes

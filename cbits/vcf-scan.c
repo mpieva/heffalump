@@ -1,14 +1,12 @@
 #include "vcf-scan.h"
 
-// Scanner for (our) compressed VCF.  We ignore most of the file,
-// hand-code the rest.
+// Scanner for MPI style VCF.  We ignore most of the file,
+// hand-code the rest for speed.
 //
 // The intention is to call from Haskell; that way we get
-// multithreading and non-blocking I/O.  A scanner has a large input
-// buffer, a small working buffer and a structure to put the output in.
-// We scan until the working buffer is empty, then unzip a BGZF block,
-// keep scanning.  We return when either the input buffer is
-// sufficiently empty or we managed to produce a record.
+// multithreading and non-blocking I/O.  A scanner has a working buffer
+// and a structure to put the output in.  We return when either the
+// input buffer is sufficiently empty or we managed to produce a record.
 
 #define inc() { ++p ; if( p == pe ) return 0 ; }
 #define skip() { while( *p != '\t' ) inc() ; inc() ; }
@@ -69,6 +67,8 @@ int scan_vcf1( struct scanner *sc )
 {
     char *p = sc->next_work, *pe = sc->last_work ;
     while( p != pe ) {
+        // guard against empty lines
+        while( *p == '\n' ) inc() ;
         sc->refseq = p ;
         while( *p != '\t' ) inc() ;
         sc->erefseq = p ;
@@ -119,7 +119,7 @@ int scan_vcf1( struct scanner *sc )
                 uint8_t g = 0 ;
                 while (*p >= '0' && *p <= '9') {
                     g = 10*g + *p - '0' ;
-                    inc() ; 
+                    inc() ;
                 }
                 *pgts++ = (g+1) << 1 ;
             }
@@ -152,14 +152,4 @@ int scan_vcf1( struct scanner *sc )
     }
     return 0 ;
 }
-
-void free_scanner( struct scanner* sc )
-{
-    if( sc ) {
-        free( sc->working_buffer ) ;
-        free( sc->input_buffer ) ;
-        free( sc ) ;
-    }
-}
-
 
