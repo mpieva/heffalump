@@ -22,6 +22,7 @@ import Treemix
 import Util
 import Vcf
 import VcfOut
+import ShameMS
 
 main :: IO ()
 main = do
@@ -51,6 +52,7 @@ main = do
         , z "treemix"      main_treemix           "Merge heffalumps into Treemix format"
         , z "eigenstrat"   main_eigenstrat        "Merge heffalumps into Eigenstrat format"
         , z "vcfexport"    main_vcfout            "Merge heffalumps into vcf format"
+        , z "pseudo_ms"    main_shameMSout        "Merge heffalumps into pseudo_ms format"
         , z "twobitinfo"   main_2bitinfo          "List reference sequences"
         , z "twobittofa"   main_2bittofa          "Extract Fasta from 2bit"
         , z "fatotwobit"   main_fato2bit          "Convert Fasta to 2bit"
