@@ -76,7 +76,7 @@ opts_xcf =
     set_bed_neg = set_bed toDensity_negative
 
     set_bed k f c = do raw <- L.readFile f
-                       let mkdens refs str = do bed <- (parseBed (rss_chroms refs) raw)
+                       let mkdens refs str = do bed <- parseBed (rss_chroms refs) raw
                                                 return $ k bed :> str
                        return $ c { conf_density = mkdens }
 

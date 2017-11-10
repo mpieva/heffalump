@@ -215,15 +215,15 @@ main_kayvergence args = do
     decodeMany conf_reference hefs $ \ref inps -> do
         region_filter <- mkBedFilter conf_regions (either error rss_chroms ref)
 
-        stats <- liftM (uncurry gen_stats) $
+        stats <- fmap (uncurry gen_stats) $
                  accum_stats conf_blocksize (kayvergence conf_noutgroups) $
                  conf_filter ref $ region_filter $ Q.concat $ mergeLumps 0 inps
 
         let fmt1 (rn,sn,cn) (SillyStats k n _ r v _) =
                     [ Left $ "Kiv( " ++ rn ++ "; "
                     , Left $ sn ++ "; "
-                    , Left $ cn
-                    , Left $ " ) = "
+                    , Left   cn
+                    , Left   " ) = "
                     , Right $ showFFloat (Just 0) k "/"
                     , Right $ showFFloat (Just 0) n " = "
                     , Right $ showFFloat (Just 2) (100 * r) "% ± "
@@ -332,7 +332,7 @@ main_patterson f4p args = do
     decodeMany conf_reference hefs $ \ref inps -> do
         region_filter <- mkBedFilter conf_regions (either error rss_chroms ref)
 
-        stats <- liftM (uncurry gen_stats)
+        stats <- fmap (uncurry gen_stats)
                  $ accum_stats conf_blocksize (pattersons conf_noutgroups conf_nrefpanel)
                  $ conf_filter ref $ region_filter $ Q.concat
                  $ case f4p of WantF4 -> mergeLumpsDense            inps
@@ -344,8 +344,8 @@ main_patterson f4p args = do
                     , Left $ r1 ++ ", "
                     , Left $ r2 ++ "; "
                     , Left $ sn ++ ", "
-                    , Left $ cn
-                    , Left " ) = "
+                    , Left   cn
+                    , Left   " ) = "
                     , Right $ case f4p of WantF4 -> showEFloat (Just 2) f4 ", D = " ; NoF4 -> ""
                     , Right $ showFFloat (Just 0) k "/"
                     , Right $ showFFloat (Just 0) n " = "
@@ -451,7 +451,7 @@ main_yaddayadda args = do
     decodeMany conf_reference hefs $ \ref inps -> do
         region_filter <- mkBedFilter conf_regions (either error rss_chroms ref)
 
-        stats <- liftM (uncurry gen_stats)
+        stats <- fmap (uncurry gen_stats)
                  $ accum_stats conf_blocksize (yaddayadda conf_noutgroups conf_nafricans conf_nrefpanel)
                  $ conf_filter ref $ region_filter $ Q.concat $ mergeLumps (conf_noutgroups+conf_nafricans) inps
 
@@ -461,8 +461,8 @@ main_yaddayadda args = do
                     , Left $ n1 ++ ", "
                     , Left $ n2 ++ "; "
                     , Left $ sn ++ ", "
-                    , Left $ an
-                    , Left " ) = "
+                    , Left   an
+                    , Left   " ) = "
                     , Right $ showFFloat (Just 0) k "/"
                     , Right $ showFFloat (Just 0) n " = "
                     , Right $ showFFloat (Just 2) (100 * r) "% ± "
@@ -475,7 +475,7 @@ main_yaddayadda args = do
 print_table :: [[Either String String]] -> IO ()
 print_table tab = putStrLn . unlines $ map (concat . zipWith fmt1 lns) tab
   where
-    lns = map (maximum . map (either length length)) $ transpose $ tab
+    lns = map (maximum . map (either length length)) $ transpose tab
     fmt1 l (Left  s) = s ++ replicate (l - length s) ' '
     fmt1 l (Right s) =      replicate (l - length s) ' ' ++ s
 

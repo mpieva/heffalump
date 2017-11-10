@@ -95,15 +95,15 @@ mk_opts cmd moreopts ods = ods'
 parseOpts :: a -> [OptDescr (a -> IO a)] -> [String] -> IO a
 parseOpts def ods args = do
     let (opts, files, errs) = getOpt Permute ods args
-    unless (null errs) $ do mapM_ (hPutStrLn stderr) errs >> exitFailure
-    unless (null files) $ do
+    unless (null errs) $ mapM_ (hPutStrLn stderr) errs >> exitFailure
+    unless (null files) $
         mapM_ (hPutStrLn stderr . (++) "unexpected argument " . show) files >> exitFailure
     foldl (>>=) (return def) opts
 
 parseFileOpts :: a -> [OptDescr (a -> IO a)] -> [String] -> IO ([String], a)
 parseFileOpts def ods args = do
     let (opts, files, errs) = getOpt Permute ods args
-    unless (null errs) $ do mapM_ (hPutStrLn stderr) errs >> exitFailure
+    unless (null errs) $ mapM_ (hPutStrLn stderr) errs >> exitFailure
     (,) files <$> foldl (>>=) (return def) opts
 
 

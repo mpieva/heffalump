@@ -95,7 +95,7 @@ collate_pile :: ConfBam -> Pile -> Var0
 collate_pile ConfBam{..} p =
     Var { v_refseq = p_refseq p
         , v_loc    = p_pos p
-        , v_call   = U.accum (+) (U.replicate 10 0) $
+        , v_call   = U.accum (+) (U.replicate 10 0)
             [ (fromIntegral (unN (db_call b)) +o, 1)
             | (o,b) <- map ((,) 0) (fst $ p_snp_pile p) ++ map ((,) 4) (snd $ p_snp_pile p)
             , db_qual b >= conf_min_qual
@@ -157,7 +157,7 @@ encodePiles ref tgts = S.mwrap $ do
     scan1 :: MonadIO m => IntMap PackedLump -> Refseq -> Iteratee [Var1] m (IntMap PackedLump)
     scan1 m rs = takeWhileE ((==) rs . v_refseq) >=> lift . run $
                     let rn = sq_name $ getRef tgts rs
-                    in case findIndex ((==) rn) (rss_chroms ref) of
+                    in case elemIndex rn (rss_chroms ref) of
 
                         Nothing -> do liftIO $ hPrintf stderr "\nSkipping %s.\n" (unpack rn)
                                       m <$ skipToEof

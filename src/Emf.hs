@@ -105,7 +105,7 @@ insertGenome (Genome m1) !c !p !l !s = ( warning, Genome m1' )
 -- reference genome.
 
 parseMaf :: (B.ByteString, B.ByteString) -> [B.ByteString] -> Genome -> S.ByteString IO r -> IO Genome
-parseMaf (from_spc, to_spc) chrs gnm0 = doParse gnm0 . mapsM (S.toStrict) . S.lines
+parseMaf (from_spc, to_spc) chrs gnm0 = doParse gnm0 . mapsM S.toStrict . S.lines
   where
     doParse :: Genome -> Stream (Of B.ByteString) IO r -> IO Genome
     doParse gnm = inspect . Q.dropWhile (\l -> B.all isSpace l || B.head l == '#') >=> \case
@@ -148,12 +148,12 @@ parseMaf (from_spc, to_spc) chrs gnm0 = doParse gnm0 . mapsM (S.toStrict) . S.li
         , "s":name:pos_:len_:str_:_olen:seq_:_ <- [ B.words sln ]
         , B.snoc spc '.' `B.isPrefixOf` name || spc == name
         , let chr_ = B.drop (fromIntegral $ B.length spc + 1) name
-        , let chrom = take 1 $ findIndices ((==) chr_) chrs
-                            ++ findIndices ((==) chr_ . (<>) "chr") chrs
-                            ++ if chr_ == "chrM" then findIndices ((==) "MT") chrs else []
+        , let chrom = take 1 $                                       elemIndices chr_ chrs
+                            ++ do ("chr",cc) <- [B.splitAt 3 chr_] ; elemIndices  cc  chrs
+                            ++ do "chrM"     <- [chr_]             ; elemIndices "MT" chrs
         , (pos, "") <- maybeToList $ B.readInt pos_
         , (len, "") <- maybeToList $ B.readInt len_
-        , rev <- case str_ of "+" -> [False] ; "-" -> [True] ; _ -> [] ]
+        , rev <- [ False | str_ == "+" ] ++ [ True | str_ == "-" ] ]
 
 
 encodeGenome :: Genome -> L.ByteString
@@ -294,8 +294,8 @@ ancestor_to_species homo pan = subtrees
         (    _,   _,    _,   _ ) -> subtrees u ++ subtrees v
 
 tree_has :: Species -> Tree Label -> [Label]
-tree_has s (Leaf lbl@(Label _ spc _)) = if s == spc then [lbl] else []
-tree_has s (Branch u' v' _) = tree_has s u' ++ tree_has s v'
+tree_has s (Leaf lbl@(Label _ spc _)) = [ lbl | s == spc ]
+tree_has s (Branch           u' v' _) = tree_has s u' ++ tree_has s v'
 
 
 -- | Returns a 'Fragment' for a subset of the species (say, the Chimps)
@@ -315,14 +315,13 @@ collectTrees chrs select genome block
                        unless (null w) $ hPutStrLn stderr $ "Warning: " ++ w
                        return $! g'
             | (Label iref _ rref_, tgt_lbls) <- select $ emf_tree block
-            , ref_idx <- maybeToList $ findIndex (p_seq (r_pos rref_) ==) chrs
+            , ref_idx <- elemIndices (p_seq (r_pos rref_)) chrs
             , let ref_seq_ = emf_seqs block !! iref
-            , let smp_seq_ = consensus_seq
-                      [ emf_seqs block !! itgt | Label itgt _ _ <- tgt_lbls ]
+            , let smp_seq_ = consensus_seq [ emf_seqs block !! itgt | Label itgt _ _ <- tgt_lbls ]
             , let (rref, ref_seq, smp_seq) =
                     if p_start (r_pos rref_) >= 0
-                    then (             rref_,            ref_seq_,            smp_seq_)
-                    else (reverseRange rref_, revcompl $ ref_seq_, revcompl $ smp_seq_) ]
+                    then (             rref_,          ref_seq_,          smp_seq_)
+                    else (reverseRange rref_, revcompl ref_seq_, revcompl smp_seq_) ]
 
 revcompl :: B.ByteString -> B.ByteString
 revcompl = B.reverse . B.map compl
@@ -355,7 +354,7 @@ opts_emf_default = OptsEmf
     (error "no output specified")
     (error "no reference specified")
     ("homo","sapiens")
-    (flip ancestor_to_species ("pan","troglodytes"))
+    (`ancestor_to_species` ("pan","troglodytes"))
 
 opts_emf :: [ OptDescr ( OptsEmf -> IO OptsEmf ) ]
 opts_emf =
@@ -382,7 +381,7 @@ main_emf args = do
     let cons = collectTrees (rss_chroms ref) (emf_select emf_ref_species)
     !genome <- foldM (\g fp -> withFile fp ReadMode $
                                     Q.foldM_ cons (return g) return . scanBlocks .
-                                    mapsM (S.toStrict) . S.lines . decomp . S.fromHandle
+                                    mapsM S.toStrict . S.lines . decomp . S.fromHandle
                      ) emptyGenome
                -- this is just so the one path at MPI that makes sense
                -- doesn't need to be typed over and over again

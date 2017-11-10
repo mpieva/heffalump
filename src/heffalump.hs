@@ -35,10 +35,10 @@ main = do
   where
     usage = do
         pn <- getProgName
-        hPutStrLn stderr $ "Usage:"
         let kl = maximum $ map (length . fst) mains
-        forM_ mains $ \(k,(_,h)) -> hPutStrLn stderr $
-                "  "++pn++' ':k++replicate (kl-length k) ' '++"  -- "++h
+        hPutStrLn stderr . unlines $ "Usage:" :
+              [ "  "++pn++' ':k++replicate (kl-length k) ' '++"  -- "++h
+              | (k,(_,h)) <- mains ]
 
     mains = let z a b c = (a,(b,c)) in
         [ z "hetfa"        main_hetfa             "Import hetfa file"
@@ -124,8 +124,8 @@ importHetfa ref smps = S.mwrap $ do
 
     fold_1 :: MonadIO m => I.IntMap PackedLump -> Stream (FastaSeq m) m r -> m (I.IntMap PackedLump, r)
     fold_1 !acc s = inspect s >>= \case
-        Left r -> return $ (acc,r)
-        Right (FastaSeq nm sq) -> case findIndex (nm ==) (rss_chroms ref) of
+        Left r -> return (acc,r)
+        Right (FastaSeq nm sq) -> case elemIndex nm (rss_chroms ref) of
             Nothing -> S.effects sq >>= fold_1 acc
             Just  i -> do lump :> s' <- enc2 i sq
                           liftIO $ hPrint stderr (i, L.length $ unpackLump lump)
@@ -197,7 +197,7 @@ main_patch args = do
     ConfPatch{..} <- parseOpts defaultPatchConf (mk_opts "patch" [] opts_patch) args
     withFile conf_patch_sample ReadMode $ \hdli -> do
         (mref, raw) <- getRefPath $ decomp $ S.fromHandle hdli
-        ref <- readTwoBit $ either (\e -> fromMaybe e mref) id conf_patch_reference
+        ref <- readTwoBit $ either (`fromMaybe` mref) id conf_patch_reference
 
         conf_patch_output $ \hdlo ->
             patchFasta hdlo conf_patch_width
