@@ -60,7 +60,7 @@ getvars !tab strs !str = go 0
                                         Left r | B.length str == off -> pure r
                                                | otherwise           -> error "Short record."
         | otherwise = do
-            (!l_shared, !l_indiv) <- liftIO . B.unsafeUseAsCString str $ \p -> do
+            (!l_shared, !l_indiv) <- liftIO . B.unsafeUseAsCString str $ \p ->
                                             (,) <$> peek32 p off <*> peek32 p (off+4)
             let !l_tot = l_shared + l_indiv + 8
 

@@ -64,7 +64,7 @@ main_vcfout args = do
 
         flip Q.mapM_ the_vars $ \Variant{..} ->
             -- samples (not outgroups) must show alt allele at least once
-            when (conf_all || isTransversion v_alt) $ do
+            when (conf_all || isTransversion v_alt) $
                 B.hPutBuilder stdout $
                     B.byteString (chrs V.! v_chr) <> B.char8 '\t' <>
                     B.intDec (v_pos+1) <> B.string8 "\t.\t" <>

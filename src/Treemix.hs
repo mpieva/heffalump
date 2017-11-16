@@ -113,7 +113,7 @@ chrom_filter  chroms (Just re) = go [ i | (i,chrom) <- zip [0..] chroms, matchTe
 -- | Reads an individual file.  Returns a map from individual to pop
 -- population number.
 readIndFile :: B.ByteString -> [(B.ByteString, B.ByteString)]
-readIndFile = mapMaybe get1 . map B.words . filter (not . B.isPrefixOf "#") . B.lines
+readIndFile = mapMaybe (get1 . B.words) . filter (not . B.isPrefixOf "#") . B.lines
   where
     get1 (x:_:y:_) = Just (x,y)
     get1     _     = Nothing
@@ -123,12 +123,12 @@ readIndFile = mapMaybe get1 . map B.words . filter (not . B.isPrefixOf "#") . B.
 -- the result is its associated population.
 lookupHef :: [(B.ByteString, B.ByteString)] -> FilePath -> B.ByteString
 lookupHef assocs fp = case matches of
-    (_ ,y) : []                   -> y
+    (_ ,y) : [    ]               -> y
     (x1,y) : (x2,_) : _ | x1 > x2 -> y
     _:_:_ -> error $ "Multiple populations match " ++ takeBaseName fp
     [   ] -> error $ "No population matches " ++ takeBaseName fp
   where
-    matches = reverse. sort . map (\(x,y) -> (B.length x, y)) .
+    matches = sortBy (flip compare) . map (first B.length) .
               filter (\(x,_) -> x `B.isPrefixOf` B.pack (takeBaseName fp)) $ assocs
 
 -- | Takes a list of stuff, returns the list without dups, its length,

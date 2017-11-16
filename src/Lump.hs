@@ -559,30 +559,30 @@ mergeLumpsWith skipLen = go 0 0
     -- Variant codes:  #ref + 4 * #alt
     ct_trans :: Lump -> Word8
     ct_trans (Eqs1      _) = 1
-    ct_trans (Trans1     ) = 4
+    ct_trans  Trans1       = 4
 
     ct_trans (Eqs2      _) = 2
-    ct_trans (RefTrans   ) = 5
-    ct_trans (Trans2     ) = 8
-    ct_trans            _  = 0
+    ct_trans  RefTrans     = 5
+    ct_trans  Trans2       = 8
+    ct_trans  _            = 0
 
     ct_compl :: Lump -> Word8
     ct_compl (Eqs1      _) = 1
-    ct_compl (Compl1     ) = 4
+    ct_compl  Compl1       = 4
 
     ct_compl (Eqs2      _) = 2
-    ct_compl (RefCompl   ) = 5
-    ct_compl (Compl2     ) = 8
-    ct_compl            _  = 0
+    ct_compl  RefCompl     = 5
+    ct_compl  Compl2       = 8
+    ct_compl  _            = 0
 
     ct_tcompl :: Lump -> Word8
     ct_tcompl (Eqs1      _) = 1
-    ct_tcompl (TCompl1    ) = 4
+    ct_tcompl  TCompl1      = 4
 
     ct_tcompl (Eqs2      _) = 2
-    ct_tcompl (RefTCompl  ) = 5
-    ct_tcompl (TCompl2    ) = 8
-    ct_tcompl            _  = 0
+    ct_tcompl  RefTCompl    = 5
+    ct_tcompl  TCompl2      = 8
+    ct_tcompl  _            = 0
 
 
 -- | This gunk is need to make a map over a 'Vector' strict.  Looks
@@ -616,7 +616,7 @@ stretchToLump nrs = normalizeLump . go1 (rss_seqs nrs)
     go1 (r0:rs) l = go (r0 ()) l
       where
         go r = lift . Q.next >=> \case
-            Right (S.Chrs a b,k) -> call a (call b (flip go k)) r
+            Right (S.Chrs a b,k) -> call a (call b (`go` k)) r
             Right (S.Ns     c,k) -> Ns   (fromIntegral $ c+c) `Q.cons` go (dropRS (fromIntegral $ c+c) r) k
             Right (S.Eqs    c,k) -> Eqs2 (fromIntegral $ c+c) `Q.cons` go (dropRS (fromIntegral $ c+c) r) k
             Right (S.Eqs1   c,k) -> Eqs1 (fromIntegral $ c+c) `Q.cons` go (dropRS (fromIntegral $ c+c) r) k

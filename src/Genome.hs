@@ -276,8 +276,8 @@ main_2bitinfo fs
 
     | otherwise = forM_ (eff_args fs) $ \f -> do
         ref <- readTwoBit f
-        sequence_ $ zipWith (printf "%s\t%d\n" . C.unpack)
-                            (rss_chroms ref) (rss_lengths ref)
+        zipWithM_ (printf "%s\t%d\n" . C.unpack)
+                  (rss_chroms ref) (rss_lengths ref)
 
 main_2bittofa :: [String] -> IO ()
 main_2bittofa fs = case eff_args fs of
@@ -295,16 +295,16 @@ main_2bittofa fs = case eff_args fs of
 
     (fp:rns) -> do ref <- readTwoBit fp
                    forM_ rns $ \rn ->
-                        case findIndex ((==) rn . C.unpack) (rss_chroms ref) of
+                        case elemIndex (C.pack rn) (rss_chroms ref) of
                             Just i  -> do putStrLn $ '>' : rn
                                           twoBitToFa $ (rss_seqs ref !! i) ()
-                            Nothing -> do let (ch,':':s1) = break ((==) ':') rn
-                                          [(start,'-':s2)] <- return $ reads s1
-                                          [(end,"")] <- return $ reads s2
-                                          Just i <- return $ findIndex ((==) ch . C.unpack) (rss_chroms ref)
-
-                                          printf ">%s:%d-%d\n" ch start end
-                                          twoBitToFa $ dropRS start $ takeRS end $ (rss_seqs ref !! i) ()
+                            Nothing -> sequence_
+                                          [ do printf ">%s:%d-%d\n" ch start end
+                                               twoBitToFa $ dropRS start $ takeRS end $ (rss_seqs ref !! i) ()
+                                          | (ch,':':s1)    <- [break (':' ==) rn]
+                                          , (start,'-':s2) <- reads s1
+                                          , (end,"")       <- reads s2
+                                          , i              <- elemIndices (C.pack ch) (rss_chroms ref) ]
 
 twoBitToFa :: RefSeq -> IO ()
 twoBitToFa = splitLns . unpackRS
