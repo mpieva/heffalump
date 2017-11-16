@@ -1,4 +1,4 @@
-module ShameMS ( main_shameMSout ) where
+module ShameMS ( mainShameMSout ) where
 
 import Bio.Prelude
 import System.FilePath                  ( takeBaseName )
@@ -30,8 +30,8 @@ data ConfShameMS = ConfShameMS {
 defaultMsConf :: ConfShameMS
 defaultMsConf = ConfShameMS (Just 0) (Just 0) True True Nothing Nothing
 
-opts_vcfout :: [ OptDescr (ConfShameMS -> IO ConfShameMS) ]
-opts_vcfout =
+optsVcfout :: [ OptDescr (ConfShameMS -> IO ConfShameMS) ]
+optsVcfout =
     [ Option "r" ["reference"]     (ReqArg set_ref "FILE") "Read reference from FILE (.2bit)"
     , Option "n" ["numoutgroups"]  (ReqArg set_nout "NUM") "The first NUM individuals are outgroups (0)"
     , Option "l" ["blocklength"]   (ReqArg set_lblock "NUM") "The length of each block (0)"
@@ -49,24 +49,22 @@ opts_vcfout =
     set_rgns   a c = return $ c { conf_regions    =  Just a }
 
 
-main_shameMSout :: [String] -> IO ()
-main_shameMSout args = do
+mainShameMSout :: [String] -> IO ()
+mainShameMSout args = do
     ( hefs, ConfShameMS{..} ) <- parseFileOpts defaultMsConf
-                                              (mk_opts "pseudo_ms" "[hef-file...]" opts_vcfout) args
+                                              (mk_opts "pseudo_ms" "[hef-file...]" optsVcfout) args
 
     decodeMany conf_reference hefs $ \refs inps -> do
         region_filter <- mkBedFilter conf_regions (either error rss_chroms refs)
-        --window_filter <- mkwindowFilter (Just 1) conf_blocklength 
         let chrs = either error (V.fromList . rss_chroms) refs
 
-        let the_vars = addRef (either error id refs) $
-                       blocks (Just 1) conf_blocklength $ --window_filter $
+        let the_vars = blocks conf_blocklength $ 
+                       addRef (either error id refs) $
                        region_filter $
                        bool singles_only Q.concat conf_split $
                        maybe mergeLumpsDense mergeLumps conf_noutgroups inps
-        
-        my_vec <- U.fromList . concat <$> Q.toList_ (Q.map smashVariants the_vars)
-
+       
+        my_vec <-  U.fromList . concat <$> Q.toList_ (Q.map smashVariantss $ Q.mapped Q.toList the_vars)
 
         let m = length inps
         let res = [[ my_vec U.! i | i <- [ 2 * j + o, 2 * (j+m) + o .. U.length my_vec-1] ] | j <- [ 0 .. m-1 ] , o <- [0,1] ]
@@ -76,6 +74,9 @@ main_shameMSout args = do
 
   where
     singles_only = Q.concat . Q.map (\case [x] -> Just x ; _ -> Nothing)
+   
+    smashVariantss :: [Variant] -> [Word8] 
+    smashVariantss = concatMap smashVariants
 
     smashVariants :: Variant -> [Word8]
     smashVariants Variant{..} = 
@@ -83,36 +84,18 @@ main_shameMSout args = do
 
     smashVariant :: Nuc2b -> Var2b -> Word8 -> [Word8]
     smashVariant (N2b r) (V2b a) x
-  		| x .&. 3 > 0 && x .&. 12 > 0 = [r,xor r a]
-  		| x .&. 3 > 0 = [r,r]
-  		| x .&. 12 > 0 = [xor r a,xor r a]
-  		| x == 0 = [255,255]
+        | x .&. 3 > 0 && x .&. 12 > 0 = [r,xor r a]
+        | x .&. 3 > 0                 = [r,r]
+        | x .&. 12 > 0                = [xor r a,xor r a]
+        | x == 0                      = [255,255]
+        | otherwise                   = [255,255]
 
-myGroupBy :: Monad m => Maybe Int -> Maybe Int -> Stream (Of Variant) m r -> Stream (Stream (Of Variant) m ) m r
-myGroupBy s w = groupBy (\l g -> v_pos l >=  fromJust s ) -- $ S.each $ V.fromList [(1,'a'),(2,'b'),(3,'c'),(2,'b'),(3,'e'),(5,'f'),(4,'g'),(6,'h')]
-
---mblocks :: Monad m => Maybe Int -> Int -> Bool
---mblocks =
---  where
---    go _      Nothing = lift . Q.effects >=> pure
---    go Nothing _      = lift . Q.effects >=> pure
---    go s       w      = lift . Q.next >=> \case
-
-blocks :: Monad m => Maybe Int -> Maybe Int -> Stream (Of Variant) m r -> Stream (Of Variant) m r --Stream (Stream (Of Variant) m ) m r
-blocks = go 
+blocks :: Monad m => Maybe Int -> Stream (Of Variant) m r -> Stream (Stream (Of Variant) m) m r
+blocks ln = go (-1) (Just 0)
   where
-    go _      Nothing = lift . Q.effects >=> pure
-    go Nothing _      = lift . Q.effects >=> pure
-    go s       w      = lift . Q.next >=> \case
-        Left   r    -> pure r
-        Right (v,vs)
-            -- variant belong to this window keep it
-            | v_pos v <  fromJust s -> v `Q.cons` go s w vs
+    go c p = lift . Q.next >=> \case
+        Left    r                   -> pure r
+        Right (v,vs) | v_chr v == c -> yields (Q.span (before     c ((+) <$> ln <*> p)) (Q.cons v vs)) >>= go     c  ((+) <$> ln <*> p)
+                     | otherwise    -> yields (Q.span (before (v_chr v) ln) (Q.cons v vs)) >>= go (v_chr v) ln
 
-            -- variant passes the window size, make next boundry
-            | v_pos v >= fromJust((+) <$> s <*> w) -> v `Q.cons` go ((+) <$> s <*> w) w vs
-
-            -- when logic fails!
-            | otherwise                     -> v `Q.cons` go Nothing Nothing vs
-
-
+    before c p v = v_chr v == c && v_pos v < fromJust p

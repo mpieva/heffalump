@@ -52,7 +52,7 @@ main = do
         , z "treemix"      main_treemix           "Merge heffalumps into Treemix format"
         , z "eigenstrat"   main_eigenstrat        "Merge heffalumps into Eigenstrat format"
         , z "vcfexport"    main_vcfout            "Merge heffalumps into vcf format"
-        , z "pseudo_ms"    main_shameMSout        "Merge heffalumps into pseudo_ms format"
+        , z "pseudo_ms"    mainShameMSout         "Merge heffalumps into pseudo_ms format"
         , z "twobitinfo"   main_2bitinfo          "List reference sequences"
         , z "twobittofa"   main_2bittofa          "Extract Fasta from 2bit"
         , z "fatotwobit"   main_fato2bit          "Convert Fasta to 2bit"
@@ -126,7 +126,7 @@ importHetfa ref smps = S.mwrap $ do
 
     fold_1 :: MonadIO m => I.IntMap PackedLump -> Stream (FastaSeq m) m r -> m (I.IntMap PackedLump, r)
     fold_1 !acc s = inspect s >>= \case
-        Left r -> return $ (acc,r)
+        Left r -> return (acc,r)
         Right (FastaSeq nm sq) -> case findIndex (nm ==) (rss_chroms ref) of
             Nothing -> S.effects sq >>= fold_1 acc
             Just  i -> do lump :> s' <- enc2 i sq
