@@ -12,6 +12,7 @@ import qualified Data.Vector.Split               as S
 import qualified Data.Maybe                      as M
 import qualified Data.Vector.Unboxed             as U
 import qualified Streaming.Prelude               as Q
+import qualified Data.Typeable                    as D
 
 import Bed ( mkBedFilter)
 import Genome
@@ -63,17 +64,18 @@ mainShameMSout args = do
                        region_filter $
                        bool singles_only Q.concat conf_split $
                        maybe mergeLumpsDense mergeLumps conf_noutgroups inps
-       
-        my_vec <-  U.fromList . concat <$> Q.toList_ (Q.map smashVariantss $ Q.mapped Q.toList the_vars)
-
+      
         let m = length inps
-        let res = [[ my_vec U.! i | i <- [ 2 * j + o, 2 * (j+m) + o .. U.length my_vec-1] ] | j <- [ 0 .. m-1 ] , o <- [0,1] ]
+        --my_vec <-  U.fromList . concat <$> Q.toList_ (Q.map smashVariantss $ Q.mapped Q.toList the_vars)
+        my_vec <-  Q.toList_ $ Q.map smashVariantss $ Q.mapped Q.toList  the_vars
         
-
-        hPutStr stdout . unlines $ map (map (toRefCode . N2b)) res
+        mapM_ (blocktoShame m . U.fromList) my_vec
 
   where
     singles_only = Q.concat . Q.map (\case [x] -> Just x ; _ -> Nothing)
+
+    blocktoShame :: Int -> U.Vector Word8 -> IO ()
+    blocktoShame m ff = hPutStr stdout . unlines $ map (map (toRefCode . N2b)) [[ ff U.! i | i <- [ 2 * j + o, 2 * (j+m) + o .. U.length ff -1] ] | j <- [ 0 .. m-1 ] , o <-[0,1] ]  
    
     smashVariantss :: [Variant] -> [Word8] 
     smashVariantss = concatMap smashVariants
