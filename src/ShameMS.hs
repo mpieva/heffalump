@@ -64,21 +64,29 @@ mainShameMSout args = do
 
     blocktoShame :: Int -> U.Vector Word8 -> IO ()
     blocktoShame m ff = unless (U.null ff) $
-                            hPutStr stdout . unlines $ map (map (toRefCode . N2b))
-                                [ map (ff U.!) [ 2 * j + o, 2 * (j+m) + o .. U.length ff -1 ]
-                                | j <- [ 0 .. m-1 ] , o <-[0,1] ]
+                            hPutStr stdout $ unlines
+                                [ [ toRefCode . N2b $ k (ff U.! i)
+                                  | i <- [ j, j+m .. U.length ff -1 ] ]
+                                | j <- [ 0 .. m-1 ], k <- [ fstW, sndW ] ]
 
     smashVariants :: Variant -> [Word8]
     smashVariants Variant{..} =
-        concatMap (smashVariant v_ref v_alt) (U.toList v_calls)
+        map (smashVariant v_ref v_alt) (U.toList v_calls)
 
-    smashVariant :: Nuc2b -> Var2b -> Word8 -> [Word8]
+    smashVariant :: Nuc2b -> Var2b -> Word8 -> Word8
     smashVariant (N2b r) (V2b a) x
-        | x .&. 3 > 0 && x .&. 12 > 0 = [r,xor r a]
-        | x .&. 3 > 0                 = [r,r]
-        | x .&. 12 > 0                = [xor r a,xor r a]
-        | x == 0                      = [255,255]
-        | otherwise                   = [255,255]
+        | x .&. 3 > 0 && x .&. 12 > 0 =       r `pack2` xor r a
+        | x .&. 3 > 0                 =       r `pack2` r
+        | x .&. 12 > 0                = xor r a `pack2` xor r a
+        | otherwise                   =      15 `pack2` 15
+
+    pack2 :: Word8 -> Word8 -> Word8
+    pack2 a b = a .|. shiftL b 4
+
+    fstW, sndW :: Word8 -> Word8
+    fstW x =        x   .&. 0xF
+    sndW x = shiftR x 4 .&. 0xF
+
 
 blocks :: Monad m => Int -> Stream (Of Variant) m r -> Stream (Stream (Of Variant) m) m r
 blocks ln = go (-1) 0
