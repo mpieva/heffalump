@@ -4,9 +4,9 @@ import Bio.Prelude
 import System.Console.GetOpt
 import System.IO
 
-import qualified Data.Foldable                  as F
+--import qualified Data.Foldable                  as F
 import qualified Data.ByteString.Char8          as B
-import qualified Data.ByteString.Lazy           as L
+--import qualified Data.ByteString.Lazy           as L
 import qualified Data.Vector.Unboxed            as U
 import qualified Streaming.Prelude              as Q
 
@@ -38,14 +38,16 @@ import Util
 -- per individual, padded to a full byte, padded to at least 48 bytes.
 
 
+-- Not used anywhere
 -- Nickhash for strings.  (It's not clear if we got the signs right?)
-nick_hashit :: L.ByteString -> Int32
-nick_hashit = L.foldl (\h c -> 23 * h + fromIntegral c) 0
+-- nick_hashit :: L.ByteString -> Int32
+-- nick_hashit = L.foldl (\h c -> 23 * h + fromIntegral c) 0
 
+-- Not used anywhere
 -- Nickhash for vectors of strings.  (This will need incremental
 -- updates, but that's easy.)
-nick_hasharr :: F.Foldable v => v L.ByteString -> Int32
-nick_hasharr = F.foldl (\h s -> 17 * h `xor` nick_hashit s) 0
+-- nick_hasharr :: F.Foldable v => v L.ByteString -> Int32
+-- nick_hasharr = F.foldl (\h s -> 17 * h `xor` nick_hashit s) 0
 
 mkname :: Int -> Int -> Char -> String
 mkname x y z = enc (4*y + numOf z) [ B.index chars x ]
