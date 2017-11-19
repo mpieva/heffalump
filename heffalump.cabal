@@ -23,12 +23,12 @@ executable heffalump
                        Lump,
                        Paths_heffalump,
                        SillyStats,
+                       ShameMS,
                        Stretch,
                        Treemix,
                        Util,
                        Vcf,
                        VcfOut,
-                       ShameMS,
                        VcfScan
 
   build-depends:       attoparsec               >= 0.10 && < 0.14,
@@ -49,7 +49,6 @@ executable heffalump
                        transformers             >= 0.4.1 && < 0.6,
                        unordered-containers     >= 0.2.3 && < 0.3,
                        vector                   >= 0.11 && < 0.13,
-                       vector-split             == 1.0.0.2 ,
                        vector-algorithms        >= 0.3 && < 0.8,
                        zlib                     == 0.6.*
 

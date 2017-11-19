@@ -1,18 +1,11 @@
 module ShameMS ( mainShameMSout ) where
 
 import Bio.Prelude
-import System.FilePath                  ( takeBaseName )
 import System.Console.GetOpt
 import Streaming
 
-import qualified Data.ByteString.Builder         as B
-import qualified Data.ByteString.Char8           as B
-import qualified Data.Vector                     as V
-import qualified Data.Vector.Split               as S
-import qualified Data.Maybe                      as M
 import qualified Data.Vector.Unboxed             as U
 import qualified Streaming.Prelude               as Q
-import qualified Data.Typeable                    as D
 
 import Bed ( mkBedFilter)
 import Genome
@@ -29,7 +22,7 @@ data ConfShameMS = ConfShameMS {
   deriving Show
 
 defaultMsConf :: ConfShameMS
-defaultMsConf = ConfShameMS (Just 0) (Just 0) True True Nothing Nothing
+defaultMsConf = ConfShameMS (Just 0) Nothing True True Nothing Nothing
 
 optsVcfout :: [ OptDescr (ConfShameMS -> IO ConfShameMS) ]
 optsVcfout =
@@ -57,31 +50,26 @@ mainShameMSout args = do
 
     decodeMany conf_reference hefs $ \refs inps -> do
         region_filter <- mkBedFilter conf_regions (either error rss_chroms refs)
-        let chrs = either error (V.fromList . rss_chroms) refs
 
-        let the_vars = blocks conf_blocklength $ 
+        let the_vars = maybe yields blocks conf_blocklength $
                        addRef (either error id refs) $
                        region_filter $
                        bool singles_only Q.concat conf_split $
                        maybe mergeLumpsDense mergeLumps conf_noutgroups inps
-      
-        let m = length inps
-        --my_vec <-  U.fromList . concat <$> Q.toList_ (Q.map smashVariantss $ Q.mapped Q.toList the_vars)
-        my_vec <-  Q.toList_ $ Q.map smashVariantss $ Q.mapped Q.toList  the_vars
-        
-        mapM_ (blocktoShame m . U.fromList) my_vec
 
+        Q.mapM_ (blocktoShame (length inps) . U.fromList . concatMap smashVariants) $
+                Q.mapped Q.toList the_vars
   where
     singles_only = Q.concat . Q.map (\case [x] -> Just x ; _ -> Nothing)
 
     blocktoShame :: Int -> U.Vector Word8 -> IO ()
-    blocktoShame m ff = hPutStr stdout . unlines $ map (map (toRefCode . N2b)) [[ ff U.! i | i <- [ 2 * j + o, 2 * (j+m) + o .. U.length ff -1] ] | j <- [ 0 .. m-1 ] , o <-[0,1] ]  
-   
-    smashVariantss :: [Variant] -> [Word8] 
-    smashVariantss = concatMap smashVariants
+    blocktoShame m ff = unless (U.null ff) $
+                            hPutStr stdout . unlines $ map (map (toRefCode . N2b))
+                                [ map (ff U.!) [ 2 * j + o, 2 * (j+m) + o .. U.length ff -1 ]
+                                | j <- [ 0 .. m-1 ] , o <-[0,1] ]
 
     smashVariants :: Variant -> [Word8]
-    smashVariants Variant{..} = 
+    smashVariants Variant{..} =
         concatMap (smashVariant v_ref v_alt) (U.toList v_calls)
 
     smashVariant :: Nuc2b -> Var2b -> Word8 -> [Word8]
@@ -92,12 +80,12 @@ mainShameMSout args = do
         | x == 0                      = [255,255]
         | otherwise                   = [255,255]
 
-blocks :: Monad m => Maybe Int -> Stream (Of Variant) m r -> Stream (Stream (Of Variant) m) m r
-blocks ln = go (-1) (Just 0)
+blocks :: Monad m => Int -> Stream (Of Variant) m r -> Stream (Stream (Of Variant) m) m r
+blocks ln = go (-1) 0
   where
     go c p = lift . Q.next >=> \case
         Left    r                   -> pure r
-        Right (v,vs) | v_chr v == c -> yields (Q.span (before     c ((+) <$> ln <*> p)) (Q.cons v vs)) >>= go     c  ((+) <$> ln <*> p)
+        Right (v,vs) | v_chr v == c -> yields (Q.span (before     c (p+ln)) (Q.cons v vs)) >>= go     c (p+ln)
                      | otherwise    -> yields (Q.span (before (v_chr v) ln) (Q.cons v vs)) >>= go (v_chr v) ln
 
-    before c p v = v_chr v == c && v_pos v < fromJust p
+    before c p v = v_chr v == c && v_pos v < p
