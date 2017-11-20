@@ -34,6 +34,7 @@ import System.IO                            ( withFile, IOMode(..) )
 import qualified Data.ByteString            as B
 import qualified Data.ByteString.Lazy.Char8 as L
 import qualified Data.ByteString.Streaming  as S
+import qualified Data.HashSet               as H
 import qualified Data.Vector                as V
 import qualified Data.Vector.Unboxed        as U
 import qualified Streaming.Prelude          as Q
@@ -688,7 +689,7 @@ decodeMany mrs fs kk =
                     case fps of
                         fp : _ -> Right <$> liftIO (readTwoBit fp)
                         [    ] -> return . Left $ "No reference found.  Looked for it at "
-                                    ++ intercalate ", " (catMaybes rps) ++ "."
+                                    ++ intercalate ", " (nubHash $ catMaybes rps) ++ "."
         kk rs (V.fromList $ map (decode rs) raws)
   where
     withFiles [      ] _iom k = k []
@@ -696,6 +697,8 @@ decodeMany mrs fs kk =
         withFile fp iom $ \hdl ->
             withFiles fps iom $
                 k . (:) hdl
+
+    nubHash = H.toList . H.fromList
 
 
 -- | Encode a 'Lump' and enough information about the 'RefSeqs' to be

@@ -23,6 +23,7 @@ executable heffalump
                        Lump,
                        Paths_heffalump,
                        SillyStats,
+                       ShameMS,
                        Stretch,
                        Treemix,
                        Util,
