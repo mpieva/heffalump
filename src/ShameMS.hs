@@ -57,14 +57,14 @@ mainShameMSout args = do
                        bool singles_only Q.concat conf_split $
                        maybe mergeLumpsDense mergeLumps conf_noutgroups inps
         
-        Q.mapM_ (blocktoShame (length inps) . U.fromList . concatMap smashVariants) $
+        Q.mapM_ (blocktoShame (fromJust conf_blocklength) (length inps) . U.fromList . concatMap smashVariants) $
                 Q.mapped Q.toList the_vars
   where
     singles_only = Q.concat . Q.map (\case [x] -> Just x ; _ -> Nothing)
 
-    blocktoShame :: Int -> U.Vector Word8 -> IO ()
-    blocktoShame m ff = unless (U.null ff) $
-                            hPutStr stdout $ unlines
+    blocktoShame :: Int -> Int -> U.Vector Word8 -> IO ()
+    blocktoShame l m ff = unless (U.null ff) $
+                            hPutStr stdout $ "\n//\nblockSize_"++ show l ++ "\n" ++unlines
                                 [ [ toRefCode . N2b $ k (ff U.! i)
                                   | i <- [ j, j+m .. U.length ff -1 ] ]
                                 | j <- [ 0 .. m-1 ], k <- [ fstW, sndW ] ]
