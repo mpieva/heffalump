@@ -57,10 +57,11 @@ main_vcfout args = do
                    mconcat [ '\t' `B.cons` B.pack (takeBaseName f) | f <- hefs ] <>
                    B.singleton '\n'
 
-        let the_vars = addRef (either error id refs) $
-                       region_filter $
+        let the_vars = region_filter $
                        bool singles_only Q.concat conf_split $
-                       maybe mergeLumpsDense mergeLumps conf_noutgroups inps
+                       maybe (mergeLumpsRef (either error id refs))
+                             (\n -> addRef (either error id refs) . mergeLumps n)
+                             conf_noutgroups inps
 
         flip Q.mapM_ the_vars $ \Variant{..} ->
             -- samples (not outgroups) must show alt allele at least once

@@ -1,9 +1,6 @@
 - mergeLumpsDense stops early when hitting Break(?), but it shouldn't do
-  that.
-
-- vcfexport --dense is broken if the input was dense
-
-- do patch files work at all?
+  that.  vcfexport --dense is broken if the input was dense.  Both
+  happen b/c mergeLumpsDense does not look at the reference.
 
 - Fasta (not hetfa) output?
 

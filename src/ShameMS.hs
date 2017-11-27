@@ -52,9 +52,9 @@ mainShameMSout args = do
         region_filter <- mkBedFilter conf_regions (either error rss_chroms refs)
 
         let the_vars = maybe yields blocks conf_blocklength $
-                       addRef (either error id refs) $
                        region_filter $
                        bool singles_only Q.concat conf_split $
+                       addRef (either error id refs) $
                        maybe mergeLumpsDense mergeLumps conf_noutgroups inps
 
         Q.mapM_ (blocktoShame (length inps) . U.fromList . concatMap smashVariants) $
