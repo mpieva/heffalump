@@ -1,10 +1,3 @@
-- mergeLumpsDense stops early when hitting Break(?), but it shouldn't do
-  that.  vcfexport --dense is broken if the input was dense.  Both
-  happen b/c mergeLumpsDense does not look at the reference.
-
-- Fasta (not hetfa) output?
-
-
 - Support indels where it makes sense ([bv]cf, bam, emf/maf)
   The data structures are fine, but all parsers and formatters need
   enhancement.
