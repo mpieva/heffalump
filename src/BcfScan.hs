@@ -9,14 +9,13 @@ module BcfScan ( readBcf, decodeBcf ) where
 -- increase in code complexity.
 
 import Bio.Prelude
-import Util                     ( decomp, unexpected )
+import Util                     ( decomp, unexpected, withInputFile )
 import VcfScan                  ( RawVariant(..) )
 
 import Foreign.C.Types          ( CChar )
 import Foreign.Ptr              ( Ptr, plusPtr )
 import Foreign.Storable         ( peekByteOff, pokeByteOff )
 import Streaming
-import System.IO                ( withFile, IOMode(..) )
 
 import qualified Data.ByteString                 as B
 import qualified Data.ByteString.Char8           as C
@@ -28,7 +27,7 @@ import qualified Data.Vector.Unboxed             as V
 import qualified Streaming.Prelude               as Q
 
 readBcf :: [Bytes] -> FilePath -> (Stream (Of RawVariant) IO () -> IO r) -> IO r
-readBcf cs fp k = withFile fp ReadMode $ k . decodeBcf cs . decomp . S.fromHandle
+readBcf cs fp k = withInputFile fp $ k . decodeBcf cs . decomp . S.fromHandle
 
 -- Parses the contigs declared in the header, but skips over everything
 -- else.  This fails if GT is not the first individual field that's

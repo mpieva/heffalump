@@ -10,7 +10,7 @@ import qualified Streaming.Prelude               as Q
 import Bed ( mkBedFilter)
 import Genome
 import Lump
-import Util ( parseFileOpts, mk_opts )
+import Util ( parseFile1Opts )
 
 data ConfShameMS = ConfShameMS {
     conf_noutgroups :: Maybe Int,
@@ -45,8 +45,8 @@ optsVcfout =
 
 mainShameMSout :: [String] -> IO ()
 mainShameMSout args = do
-    ( hefs, ConfShameMS{..} ) <- parseFileOpts defaultMsConf
-                                              (mk_opts "pseudo_ms" "[hef-file...]" optsVcfout) args
+    ( hefs, ConfShameMS{..} ) <- parseFile1Opts defaultMsConf "pseudo_ms"
+                                                "[hef-file...]" optsVcfout args
 
     decodeMany conf_reference hefs $ \refs inps -> do
         region_filter <- mkBedFilter conf_regions (either error rss_chroms refs)

@@ -211,7 +211,7 @@ opts_kiv =
 
 main_kayvergence :: [String] -> IO ()
 main_kayvergence args = do
-    ( hefs, Config{..} ) <- parseFileOpts defaultConfig (mk_opts "kayvergence" "[hef-file...]" opts_kiv) args
+    ( hefs, Config{..} ) <- parseFile1Opts defaultConfig "kayvergence" "[hef-file...]" opts_kiv args
     decodeMany conf_reference hefs $ \ref inps -> do
         region_filter <- mkBedFilter conf_regions (either error rss_chroms ref)
 
@@ -328,7 +328,7 @@ data WantF4 = WantF4 | NoF4
 main_patterson :: WantF4 -> [String] -> IO ()
 main_patterson f4p args = do
     let name WantF4 = "f4statistics" ; name NoF4 = "dstatistics"
-    ( hefs, Config{..} ) <- parseFileOpts defaultConfig (mk_opts (name f4p) "[hef-file...]" opts_dstat) args
+    ( hefs, Config{..} ) <- parseFile1Opts defaultConfig (name f4p) "[hef-file...]" opts_dstat args
     decodeMany conf_reference hefs $ \ref inps -> do
         region_filter <- mkBedFilter conf_regions (either error rss_chroms ref)
 
@@ -446,8 +446,7 @@ opts_yadda =
 
 main_yaddayadda :: [String] -> IO ()
 main_yaddayadda args = do
-    ( hefs, Config{..} ) <- parseFileOpts defaultConfig
-                                          (mk_opts "yaddayadda" "[hef-file...]" opts_yadda) args
+    ( hefs, Config{..} ) <- parseFile1Opts defaultConfig "yaddayadda" "[hef-file...]" opts_yadda args
     decodeMany conf_reference hefs $ \ref inps -> do
         region_filter <- mkBedFilter conf_regions (either error rss_chroms ref)
 

@@ -5,17 +5,19 @@ module Util
     , mk_opts
     , parseOpts
     , parseFileOpts
+    , parseFile1Opts
     , parseFasta
     , readSampleFa
     , readNumIO
     , FastaSeq(..)
     , unexpected
+    , withInputFile
     ) where
 
 import Bio.Prelude
 import Streaming
 import System.Console.GetOpt
-import System.IO                        ( hPutStrLn, stderr )
+import System.IO                        ( hPutStrLn, stderr, withFile, IOMode(..) )
 
 import qualified Data.ByteString                 as B
 import qualified Data.ByteString.Streaming       as Q ( nextByte, cons' )
@@ -82,30 +84,37 @@ gzip = go $ Z.compressIO Z.gzipFormat Z.defaultCompressParams
     go Z.CompressStreamEnd inp = lift (S.effects inp)
 
 
-mk_opts :: String -> String -> [OptDescr (b -> IO b)] -> [OptDescr (b -> IO b)]
-mk_opts cmd moreopts ods = ods'
+mk_opts :: String -> String -> [OptDescr (b -> IO b)] -> ([OptDescr (b -> IO b)], IO b)
+mk_opts cmd moreopts ods = (ods', usage)
   where
-    ods' = ods ++ [ Option "h?" ["help","usage"] (NoArg usage) "Display this usage information" ]
+    ods' = ods ++ [ Option "h?" ["help","usage"] (NoArg $ const usage) "Display this usage information" ]
 
-    usage _ = do pn <- getProgName
-                 hPutStrLn stderr $ usageInfo
-                    ("Usage: " ++ pn ++ ' ': cmd ++ " [options...] " ++ moreopts) ods
-                 exitSuccess
+    usage = do pn <- getProgName
+               hPutStrLn stderr $ usageInfo
+                    ("Usage: " ++ pn ++ ' ': cmd ++ " [options...] " ++ moreopts) ods'
+               exitSuccess
 
-parseOpts :: a -> [OptDescr (a -> IO a)] -> [String] -> IO a
-parseOpts def ods args = do
+parseOpts :: a -> ([OptDescr (a -> IO a)], b) -> [String] -> IO a
+parseOpts def (ods,_) args = do
     let (opts, files, errs) = getOpt Permute ods args
     unless (null errs) $ mapM_ (hPutStrLn stderr) errs >> exitFailure
     unless (null files) $
         mapM_ (hPutStrLn stderr . (++) "unexpected argument " . show) files >> exitFailure
     foldl (>>=) (return def) opts
 
-parseFileOpts :: a -> [OptDescr (a -> IO a)] -> [String] -> IO ([String], a)
-parseFileOpts def ods args = do
-    let (opts, files, errs) = getOpt Permute ods args
+parseFileOpts :: a -> String -> String -> [OptDescr (a -> IO a)] -> [String] -> IO ([String], a)
+parseFileOpts def lbl more ods args = do
+    let ods' = fst $ mk_opts lbl more ods
+    let (opts, files, errs) = getOpt Permute ods' args
     unless (null errs) $ mapM_ (hPutStrLn stderr) errs >> exitFailure
     (,) files <$> foldl (>>=) (return def) opts
 
+parseFile1Opts :: a -> String -> String -> [OptDescr (a -> IO a)] -> [String] -> IO ([String], a)
+parseFile1Opts def lbl more ods args = do
+    let usage = snd $ mk_opts lbl more ods
+    (files, a) <- parseFileOpts def lbl more ods args
+    when (null files) $ void usage
+    return (files, a)
 
 data FastaSeq m r = FastaSeq !B.ByteString (S.ByteString m r) deriving Functor
 
@@ -183,4 +192,6 @@ readNumIO s = case reads s of
     [(n,"G")] -> return $ n * 1000000000
     _         -> fail $ "unable to parse: " ++ show s
 
-
+withInputFile :: FilePath -> (Handle -> IO a) -> IO a
+withInputFile "-" k = k stdin
+withInputFile  f  k = withFile f ReadMode k

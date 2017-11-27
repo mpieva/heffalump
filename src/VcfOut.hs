@@ -13,7 +13,7 @@ import qualified Streaming.Prelude               as Q
 import Bed ( mkBedFilter )
 import Genome
 import Lump
-import Util ( parseFileOpts, mk_opts )
+import Util ( parseFile1Opts )
 
 data ConfVcfOut = ConfVcfOut {
     conf_noutgroups :: Maybe Int,
@@ -45,8 +45,8 @@ opts_vcfout =
 
 main_vcfout :: [String] -> IO ()
 main_vcfout args = do
-    ( hefs, ConfVcfOut{..} ) <- parseFileOpts defaultVcfConf
-                                              (mk_opts "vcfexport" "[hef-file...]" opts_vcfout) args
+    ( hefs, ConfVcfOut{..} ) <- parseFile1Opts defaultVcfConf "vcfexport"
+                                               "[hef-file...]" opts_vcfout args
 
     decodeMany conf_reference hefs $ \refs inps -> do
         region_filter <- mkBedFilter conf_regions (either error rss_chroms refs)

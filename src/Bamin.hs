@@ -76,7 +76,7 @@ opts_bam =
 
 main_bam :: [String] -> IO ()
 main_bam args = do
-    ( bams, cfg@ConfBam{..} ) <- parseFileOpts conf_bam0 (mk_opts "bamin" "[bam-file...]" opts_bam) args
+    ( bams, cfg@ConfBam{..} ) <- parseFileOpts conf_bam0 "bamin" "[bam-file...]" opts_bam args
     ref <- readTwoBit conf_bam_reference
     rnd_gen <- newStdGen
 
@@ -144,8 +144,9 @@ encodePiles :: RefSeqs -> Refs -> S.ByteString (Iteratee [Var1] IO) ()
 encodePiles ref tgts = S.mwrap $ do
     map1 <- collect I.empty
 
-    when (I.null map1) $ error
-            "Found only unexpected sequences.  Is this the right reference?"
+    when (I.null map1) . liftIO $ do
+        hPutStrLn stderr "Found only unexpected sequences.  Is this the right reference?"
+        exitFailure
 
     return $ do S.fromLazy $ toLazyByteString $ encodeHeader ref
                 forM_ [0 .. length (rss_chroms ref) - 1] $

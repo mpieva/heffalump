@@ -29,7 +29,6 @@ import Foreign.Marshal.Alloc                ( mallocBytes )
 import Streaming
 import Streaming.Prelude                    ( mapOf )
 import System.Directory                     ( doesFileExist )
-import System.IO                            ( withFile, IOMode(..) )
 
 import qualified Data.ByteString            as B
 import qualified Data.ByteString.Lazy.Char8 as L
@@ -42,7 +41,7 @@ import qualified Stretch                    as S ( Stretch(..) )
 
 import Genome
 import Stretch ( Stretch, decode_dip, decode_hap, NucCode(..) )
-import Util    ( decomp, unexpected )
+import Util    ( decomp, unexpected, withInputFile )
 
 -- | Improved diff representation and encoding.  Goals:
 --
@@ -680,7 +679,7 @@ getRefPath str = do
 decodeMany :: Maybe FilePath -> [FilePath]
            -> ( Either String RefSeqs -> V.Vector (Stream (Of Lump) IO ()) -> IO r ) -> IO r
 decodeMany mrs fs kk =
-    withFiles fs ReadMode $ \hdls -> do
+    withFiles fs $ \hdls -> do
         (rps,raws) <- unzip <$> mapM (getRefPath . decomp . S.fromHandle) hdls
         rs <- case mrs of
                 Just fp -> Right <$> liftIO (readTwoBit fp)
@@ -692,10 +691,10 @@ decodeMany mrs fs kk =
                                     ++ intercalate ", " (nubHash $ catMaybes rps) ++ "."
         kk rs (V.fromList $ map (decode rs) raws)
   where
-    withFiles [      ] _iom k = k []
-    withFiles (fp:fps)  iom k =
-        withFile fp iom $ \hdl ->
-            withFiles fps iom $
+    withFiles [      ] k = k []
+    withFiles (fp:fps) k =
+        withInputFile fp $ \hdl ->
+            withFiles fps $
                 k . (:) hdl
 
     nubHash = H.toList . H.fromList

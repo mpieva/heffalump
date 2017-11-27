@@ -88,11 +88,10 @@ opts_xcf =
 
 main_xcf :: ConfXcf -> [String] -> IO ()
 main_xcf conf0 args = do
-    ( vcfs, ConfXcf{..} ) <- let opts = mk_opts (conf_key conf0) fspec opts_xcf
-                                 fspec = "[" ++ conf_ext conf0 ++ "-file...]"
-                             in parseFileOpts conf0 opts args
+    ( vcfs, ConfXcf{..} ) <- let fspec = "[" ++ conf_ext conf0 ++ "-file...]"
+                             in parseFileOpts conf0 (conf_key conf0) fspec opts_xcf args
     ref <- readTwoBit conf_ref
-    withMany (conf_reader $ rss_chroms ref) vcfs $ \inp0 -> do
+    withMany (conf_reader $ rss_chroms ref) (if null vcfs then ["-"] else vcfs) $ \inp0 -> do
         density :> inp <- conf_density ref inp0
         withFile conf_output WriteMode $ \hdl -> do
             yenome <- Q.fold_ (\y (k,v) -> I.insertWith srsly k v y) I.empty id
@@ -106,6 +105,10 @@ main_xcf conf0 args = do
                       . Q.groupBy ((==) `on` rv_chrom)
                       . progress conf_output . dedupVcf
                       . cleanVcf $ inp
+
+            when (I.null yenome) $ do
+                hPutStrLn stderr "Found only unexpected sequences.  Is this the right reference?"
+                exitFailure
 
             hPutBuilder hdl $ encodeHeader ref
             forM_ [0 .. length (rss_chroms ref) - 1] $ \i ->
@@ -155,7 +158,7 @@ cleanVcf = Q.filter $ \RawVariant{..} ->
 
 readVcf :: [Bytes] -> FilePath -> (Stream (Of RawVariant) IO () -> IO r) -> IO r
 readVcf cs fp k =
-    withFile fp ReadMode $ \hdl ->
+    withInputFile fp $ \hdl ->
         withScanner cs (decomp $ S.hGetContentsN (1024*1024) hdl) $ \psc ctab str ->
             k $ Q.unfoldr (getVariant psc ctab) str
 

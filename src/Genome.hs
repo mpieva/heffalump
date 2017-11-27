@@ -42,7 +42,7 @@ import Foreign.Storable                     ( peekByteOff )
 import Streaming
 import System.Console.GetOpt
 import System.Directory                     ( makeAbsolute )
-import System.IO                            ( hPutStrLn, stdout, stderr, withFile, IOMode(..) )
+import System.IO                            ( hPutStrLn, stdout, stderr )
 import System.IO.Unsafe                     ( unsafeDupablePerformIO )
 
 #if MIN_VERSION_biohazard(0,6,16)
@@ -61,7 +61,7 @@ import qualified Data.ByteString.Unsafe             as B
 import qualified Data.Vector.Unboxed                as U
 import qualified Streaming.Prelude                  as Q
 
-import Util ( decomp, mk_opts, parseFileOpts, unexpected )
+import Util ( decomp, parseFileOpts, unexpected, withInputFile )
 
 -- | This is a reference sequence.  It consists of stretches of Ns and
 -- stretches of sequence.  Invariant:  the lengths for 'ManyNs' and
@@ -322,18 +322,16 @@ opts_fato2bit = [ Option "o" ["output"] (ReqArg (\a _ -> return a) "FILE") "Writ
 
 main_fato2bit :: [String] -> IO ()
 main_fato2bit args = do
-    ( fs, fp ) <- parseFileOpts (error "no output file given")
-                                (mk_opts "fatotwobit" "[fasta-file...]" opts_fato2bit) args
+    ( fs, fp ) <- parseFileOpts (error "no output file given") "fatotwobit"
+                                "[fasta-file...]" opts_fato2bit args
 
     withFiles (if null fs then ["-"] else fs) $
         L.writeFile fp <=< faToTwoBit
   where
-    withFiles [      ] k = k $ pure ()
-    withFiles ("-":fs) k = withFiles fs $ \s ->
-                               k $ decomp (S.fromHandle stdin) >> s
-    withFiles ( f :fs) k = withFile f ReadMode $ \h ->
-                             withFiles fs $ \s ->
-                               k $ decomp (S.fromHandle h) >> s
+    withFiles [    ] k = k $ pure ()
+    withFiles (f:fs) k = withInputFile f $ \h ->
+                           withFiles fs $ \s ->
+                             k $ decomp (S.fromHandle h) >> s
 
 
 -- List of pairs of 'Word32's.  Specialized and unpacked to conserve
