@@ -23,7 +23,7 @@ module Emf ( main_emf
 import Bio.Prelude               hiding ( compl )
 import Streaming
 import System.Console.GetOpt
-import System.Directory                 ( getDirectoryContents )
+import System.Directory                 ( getDirectoryContents, doesDirectoryExist )
 import System.FilePath
 import System.IO
 
@@ -375,20 +375,22 @@ opts_emf =
 
 main_emf :: [String] -> IO ()
 main_emf args = do
-    ( emfs, OptsEmf{..} ) <- parseFileOpts opts_emf_default (mk_opts "emf" "[emf-file...]" opts_emf) args
+    ( emfs, OptsEmf{..} ) <- parseFileOpts opts_emf_default "emf" "[emf-file...]" opts_emf args
     ref <- readTwoBit emf_reference
 
     let cons = collectTrees (rss_chroms ref) (emf_select emf_ref_species)
-    !genome <- foldM (\g fp -> withFile fp ReadMode $
+    let getdir dir = map (dir </>) . filter (".emf.gz" `isSuffixOf`) <$> getDirectoryContents dir
+
+    !genome <- foldM (\g fp -> withInputFile fp $
                                     Q.foldM_ cons (return g) return . scanBlocks .
                                     mapsM S.toStrict . S.lines . decomp . S.fromHandle
                      ) emptyGenome
-               -- this is just so the one path at MPI that makes sense
-               -- doesn't need to be typed over and over again
                =<< case emfs of
-                    [] -> let dir = "/mnt/expressions/martin/sequence_db/epo/epo_6_primate_v66"
-                          in map (dir </>) . filter (".emf.gz" `isSuffixOf`) <$> getDirectoryContents dir
-                    _  -> return emfs
+                    -- this is just so the one path at MPI that makes sense
+                    -- doesn't need to be typed over and over again
+                    [ ] -> getdir "/mnt/expressions/martin/sequence_db/epo/epo_6_primate_v66"
+                    [f] -> doesDirectoryExist f >>= bool (return emfs) (getdir f)
+                    _   -> return emfs
 
     withFile emf_output WriteMode $ \hdl ->
             L.hPut hdl $ encodeGenome genome

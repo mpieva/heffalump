@@ -4,9 +4,7 @@ import Bio.Prelude
 import System.Console.GetOpt
 import System.IO
 
---import qualified Data.Foldable                  as F
 import qualified Data.ByteString.Char8          as B
---import qualified Data.ByteString.Lazy           as L
 import qualified Data.Vector.Unboxed            as U
 import qualified Streaming.Prelude              as Q
 
@@ -97,8 +95,8 @@ opts_eigen =
 -- merge multiple files with the reference, write Eigenstrat format (geno & snp files)
 main_eigenstrat :: [String] -> IO ()
 main_eigenstrat args = do
-    ( hefs, ConfEigen{..} ) <- parseFileOpts defaultConfEigen
-                                             (mk_opts "eigenstrat" "[hef-file...]" opts_eigen) args
+    ( hefs, ConfEigen{..} ) <- parseFile1Opts defaultConfEigen "eigenstrat"
+                                              "[hef-file...]" opts_eigen args
 
     decodeMany conf_reference hefs $ \refs inps -> do
       region_filter <- mkBedFilter conf_regions (either error rss_chroms refs)

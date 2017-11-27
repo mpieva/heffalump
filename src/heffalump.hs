@@ -159,14 +159,14 @@ conf_maf = ConfMaf (error "no output file specified")
 
 main_maf :: [String] -> IO ()
 main_maf args = do
-    (maffs,ConfMaf{..}) <- parseFileOpts conf_maf (mk_opts "maf" "[maf-file...]" opts_maf) args
+    (maffs,ConfMaf{..}) <- parseFileOpts conf_maf "maf" "[maf-file...]" opts_maf args
     ref <- readTwoBit conf_maf_reference
     withFile conf_maf_output WriteMode $ \ohdl ->
         L.hPut ohdl . encodeGenome =<<
-           foldM (\g f -> withFile f ReadMode $
+           foldM (\g f -> withInputFile f $
                             parseMaf (conf_maf_ref_species, conf_maf_oth_species)
                                      (rss_chroms ref) g . decomp . S.fromHandle)
-                 emptyGenome maffs
+                 emptyGenome (if null maffs then ["-"] else maffs)
 
 
 data ConfPatch = ConfPatch {

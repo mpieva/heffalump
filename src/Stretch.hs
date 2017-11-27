@@ -8,7 +8,7 @@ module Stretch (
 
 import Bio.Prelude               hiding ( Ns )
 import Streaming
-import System.IO                        ( withFile, IOMode(..), stderr )
+import System.IO                        ( stderr )
 
 import qualified Data.ByteString.Char8          as B
 import qualified Data.ByteString.Internal       as B
@@ -16,7 +16,7 @@ import qualified Data.ByteString.Streaming      as S
 import qualified Data.ByteString.Unsafe         as B
 import qualified Streaming.Prelude              as Q
 
-import Util ( decomp, unexpected )
+import Util ( decomp, unexpected, withInputFile )
 
 -- ^ A genome is encoded by taking the difference to the reference and
 -- run-length coding the result.
@@ -161,7 +161,7 @@ tr :: NucCode -> Char
 tr (NucCode w) = B.w2c . B.unsafeIndex iupac_chars . fromIntegral $ w .&. 0xF
 
 main_dumppatch :: [String] -> IO ()
-main_dumppatch [inf] = withFile inf ReadMode $
+main_dumppatch [inf] = withInputFile inf $
                             debugStretch . decode . decomp . S.fromHandle
 main_dumppatch     _ = B.hPut stderr "Usage: dumppatch [foo.hef]\n"
 
