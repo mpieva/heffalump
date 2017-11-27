@@ -102,9 +102,9 @@ main_eigenstrat args = do
       region_filter <- mkBedFilter conf_regions (either error rss_chroms refs)
       withFile (conf_output ++ ".snp") WriteMode $ \hsnp ->
         withFile (conf_output ++ ".geno") WriteMode $ \hgeno -> do
-            let vars = either (const id) addRef refs $
-                       region_filter $
+            let vars = region_filter $
                        bool singles_only Q.concat conf_split $
+                       either (const id) addRef refs $
                        mergeLumps conf_noutgroups inps
             flip Q.mapM_ vars $ \Variant{..} ->
                 -- samples (not outgroups) must show ref and alt allele at least once

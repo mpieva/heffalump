@@ -243,7 +243,7 @@ data Variant = Variant { v_chr   :: !Int                -- chromosome number
                        , v_calls :: !(U.Vector Word8) } -- Variant codes:  #ref + 4 * #alt
   deriving Show
 
-addRef :: Monad m => RefSeqs -> Stream (Of Variant) m r -> Stream (Of Variant) m r
+addRef :: Monad m => RefSeqs -> Stream (Of [Variant]) m r -> Stream (Of [Variant]) m r
 addRef ref = go 0 (rss_seqs ref)
   where
     go _ [     ] = lift . Q.effects
@@ -251,12 +251,13 @@ addRef ref = go 0 (rss_seqs ref)
       where
         go1 r p = lift . Q.next >=> \case
             Left x              -> pure x
-            Right (v,vs)
-                | c /= v_chr v  -> go (c+1) rs (Q.cons v vs)
-                | p == v_pos v -> case unconsRS r of
-                    Just (c',_) -> v { v_ref = c' } `Q.cons` go1 r p vs
-                    Nothing     ->                           go1 r p vs
-                | p < v_pos v   -> go1 (dropRS (v_pos v - p) r) (v_pos v) (Q.cons v vs)
+            Right ([],vss)      -> go1 r p vss
+            Right (vs@(v:_),vss)
+                | c /= v_chr v  -> go (c+1) rs (Q.cons vs vss)
+                | p == v_pos v  -> case unconsRS r of
+                    Just (c',_) -> map (\w -> w { v_ref = c' }) vs `Q.cons` go1 r p vss
+                    Nothing     ->                                          go1 r p vss
+                | p < v_pos v   -> go1 (dropRS (v_pos v - p) r) (v_pos v) (Q.cons vs vss)
                 | otherwise     -> error "expected sorted variants!"
 
 

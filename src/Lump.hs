@@ -2,6 +2,7 @@ module Lump
     ( Lump(..)
     , mergeLumps
     , mergeLumpsDense
+    , mergeLumpsRef
     , PackedLump(..)
     , noLump
     , diff
@@ -442,25 +443,17 @@ mergeLumps !noutgroups =
     skiplen  Nothing        = maxBound
     skiplen  _              = 0
 
--- Like mergeLumps, but produces at least one SNP record for each site.
--- Since all variants are produced (and then some), outgroups need no
--- special treatment.
+-- | Like mergeLumps, but produces at least one SNP record for each
+-- site, as long as at least one sample is defined at all.  Since all
+-- variants are produced (and then some), outgroups need no special
+-- treatment.
 mergeLumpsDense :: Monad m => V.Vector (Stream (Of Lump) m ()) -> Stream (Of [Variant]) m ()
-mergeLumpsDense =
-    -- If there is no actual variant in here, turn the first into
-    -- pseudo-var; else keep them all
-    Q.map (\vs ->
-        let vs' = filter (U.any has_alt . v_calls) vs
-        in if null vs' then [ (head vs) { v_alt = V2b 255 } ] else vs' ) .
-    Q.filter (not . null) .
-    mergeLumpsWith (V.minimum . V.map skiplen)
+mergeLumpsDense = filterPseudoVars . mergeLumpsWith (V.minimum . V.map skiplen)
   where
-    has_alt c = c .&. 0xC /= 0
-
     -- Don't skip over equal stretches.  This will cause the code in
     -- mergeLumpsWith to attempt to create four variants at each
     -- position, unless all samples have no calls.  (This neatly skips
-    -- over N stretches in the reference.)
+    -- over N stretches in the reference, too.)
     skiplen (Just (Ns   n)) = n
     skiplen (Just (Eqs1 _)) = 0
     skiplen (Just (Eqs2 _)) = 0
@@ -468,121 +461,158 @@ mergeLumpsDense =
     skiplen  Nothing        = maxBound
     skiplen  _              = 0
 
-
--- | Merges multiple 'Lump's and generates a stream of 'Variant's.  This
--- is efficient by skipping over long invariant stretches.  The
--- 'skipLen' argument is expected to compute how far ahead the process
--- could jump, but it is only allowed to look at the first code in the
--- 'Lump'y stream.
-mergeLumpsWith :: Monad m => (V.Vector (Maybe Lump) -> Int) -> V.Vector (Stream (Of Lump) m r) -> Stream (Of [Variant]) m ()
-mergeLumpsWith skipLen = go 0 0
-    -- Merging stretches.  We define a 'Variant' as anything that is
-    -- different from the reference.  Therefore, 'Eqs' ('Eqs1') and 'Ns'
-    -- never create a 'Variant' and we can skip forwards.  Else, if at
-    -- least one sample has some sort of call, we need to collect the
-    -- alleles, produce up to four variants, then output and skip
-    -- forward by one base.
+    -- If there is no actual variant in here, turn the first into
+    -- pseudo-var; else keep them all
+filterPseudoVars :: Monad m => Stream (Of [Variant]) m r -> Stream (Of [Variant]) m r
+filterPseudoVars =
+    Q.map (\vs ->
+        let vs' = filter (U.any has_alt . v_calls) vs
+        in if null vs' then [ (head vs) { v_alt = V2b 255 } ] else vs' ) .
+    Q.filter (not . null)
   where
-    go :: Monad m => Int -> Int -> V.Vector (Stream (Of Lump) m r) -> Stream (Of [Variant]) m ()
-    go !ix !pos = lift . V.mapM Q.next >=> \case
+    has_alt c = c .&. 0xC /= 0
+
+
+-- | Merges 'Lump's by walking along the reference.  Produces at least
+-- one 'Variant' for each site.
+mergeLumpsRef :: Monad m => RefSeqs -> V.Vector (Stream (Of Lump) m ()) -> Stream (Of [Variant]) m ()
+mergeLumpsRef ref = filterPseudoVars . go1 (rss_seqs ref) 0
+  where
+    go1 [    ]  _ = const $ pure ()
+    go1 (r:rs) ix = go2 rs (r ()) ix 0
+
+    go2 rs r !ix !pos smps = case viewRS r of
+        NilRef   -> go1 rs (succ ix)        (V.map (Q.drop 1 . Q.dropWhile noBreak) smps)
+
+        l :== r' -> go2 rs r'    ix (pos+l) (V.map (dropLumpS l) smps)
+
+        n :^  r' -> do msmps <- lift $ V.mapM Q.uncons smps
+                       mkVar n ix pos (V.map (fmap fst) msmps) `Q.cons`
+                           go2 rs r' ix (succ pos) (V.map (dropLumpM 1) msmps)
+
+    noBreak :: Lump -> Bool
+    noBreak Break = False
+    noBreak     _ = True
+
+
+-- | Merges multiple 'Lump's and generates a stream of 'Variant's.  We define a 'Variant' as anything that is
+-- different from the reference.  Therefore, 'Eqs1', 'Eqs2' and 'Ns'
+-- never create a 'Variant' and we can skip forwards.  Else, if at
+-- least one sample has some sort of call, we need to collect the
+-- alleles, produce up to four variants, then output and skip
+-- forward by one base.  The 'skipLen' argument is expected to compute
+-- how far ahead the process could jump, but it is only allowed to look
+-- at the first code in the 'Lump'y stream.
+mergeLumpsWith :: Monad m
+               => (V.Vector (Maybe Lump) -> Int)        -- ^ computes how far to skip
+               -> V.Vector (Stream (Of Lump) m ())      -- ^ one stream per individual
+               -> Stream (Of [Variant]) m ()
+mergeLumpsWith skipLen = go 0 0
+  where
+    go :: Monad m => Int -> Int -> V.Vector (Stream (Of Lump) m ()) -> Stream (Of [Variant]) m ()
+    go !ix !pos = lift . V.mapM Q.uncons >=> \case
              -- all samples 'Done', no more 'Variant's to produce
-        smps | V.all isLeft  smps -> pure ()
+        smps | V.all isNothing smps -> pure ()
 
              -- all samples 'Break' or are done, next chromosome
-             | V.all isBreak smps -> go (succ ix) 0 (V.map skipBreak smps)
+             | V.all isBreak   smps -> go (succ ix) 0 (V.map dropBreak smps)
 
              -- We ignore outgroups in computing the longest stretch.
              -- That way, outgroups don't get to define variants, but
              -- participate in variants found in another way.
              | otherwise ->
                 -- pure operation, doesn't consume the streams
-                let msmps = V.map (either (const Nothing) (Just . fst)) smps
+                let msmps = V.map (fmap fst) smps
                 in case skipLen msmps of
                     -- no stretch, have to look for vars
-                    0 -> mkVar ix pos msmps `Q.cons`
-                         go ix (succ pos) (unS $ V.mapM (S . skipStretchE 1) smps)
+                    0 -> mkVar ref_indet ix pos msmps `Q.cons`
+                         go ix (succ pos) (unS $ V.mapM (S . dropLumpM 1) smps)
 
                     -- a stretch of l non-variants can be skipped over
-                    l -> go ix (pos + fromIntegral l) (unS $ V.mapM (S . skipStretchE l) smps)
-
-    isBreak (Left         _ ) = True
-    isBreak (Right (Break,_)) = True
-    isBreak               _   = False
-
-    skipBreak (Left         x ) =     pure x
-    skipBreak (Right (Break,s)) =          s
-    skipBreak (Right     (a,s)) = Q.cons a s
-
-    -- Skip over exactly l sites.
-    skipStretchS :: Monad m => Int -> Stream (Of Lump) m r -> Stream (Of Lump) m r
-    skipStretchS !l = lift . Q.next >=> skipStretchE l
-
-    skipStretchE :: Monad m => Int -> Either r (Lump, Stream (Of Lump) m r) -> Stream (Of Lump) m r
-    skipStretchE !_ (Left  r) = pure r
-    skipStretchE !l (Right s) = skipStretch l s
-
-    skipStretch :: Monad m => Int -> (Lump, Stream (Of Lump) m r) -> Stream (Of Lump) m r
-    skipStretch !l _ | l < 0  = unexpected ""
-
-    skipStretch !l (Del1 _,s) = skipStretchS l s
-    skipStretch !l (Del2 _,s) = skipStretchS l s
-    skipStretch !l (DelH _,s) = skipStretchS l s
-
-    skipStretch !l (Ins1 _,s) = skipStretchS l s
-    skipStretch !l (Ins2 _,s) = skipStretchS l s
-    skipStretch !l (InsH _,s) = skipStretchS l s
-
-    skipStretch !_ (Break, s) = Break `Q.cons` s
-
-    skipStretch !l (Ns   !n,s) | l == n    = s
-                               | l <  n    = Ns (n-l) `Q.cons` s
-                               | otherwise = skipStretchS (l-n) s
-    skipStretch !l (Eqs1 !n,s) | l == n    = s
-                               | l <  n    = Eqs1 (n-l) `Q.cons` s
-                               | otherwise = skipStretchS (l-n) s
-    skipStretch !l (Eqs2 !n,s) | l == n    = s
-                               | l <  n    = Eqs2 (n-l) `Q.cons` s
-                               | otherwise = skipStretchS (l-n) s
-
-    skipStretch  0      (a,s) = Q.cons a s
-    skipStretch !l      (_,s) = skipStretchS (l-1) s
-
-    -- Find all the variants, anchored on the reference allele, and
-    -- split them.  Misfitting alleles are not counted.
-    mkVar :: Int -> Int -> V.Vector (Maybe Lump) -> [Variant]
-    mkVar ix pos ss = [ Variant ix pos ref_indet (V2b alt) calls
-                      | (alt, ct) <- zip [1..3] [ct_trans, ct_compl, ct_tcompl]
-                      , let calls = V.convert $ V.map (maybe 0 ct) ss ]
+                    l -> go ix (pos + fromIntegral l) (unS $ V.mapM (S . dropLumpM l) smps)
 
     ref_indet = N2b 255
 
-    -- Variant codes:  #ref + 4 * #alt
-    ct_trans :: Lump -> Word8
-    ct_trans (Eqs1      _) = 1
-    ct_trans  Trans1       = 4
+    isBreak :: Maybe (Lump, b) -> Bool
+    isBreak  Nothing         = True
+    isBreak (Just (Break,_)) = True
+    isBreak              _   = False
 
-    ct_trans (Eqs2      _) = 2
-    ct_trans  RefTrans     = 5
-    ct_trans  Trans2       = 8
-    ct_trans  _            = 0
 
-    ct_compl :: Lump -> Word8
-    ct_compl (Eqs1      _) = 1
-    ct_compl  Compl1       = 4
+-- Find all the variants, anchored on the reference allele, and
+-- split them.  Misfitting alleles are not counted.
+mkVar :: Nuc2b -> Int -> Int -> V.Vector (Maybe Lump) -> [Variant]
+mkVar ref ix pos ss = [ Variant ix pos ref (V2b alt) calls
+                      | (alt, ct) <- zip [1..3] [ct_trans, ct_compl, ct_tcompl]
+                      , let calls = V.convert $ V.map (maybe 0 ct) ss ]
 
-    ct_compl (Eqs2      _) = 2
-    ct_compl  RefCompl     = 5
-    ct_compl  Compl2       = 8
-    ct_compl  _            = 0
+dropBreak :: Monad m => Maybe (Lump, Stream (Of Lump) m ()) -> Stream (Of Lump) m ()
+dropBreak  Nothing         =    pure ()
+dropBreak (Just (Break,s)) =          s
+dropBreak (Just     (a,s)) = Q.cons a s
 
-    ct_tcompl :: Lump -> Word8
-    ct_tcompl (Eqs1      _) = 1
-    ct_tcompl  TCompl1      = 4
+-- Skip over exactly l sites.
+dropLumpS :: Monad m => Int -> Stream (Of Lump) m () -> Stream (Of Lump) m ()
+dropLumpS !l = lift . Q.uncons >=> dropLumpM l
 
-    ct_tcompl (Eqs2      _) = 2
-    ct_tcompl  RefTCompl    = 5
-    ct_tcompl  TCompl2      = 8
-    ct_tcompl  _            = 0
+dropLumpM :: Monad m => Int -> Maybe (Lump, Stream (Of Lump) m ()) -> Stream (Of Lump) m ()
+dropLumpM !_  Nothing  = pure ()
+dropLumpM !l (Just  s) = dropLump l s
+
+dropLump :: Monad m => Int -> (Lump, Stream (Of Lump) m ()) -> Stream (Of Lump) m ()
+dropLump !l _ | l < 0  = unexpected ""
+
+dropLump !l (Del1 _,s) = dropLumpS l s
+dropLump !l (Del2 _,s) = dropLumpS l s
+dropLump !l (DelH _,s) = dropLumpS l s
+
+dropLump !l (Ins1 _,s) = dropLumpS l s
+dropLump !l (Ins2 _,s) = dropLumpS l s
+dropLump !l (InsH _,s) = dropLumpS l s
+
+dropLump !_ (Break, s) = Break `Q.cons` s
+
+dropLump !l (Ns   !n,s) | l == n    = s
+                           | l <  n    = Ns (n-l) `Q.cons` s
+                           | otherwise = dropLumpS (l-n) s
+dropLump !l (Eqs1 !n,s) | l == n    = s
+                           | l <  n    = Eqs1 (n-l) `Q.cons` s
+                           | otherwise = dropLumpS (l-n) s
+dropLump !l (Eqs2 !n,s) | l == n    = s
+                           | l <  n    = Eqs2 (n-l) `Q.cons` s
+                           | otherwise = dropLumpS (l-n) s
+
+dropLump  0      (a,s) = Q.cons a s
+dropLump !l      (_,s) = dropLumpS (l-1) s
+
+
+-- Variant codes:  #ref + 4 * #alt
+ct_trans :: Lump -> Word8
+ct_trans (Eqs1      _) = 1
+ct_trans  Trans1       = 4
+
+ct_trans (Eqs2      _) = 2
+ct_trans  RefTrans     = 5
+ct_trans  Trans2       = 8
+ct_trans  _            = 0
+
+ct_compl :: Lump -> Word8
+ct_compl (Eqs1      _) = 1
+ct_compl  Compl1       = 4
+
+ct_compl (Eqs2      _) = 2
+ct_compl  RefCompl     = 5
+ct_compl  Compl2       = 8
+ct_compl  _            = 0
+
+ct_tcompl :: Lump -> Word8
+ct_tcompl (Eqs1      _) = 1
+ct_tcompl  TCompl1      = 4
+
+ct_tcompl (Eqs2      _) = 2
+ct_tcompl  RefTCompl    = 5
+ct_tcompl  TCompl2      = 8
+ct_tcompl  _            = 0
 
 
 -- | This gunk is need to make a map over a 'Vector' strict.  Looks
