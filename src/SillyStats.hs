@@ -19,8 +19,10 @@ import Numeric.SpecFunctions            ( incompleteBeta )
 import System.Console.GetOpt
 import System.FilePath                  ( takeBaseName )
 import Streaming
+import Data.Vector.Generic.Mutable      ( munstream )
 
 import qualified Data.Vector                     as V
+import qualified Data.Vector.Fusion.Bundle.Monadic as Bundle
 import qualified Data.Vector.Storable            as S
 import qualified Data.Vector.Unboxed             as U
 import qualified Streaming.Prelude               as Q
@@ -478,17 +480,17 @@ print_table tab = putStrLn . unlines $ map (concat . zipWith fmt1 lns) tab
     fmt1 l (Left  s) = s ++ replicate (l - length s) ' '
     fmt1 l (Right s) =      replicate (l - length s) ' ' ++ s
 
-accum_stats :: (Storable r, Monoid r, Monad m)
-            => Int -> CountFunction r -> Stream (Of Variant) m x
-            -> m ( S.Vector r, V.Vector (S.Vector r) )
+accum_stats :: (Storable r, Monoid r)
+            => Int -> CountFunction r -> Stream (Of Variant) IO x
+            -> IO ( S.Vector r, V.Vector (S.Vector r) )
 accum_stats blk_size cfn vs0 = do
-    blockstats <- V.unfoldrM foldBlocks vs0
+    blockstats <- V.unsafeFreeze =<< munstream (Bundle.unfoldrM foldBlocks vs0)
     let full_counts = V.foldl1' (S.zipWith mappend) blockstats
     return (full_counts, blockstats)
   where
     foldBlocks = Q.next >=> \case
         Left    _    -> return Nothing
-        Right (v,vs) -> Just . lazily <$> foldBlock v (Q.span (near v) vs)
+        Right (v,vs) -> (Just . lazily) `liftM` foldBlock v (Q.span (near v) vs)
 
     near v v' = v_chr v == v_chr v' && v_pos v + blk_size > v_pos v'
 
