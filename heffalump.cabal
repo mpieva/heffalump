@@ -29,6 +29,7 @@ executable heffalump
                        Util,
                        Vcf,
                        VcfOut,
+                       ShameMS,
                        VcfScan
 
   build-depends:       attoparsec               >= 0.10 && < 0.14,
