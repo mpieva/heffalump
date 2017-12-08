@@ -229,7 +229,7 @@ noLump = PackLump (L.singleton '\0')
 
 {-# INLINE encodeLumpToMem #-}
 encodeLumpToMem :: MonadIO m => Stream (Of Lump) m r -> m (Of PackedLump r)
-encodeLumpToMem = fmap (mapOf PackLump) . S.toLazy . encodeLump . normalizeLump
+encodeLumpToMem = liftM (mapOf PackLump) . S.toLazy . encodeLump . normalizeLump
 
 -- | Encodes a 'Lump' to a compact binary representation.  Some
 -- functionality is duplicated in 'encodeGenome' and 'noLump'; if the

@@ -4,6 +4,7 @@ import Bio.Prelude
 import System.Console.GetOpt
 import Streaming
 
+import qualified Data.Vector                     as V
 import qualified Data.Vector.Unboxed             as U
 import qualified Streaming.Prelude               as Q
 
@@ -28,7 +29,7 @@ optsVcfout :: [ OptDescr (ConfShameMS -> IO ConfShameMS) ]
 optsVcfout =
     [ Option "r" ["reference"]     (ReqArg set_ref "FILE") "Read reference from FILE (.2bit)"
     , Option "n" ["numoutgroups"]  (ReqArg set_nout "NUM") "The first NUM individuals are outgroups (0)"
-    , Option "l" ["blocklength"]   (ReqArg set_lblock "NUM") "The length of each block (0)"
+    , Option "l" ["blocklength"] (ReqArg set_lblock "NUM") "The length of each block (0)"
     , Option "D" ["dense"]               (NoArg set_dense) "Output invariant sites, too"
     , Option "t" ["only-transversions"] (NoArg set_no_all) "Output only transversion sites"
     , Option "b" ["only-biallelic"]   (NoArg set_no_split) "Discard, don't split, polyallelic sites"
@@ -56,8 +57,8 @@ mainShameMSout args = do
                        bool singles_only Q.concat conf_split $
                        addRef (either error id refs) $
                        maybe mergeLumpsDense mergeLumps conf_noutgroups inps
-        
-        Q.mapM_ (blocktoShame (fromJust conf_blocklength) (length inps) . U.fromList . concatMap smashVariants) $
+
+        Q.mapM_ (blocktoShame (fromJust conf_blocklength) (V.length inps) . U.fromList . concatMap smashVariants) $
                 Q.mapped Q.toList the_vars
   where
     singles_only = Q.concat . Q.map (\case [x] -> Just x ; _ -> Nothing)

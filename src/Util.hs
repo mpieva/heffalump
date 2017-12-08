@@ -62,7 +62,7 @@ gunzip = go $ Z.decompressIO Z.gzipOrZlibFormat Z.defaultDecompressParams
 
     go (Z.DecompressStreamEnd inchunk) inp =
         -- decompress leftovers if possible, else discard
-        decompWith (fmap pure . S.effects) (S.chunk inchunk >> inp)
+        decompWith (liftM pure . S.effects) (S.chunk inchunk >> inp)
 
     go (Z.DecompressStreamError derr) _inp =
         liftIO (throwM derr)

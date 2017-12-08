@@ -161,7 +161,7 @@ encodePiles ref tgts = S.mwrap $ do
                     in case elemIndex rn (rss_chroms ref) of
 
                         Nothing -> do liftIO $ hPrintf stderr "\nSkipping %s.\n" (unpack rn)
-                                      m <$ skipToEof
+                                      skipToEof >> return m
 
                         Just  i -> do liftIO $ hPrintf stderr "\nTarget %s becomes index %d.\n" (unpack rn) i
                                       lump Q.:> _ <- encodeLumpToMem $ importPile >> Q.yield Break
