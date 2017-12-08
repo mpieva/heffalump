@@ -213,11 +213,11 @@ main_dumplump     _     =    hPutStrLn stderr "Usage: dumplump [foo.hef]"
 
 
 patchFasta :: Handle                    -- ^ output handle
-           -> Int64                     -- ^ Huh?
+           -> Int64                     -- ^ line width
            -> [B.ByteString]            -- ^ chromosome names
            -> [() -> RefSeq]            -- ^ reference sequences
            -> Stream (Of Lump) IO r     -- ^ input heffalump
-           -> IO r                      -- ^ writes output
+           -> IO r
 patchFasta hdl wd = p1
   where
     p1 [    ]     _  p = Q.effects p
@@ -229,12 +229,9 @@ patchFasta hdl wd = p1
     p2 k l = inspect >=> \case
         Left p            -> when (l>0) (L.hPutStrLn hdl L.empty) >> k p
         Right (Short c f) -> hPutChar hdl c >> p2 k (succ l) f
-        Right (Long  s f) -> p3 k l s f
-
-    p3 k l s f
-        | L.null s  = p2 k l f
-        | l == wd   = hPutChar hdl '\n' >> p3 k 0 s f
-        | otherwise = L.hPutStr hdl u >> p3 k (l + L.length u) v f
-      where
-        (u,v) = L.splitAt (wd-l) s
+        Right (Long  s f)
+            | L.null s    -> p2 k l f
+            | otherwise   -> do let (u,v) = L.splitAt (wd-l) s
+                                L.hPutStr hdl u
+                                p2 k (l + L.length u) (wrap $ Long v f)
 
