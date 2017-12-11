@@ -212,7 +212,12 @@ main_dumplump [  inf  ] =    withFile inf ReadMode $ debugLump . decode (Left "n
 main_dumplump     _     =    hPutStrLn stderr "Usage: dumplump [foo.hef]"
 
 
-patchFasta :: Handle -> Int64 -> [B.ByteString] -> [() -> RefSeq] -> Stream (Of Lump) IO r -> IO r
+patchFasta :: Handle                    -- ^ output handle
+           -> Int64                     -- ^ Huh?
+           -> [B.ByteString]            -- ^ chromosome names
+           -> [() -> RefSeq]            -- ^ reference sequences
+           -> Stream (Of Lump) IO r     -- ^ input heffalump
+           -> IO r                      -- ^ writes output
 patchFasta hdl wd = p1
   where
     p1 [    ]     _  p = Q.effects p
@@ -220,13 +225,16 @@ patchFasta hdl wd = p1
     p1 (c:cs) (r:rs) p = do hPutStrLn hdl $ '>' : B.unpack c
                             p2 (p1 cs rs) 0 (patch (r ()) p)
 
-    p2 k l | l == wd = \f -> L.hPutStrLn hdl L.empty >> p2 k 0 f
+    p2 k l | l == wd = \f -> hPutChar hdl '\n' >> p2 k 0 f
     p2 k l = inspect >=> \case
         Left p            -> when (l>0) (L.hPutStrLn hdl L.empty) >> k p
         Right (Short c f) -> hPutChar hdl c >> p2 k (succ l) f
         Right (Long  s f) -> p3 k l s f
 
-    p3 k l s f = case L.splitAt (wd-l) s of
-        _ | L.null s  -> p2 k l f
-        (u,v)         -> L.hPutStr hdl u >> p3 k (l + L.length u) v f
+    p3 k l s f
+        | L.null s  = p2 k l f
+        | l == wd   = hPutChar hdl '\n' >> p3 k 0 s f
+        | otherwise = L.hPutStr hdl u >> p3 k (l + L.length u) v f
+      where
+        (u,v) = L.splitAt (wd-l) s
 
