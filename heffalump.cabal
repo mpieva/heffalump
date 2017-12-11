@@ -50,7 +50,6 @@ executable heffalump
                        transformers             >= 0.4.1 && < 0.6,
                        unordered-containers     >= 0.2.3 && < 0.3,
                        vector                   >= 0.11 && < 0.13,
-                       vector-split             == 1.0.0.2 ,
                        vector-algorithms        >= 0.3 && < 0.8,
                        zlib                     == 0.6.*
 
