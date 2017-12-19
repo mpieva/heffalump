@@ -100,6 +100,9 @@ import Util    ( decomp, unexpected, withInputFile )
 -- We might sometimes want to output variants without having a reference
 -- available.  In that case, we code as follows:  I (Identical), O
 -- (transitiOn), P (comPlement), X (trans-complement)
+--
+-- If a 'Break' is encountered before the reference ends, the remainder
+-- of that reference is implied to be 'Ns'.
 
 data Lump
     = Ns !Int                          -- ^ uncalled stretch
@@ -853,7 +856,7 @@ patch ref = case unconsRS ref of
     Just (N2b hd,tl) -> lift . Q.next >=> \case
         Left  r ->          yields $ Long (unpackRS ref) (pure r)
         Right l -> case l of
-            (Break   ,s) -> yields $ Long (unpackRS ref) s
+            (Break   ,s) -> yields $ Long (L.replicate (lengthRS ref) 'N') s
 
             (Eqs2   n,s) -> wrap $ Long          (unpackRS $ takeRS n ref) $ patch (dropRS n ref) s
             (Eqs1   n,s) -> wrap $ Long          (unpackRS $ takeRS n ref) $ patch (dropRS n ref) s
