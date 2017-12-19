@@ -164,10 +164,11 @@ encodePiles ref tgts = S.mwrap $ do
                                       skipToEof >> return m
 
                         Just  i -> do liftIO $ hPrintf stderr "\nTarget %s becomes index %d.\n" (unpack rn) i
-                                      lump Q.:> _ <- encodeLumpToMem $ importPile >> Q.yield Break
+                                      lump Q.:> _ <- encodeLumpToMem importPile
                                       liftIO $ hPrintf stderr "\nTarget %s becomes index %d, %d bytes.\n"
                                                     (unpack rn) i (L.length $ unpackLump lump)
                                       return $! I.insert i lump m
+
 
 importPile :: Monad m => Q.Stream (Q.Of Lump) (Iteratee [Var1] m) ()
 importPile = normalizeLump $ generic (Refseq 0) 0
@@ -175,19 +176,13 @@ importPile = normalizeLump $ generic (Refseq 0) 0
     generic !rs !pos = lift tryHead >>= \case
         Nothing -> Q.yield Break
         Just var1
-            -- switch to next chromosome
-            | rs /= v_refseq var1 -> do
-                forM_ [succ rs .. v_refseq var1] $ \_ -> Q.yield Break
-                when (v_loc var1 > 0) $
-                    Q.yield $ Ns (fromIntegral $ v_loc var1)
-                Q.yield $ enc_var (v_call var1)
-                generic (v_refseq var1) (v_loc var1 + 1)
+            -- switch to next chromosome (can't happen here anymore)
+            | rs /= v_refseq var1 -> error "importPile: wrong chromosome (please report this as a bug)"
 
-            -- gap, creates Ns
             | v_loc var1 >= pos -> do
-                when (v_loc var1 > pos) $
+                when (v_loc var1 > pos) $               -- gap, creates Ns
                     Q.yield $ Ns (fromIntegral $ v_loc var1 - pos)
-                Q.yield $ enc_var (v_call var1)
+                Q.yield $ enc_var (v_call var1)         -- variant
                 generic rs (v_loc var1 + 1)
 
             | otherwise -> error $ "Got variant position " ++ show (v_refseq var1, v_loc var1)

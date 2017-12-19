@@ -99,8 +99,9 @@ main_xcf conf0 args = do
                               -- get one variant to know the chromsome, store it
                               -- together with the packed form of the whole chromsome
                               Right (v1,s1) <- Q.next s0
+                              let ln = rss_lengths ref !! rv_chrom v1
                               pl :> r <- encodeLumpToMem . Q.map conf_ploidy $
-                                         importVcf (density $ rv_chrom v1) (v1 `Q.cons` s1)
+                                         importVcf ln (density $ rv_chrom v1) (v1 `Q.cons` s1)
                               return $! (rv_chrom v1, pl) :> r )
                       . Q.groupBy ((==) `on` rv_chrom)
                       . progress conf_output . dedupVcf
@@ -167,11 +168,12 @@ readVcf cs fp k =
 -- that all variants have the same chromsome, it's best preceeded by
 -- 'Streaming.Prelude.groupBy'.  Pseudo-variants of the "no call" type
 -- must be filtered beforehand, see 'cleanVcf'.
-importVcf :: Monad m => GapCons -> Stream (Of RawVariant) m r -> Stream (Of Lump) m r
-importVcf ns = normalizeLump . generic 1 -- Start the coordinate at one, for VCF is one-based.
+importVcf :: Monad m => Int -> GapCons -> Stream (Of RawVariant) m r -> Stream (Of Lump) m r
+importVcf ln ns = normalizeLump . generic 1 -- Start the coordinate at one, for VCF is one-based.
   where
     generic pos = lift . Q.next >=> \case
-        Left r                    -> Q.cons Break $ pure r
+        Left r                    -> Q.each (ns (pos-1) (ln - pos)) >>
+                                     Q.cons Break (pure r)
         Right (var1,vars)
             -- long gap, creates Ns or Eqs2
             | rv_pos var1 > pos   -> Q.each (ns (pos-1) (rv_pos var1 - pos)) >>
