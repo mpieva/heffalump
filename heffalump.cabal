@@ -79,7 +79,7 @@ executable heffalump
                        ScopedTypeVariables
 
   ghc-options:         -Wall -fprof-auto
-  cc-options:          -O3 -std=c99 -Wall
+  cc-options:          -std=c99 -Wall
   hs-source-dirs:      src
   c-sources:           cbits/vcf-scan.c
   include-dirs:        cbits

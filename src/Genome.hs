@@ -377,7 +377,7 @@ faToTwoBit s0 = do
                             Right (_,s2) -> do
                                 nm :> s' <- S.toStrict $ S.break isSpace s2
                                 get_one acc (toShort nm) 0 (maxBound :!: L2i_Nil)
-                                        (maxBound :!: L2i_Nil) (0 :!: 0 :!: [])
+                                        (maxBound :!: L2i_Nil) (0 :!: 0 :!: emptyAccu)
                                         (S.dropWhile (/= '\n') s')
 
     get_one acc !nm !pos !ns !ms !bs = S.uncons >=> \case
@@ -391,13 +391,13 @@ faToTwoBit s0 = do
                                    (collect_bases bs c) s'
       where
         fin s = let ss' = case bs of (0 :!: _ :!: ss) -> ss
-                                     (n :!: w :!: ss) -> B.singleton (w `shiftL` (6-2*n)) : ss
+                                     (n :!: w :!: ss) -> grow (w `shiftL` (6-2*n)) ss
                     raw = B.toLazyByteString $
                               B.word32LE pos <>
                               encodeL2i (case ns of p :!: rs | p == maxBound -> rs ; p :!: rs -> L2i p pos rs) <>
                               encodeL2i (case ms of p :!: rs | p == maxBound -> rs ; p :!: rs -> L2i p pos rs) <>
                               B.word32LE 0 <>
-                              foldMap B.byteString (reverse ss')
+                              buildAccu ss'
                 in L.length raw `seq` get_each ((nm, raw) : acc) s
 
     collect_Ns (spos :!: rs) pos c
@@ -422,15 +422,29 @@ faToTwoBit s0 = do
     collect_bases (n :!: w :!: ss) c
         = let code = case c of 'C'->1;'c'->1;'A'->2;'a'->2;'G'->3;'g'->3;_->0
               w'   = shiftL w 2 .|. code
-          in if n == 3 then 0 :!: 0 :!: put w' ss else succ n :!: w' :!: ss
+          in if n == 3 then 0 :!: 0 :!: grow w' ss else succ n :!: w' :!: ss
 
-    -- Keep appending bytes to a collection of 'ByteString's in such a
-    -- way that the 'ByteString's keep doubling in size.  (XXX  This is
-    -- a recurring problem; could use a reusable solution.)
-    put w = go 1 [B.singleton w]
-      where
-        go l acc (s:ss)
-            | B.length s <= l = go (l+B.length s) (s:acc) ss
-            | otherwise = let !s' = B.concat acc in s' : s : ss
-        go _ acc [    ] = let !s' = B.concat acc in [s']
+-- | A way to accumulate bytes.  If the accumulated bytes will hang
+-- around in memory, this has much lower overhead than 'Builder'.  If it
+-- has short lifetime, 'Builder' is much more comfortable.
+newtype Accu = Accu [B.ByteString]
 
+emptyAccu :: Accu
+emptyAccu = Accu []
+
+-- | Appends bytes to a collection of 'ByteString's in such a
+-- way that the 'ByteString's keep doubling in size.  This ensures O(n)
+-- time and space complexity and fairly low overhead.
+grow :: Word8 -> Accu -> Accu
+grow w = go 1 [B.singleton w]
+  where
+    go l acc (Accu (s:ss))
+        | B.length s <= l  = go (l+B.length s) (s:acc) (Accu ss)
+        | otherwise        = let !s' = B.concat acc in  Accu (s' : s : ss)
+    go _ acc (Accu [    ]) = let !s' = B.concat acc in  Accu [s']
+
+buildAccu :: Accu -> B.Builder
+buildAccu (Accu ss) = foldMap B.byteString $ reverse ss
+
+bytesAccu :: Accu -> Bytes
+bytesAccu (Accu ss) = B.concat $ reverse ss
