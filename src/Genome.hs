@@ -37,6 +37,7 @@ module Genome where
 
 
 import Bio.Prelude                   hiding ( Ns )
+import Bio.Util.MMap                        ( unsafeMMapFile )
 import Data.ByteString.Short         hiding ( length, null )
 import Foreign.Storable                     ( peekByteOff )
 import Streaming
@@ -44,12 +45,6 @@ import System.Console.GetOpt
 import System.Directory                     ( makeAbsolute )
 import System.IO                            ( hPutStrLn, stdout, stderr )
 import System.IO.Unsafe                     ( unsafeDupablePerformIO )
-
-#if MIN_VERSION_biohazard(0,6,16)
-import Bio.Util.MMap                        ( unsafeMMapFile )
-#else
-import System.IO.Posix.MMap                 ( unsafeMMapFile )
-#endif
 
 import qualified Data.ByteString                    as B
 import qualified Data.ByteString.Builder            as B
