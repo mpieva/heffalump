@@ -15,6 +15,7 @@ module Util
     ) where
 
 import Bio.Prelude
+import Control.Monad.Trans.Resource
 import Streaming
 import System.Console.GetOpt
 import System.IO                        ( hPutStrLn, stderr, withFile, IOMode(..) )
