@@ -11,7 +11,6 @@ Heffalump imports common file formats (VCF, BCF, Bam (by picking from an arbitra
 * install GHC (see http://haskell.org/ghc) or have your admin install it,
 * run `cabal update` (takes a while to download the current package list),
 * run `cabal install
-  https://bitbucket.org/ustenzel/biohazard/get/master.tar.gz
   https://bitbucket.org/ustenzel/heffalump/get/master.tar.gz`
 
 If you prefer stack, instead

@@ -12,5 +12,10 @@
 - D-statistics with population definitions (multiple individuals for one
   population, with implied estimates of allele frequencies)
 
+- separate between API and command line?
+  (Rationale:  some people will want to, say, generate Eigenstrat, but
+  apply their own filters in between generation of variants and
+  formatting of output.  Those need a library.)
+
 - C-library for reading and merging
 

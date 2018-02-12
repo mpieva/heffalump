@@ -4,7 +4,8 @@ import Bio.Prelude
 import System.Console.GetOpt
 import Streaming
 
-import qualified Data.Vector                     as V
+import qualified Data.Vector.Generic             as V
+import qualified Data.Vector.Generic.Mutable     as M
 import qualified Data.Vector.Unboxed             as U
 import qualified Streaming.Prelude               as Q
 
@@ -52,27 +53,29 @@ mainShameMSout args = do
     decodeMany conf_reference hefs $ \refs inps -> do
         region_filter <- mkBedFilter conf_regions (either error rss_chroms refs)
 
-        let the_vars = maybe yields blocks conf_blocklength $
-                       region_filter $
-                       bool singles_only Q.concat conf_split $
-                       addRef (either error id refs) $
-                       maybe mergeLumpsDense mergeLumps conf_noutgroups inps
-
-        Q.mapM_ (blocktoShame (fromJust conf_blocklength) (V.length inps) . U.fromList . concatMap smashVariants) $
-                Q.mapped Q.toList the_vars
+        mapsM_ (blocktoShame conf_blocklength (V.length inps)) $
+            maybe yields blocks conf_blocklength $
+            region_filter $
+            bool singles_only Q.concat conf_split $
+            addRef (either error id refs) $
+            maybe mergeLumpsDense mergeLumps conf_noutgroups inps
   where
-    singles_only = Q.concat . Q.map (\case [x] -> Just x ; _ -> Nothing)
+    singles_only = Q.mapMaybe (\case [x] -> Just x ; _ -> Nothing)
 
-    blocktoShame :: Int -> Int -> U.Vector Word8 -> IO ()
-    blocktoShame l m ff = unless (U.null ff) $
-                            hPutStr stdout $ "\n//\nblockSize_"++ show l ++ "\n" ++unlines
-                                [ [ toRefCode . N2b $ k (ff U.! i)
-                                  | i <- [ j, j+m .. U.length ff -1 ] ]
-                                | j <- [ 0 .. m-1 ], k <- [ fstW, sndW ] ]
+    blocktoShame :: Maybe Int -> Int -> Stream (Of Variant) IO r -> IO r
+    blocktoShame ml m s = do
+        ff :> r <- vconcats $ Q.map smashVariants s
+        unless (U.null ff) $ do
+            forM_ ml $ \l -> hPutStrLn stdout $ "\n//\nblockSize_" ++ show l
+            hPutStr stdout . unlines $
+                [ [ toRefCode . N2b $ k (ff U.! i)
+                  | i <- [ j, j+m .. U.length ff -1 ] ]
+                | j <- [ 0 .. m-1 ], k <- [ fstW, sndW ] ]
+        return r
 
-    smashVariants :: Variant -> [Word8]
+    smashVariants :: Variant -> U.Vector Word8
     smashVariants Variant{..} =
-        map (smashVariant v_ref v_alt) (U.toList v_calls)
+        U.map (smashVariant v_ref v_alt) v_calls
 
     smashVariant :: Nuc2b -> Var2b -> Word8 -> Word8
     smashVariant (N2b r) (V2b a) x
@@ -98,3 +101,17 @@ blocks ln = go (-1) 0
                      | otherwise    -> yields (Q.span (before (v_chr v) ln) (Q.cons v vs)) >>= go (v_chr v) ln
 
     before c p v = v_chr v == c && v_pos v < p
+
+
+vconcats :: (V.Vector v a, MonadIO m) => Stream (Of (v a)) m r -> m (Of (v a) r)
+vconcats s = do v <- liftIO $ M.unsafeNew 1024 ; go v 0 s
+  where
+    go !v !i = Q.next >=> \case
+        Left    r    -> liftIO $ (:> r) <$> V.unsafeFreeze (M.take i v)
+        Right (x,xs) -> do
+            let lx = V.length x
+            v' <- if i + lx <= M.length v
+                    then return v
+                    else liftIO $ M.grow v (M.length v `max` lx)
+            liftIO $ M.move (M.slice i lx v') =<< V.unsafeThaw x
+            go v' (i + lx) xs

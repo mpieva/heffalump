@@ -3,4 +3,4 @@ extra-package-dbs: []
 resolver: lts-9.1
 packages:
   - '.'
-  - location: https://bitbucket.org/ustenzel/biohazard/get/0.6.16.tar.gz
+  - location: https://bitbucket.org/ustenzel/biohazard/get/1.0.0.tar.gz
