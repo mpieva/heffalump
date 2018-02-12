@@ -155,7 +155,7 @@ kaylabels ngood labels =
     , (ismp,smp) <- labels'
     , ismp /= iref && ismp /= ioutg ]
   where
-    labels' = zip [(0::Int) ..] $ "human" : labels
+    labels' = zip [(0::Int) ..] $ "reference" : labels
 
 -- | Counter function that computes all sensible Kayvergence ratios.  It
 -- receives the number of "good genomes" appearing at the front of the
@@ -214,7 +214,9 @@ opts_kiv =
 main_kayvergence :: [String] -> IO ()
 main_kayvergence args = do
     ( hefs, Config{..} ) <- parseFile1Opts defaultConfig "kayvergence" "[hef-file...]" opts_kiv args
-    decodeMany conf_reference hefs $ \ref inps -> do
+    requireAtLeast [ ( 2, conf_noutgroups, "good genomes" )
+                   , ( 3, length hefs, "genomes" ) ] $
+      decodeMany conf_reference hefs $ \ref inps -> do
         region_filter <- mkBedFilter conf_regions (either error rss_chroms ref)
 
         stats <- fmap (uncurry gen_stats) $
@@ -331,7 +333,10 @@ main_patterson :: WantF4 -> [String] -> IO ()
 main_patterson f4p args = do
     let name WantF4 = "f4statistics" ; name NoF4 = "dstatistics"
     ( hefs, Config{..} ) <- parseFile1Opts defaultConfig (name f4p) "[hef-file...]" opts_dstat args
-    decodeMany conf_reference hefs $ \ref inps -> do
+    requireAtLeast [( 1, conf_noutgroups, "outgroups" )
+                   ,( 2, conf_nrefpanel, "members in reference panel" )
+                   ,( 1, length hefs - conf_noutgroups - conf_nrefpanel, "samples" )] $
+      decodeMany conf_reference hefs $ \ref inps -> do
         region_filter <- mkBedFilter conf_regions (either error rss_chroms ref)
 
         stats <- fmap (uncurry gen_stats)
@@ -449,7 +454,11 @@ opts_yadda =
 main_yaddayadda :: [String] -> IO ()
 main_yaddayadda args = do
     ( hefs, Config{..} ) <- parseFile1Opts defaultConfig "yaddayadda" "[hef-file...]" opts_yadda args
-    decodeMany conf_reference hefs $ \ref inps -> do
+    requireAtLeast [( 1, conf_noutgroups, "apes" )
+                   ,( 1, conf_nafricans, "africans" )
+                   ,( 2, conf_nrefpanel, "neanderthals" )
+                   ,( 1, length hefs - conf_noutgroups - conf_nafricans - conf_nrefpanel, "samples" )] $
+      decodeMany conf_reference hefs $ \ref inps -> do
         region_filter <- mkBedFilter conf_regions (either error rss_chroms ref)
 
         stats <- fmap (uncurry gen_stats)
@@ -495,4 +504,13 @@ accum_stats blk_size cfn vs0 = do
     near v v' = v_chr v == v_chr v' && v_pos v + blk_size > v_pos v'
 
     foldBlock v = Q.fold (\acc -> S.zipWith mappend acc . cfn . v_calls) (cfn $ v_calls v) id
+
+
+requireAtLeast :: [(Int,Int,String)] -> IO r -> IO r
+requireAtLeast [] k = k
+requireAtLeast (( want, have, label ):xs) k
+    | want <= have = requireAtLeast xs k
+    | otherwise = do hPrintf stderr "Need at least %d %s, got only %d.\n"
+                                    want label have
+                     requireAtLeast xs $ hPutStr stderr "Nothing to do.\n" >> exitSuccess
 
