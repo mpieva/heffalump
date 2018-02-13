@@ -1,4 +1,5 @@
 import Bio.Prelude
+import Control.Monad.Trans.Resource
 import Paths_heffalump                  ( version )
 import Streaming
 import System.Console.GetOpt

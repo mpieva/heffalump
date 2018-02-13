@@ -1,5 +1,2 @@
-resolver:   lts-9.1
-packages:   [.]
-extra-deps:
-  - archive: https://bitbucket.org/ustenzel/biohazard/get/1.0.0.tar.gz
-
+resolver:   lts-10.5
+extra-deps: [ biohazard-1.0.0 ]
