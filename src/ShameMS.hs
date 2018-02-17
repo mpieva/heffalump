@@ -76,21 +76,6 @@ mainShameMSout args = do
 
             forM_ ml $ \l -> hPutStrLn stdout $ "\n//\nblockSize_" ++ show l
            
---            forM_ (enoughInfo t m tt) (hPutStrLn . stdout . bool "\n//Not enough of info in this block " "Oh yeah!") 
-            
---            >>= \case False -> hPutStrLn stdout $ "\n//Not enough of info in this block "
---                                                  
---                                        True  -> hPutStr stdout . unlines $ 
---                                             [ [ tt !! i
---                                               | i <- [ j, j+m .. length tt -1 ] ]
---                                               | j <- [ 0 .. m-1 ] ] 
---                                  
-
---            hPutStr stdout . unlines $ [[toRefCode . N2b $ k (ff U.! z)
---                                            | z <- [ w, w+m .. U.length ff -1 ]]
---                                            | w <- [0 .. m-1] , k <- [ fstW, sndW ]]
---
---            hPutStrLn stdout . show $ tt
             case enoughInfo t m tt of
                Nothing -> return ()
                Just False -> hPutStrLn stdout $ "# Not enough of info in this block"
