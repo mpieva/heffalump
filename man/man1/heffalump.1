@@ -59,6 +59,13 @@ heffalump \- compact storage of genotypes
 [\fB\-n\fR \fInumoutgroups\fR] [\fB-t\fR] [\fB-b\fR] 
 [\fB\-R\fR \fIregions.bed\fR] \fIinput.hef\fR...
 
+.B heffalump pseudo_ms 
+[\fB\-r\fR \fIref.2bit\fR]
+[\fB\-m\fR \fIminInformative\fR]
+[\fB\-l\fR \fIblocklength\fR]
+[\fB\-n\fR \fInumoutgroups\fR|\fB\-D\fR] [\fB-t\fR] [\fB-b\fR]
+[\fB\-R\fR \fIregions.bed\fR] \fIinputsss.hef\fR...
+
 .B heffalump vcfexport 
 [\fB\-r\fR \fIref.2bit\fR]
 [\fB\-n\fR \fInumoutgroups\fR|\fB\-D\fR] [\fB-t\fR] [\fB-b\fR] 
@@ -105,11 +112,11 @@ alignments of apes), high coverage \fIvcf\fR or \fIbcf\fR
 haploid), respectively.
 
 The functions 
-.BR treemix ", " eigenstrat " and " vcfexport
+.BR treemix ", " eigenstrat ", " pseudo_ms " and " vcfexport
 merge multiple
 .I hef
 files into one dataset useful as input for 
-.BR Eigensoft ", " Treemix
+.BR Eigensoft ", " Treemix ", " ABLE
 and a multitude of other tools, respectively.
 
 The functions
@@ -404,6 +411,59 @@ Read the sample from \fIsample.hef\fR.
 .TP
 \fB\-w\fR, \fB--width\fR=\fInum\fR
 Break output lines after \fInum\fR columns.  The default is 50.
+
+.SS pseudo_ms
+
+\fBheffalump\fR [\fBpseudo_ms\fR]
+[\fB\-r\fR \fIref.2bit\fR]
+[\fB\-m\fR \fIminInformative\fR]
+[\fB\-l\fR \fIblockLength\fR]
+[\fB\-n\fR \fInumoutgroups\fR|\fB\-D\fR]
+[\fB\-R\fR \fIregions.bed\fR]
+[\fB\-t\fR] [\fB\-b\fR]
+\fIinput.hef\fR...
+
+Merges multiple \fIhef\fR files, splits the resulting variants into
+biallelic variants, and prints the result in \fIpseudo_ms\fR format.
+
+.TP
+\fB\-r\fR, \fB--reference\fR=\fIref.2bit\fR
+Read the reference genome from \fIref.2bit\fR.
+
+.TP
+\fB\-n\fR, \fB--numoutgroups\fR=\fInum\fR
+The first \fInum\fR inputs are outgroups.  The output is "sparse" in the
+sense that it will contain only sites with variants.
+
+.TP
+\fB\-m\fR, \fB--minInformative\fR=\fInum\fR
+The minimum \fIpercentage\fR of informative-sites in a block to consider it as a
+valid block.
+
+.TP
+\fB\-l\fR, \fB--blockLength\fR=\fInum\fR
+Length of each block.
+
+.TP
+\fB\-D\fR, \fB--dense\fR
+Produce a "dense" output file which will contain at least one record for
+each site, even if no individual has a variant.  The only sites
+suppressed from the output are those where no individual is called.
+
+.TP
+\fB\-t\fR, \fB--only-transversions\fR
+Output only transversion variants.
+
+.TP
+\fB\-b\fR, \fB--only-biallelic\fR
+Output only biallelic variants.  Multi-allelic variants are always split
+into multiple biallelic variants, this options only decides whether to
+output them.
+
+.TP
+\fB\-R\fR, \fB--regions\fR=\fIregions.bed\fR
+Restrict output to variants in the regions found in \fIregions.bed\fR,
+which should be a \fIbed\fR file.
 
 .SS Treemix
 

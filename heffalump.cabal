@@ -42,6 +42,7 @@ executable heffalump
                        random                   >= 1.0 && < 1.2,
                        regex-posix              >= 0.95 && < 1.0,
                        resourcet                == 1.1.*,
+                       split                    == 0.2.*,
                        streaming                >= 0.1.4.2 && < 0.3,
                        streaming-bytestring     >= 0.1.4 && < 0.3,
                        transformers             >= 0.4.1 && < 0.6,
