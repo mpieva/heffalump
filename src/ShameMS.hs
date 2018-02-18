@@ -4,6 +4,8 @@ import Bio.Prelude
 import System.Console.GetOpt
 import Streaming
 
+
+import Data.List.Split                           as LS
 import qualified Data.Vector.Generic             as V
 import qualified Data.Vector.Generic.Mutable     as M
 import qualified Data.Vector.Unboxed             as U
@@ -15,22 +17,24 @@ import Lump
 import Util ( parseFile1Opts )
 
 data ConfShameMS = ConfShameMS {
-    conf_noutgroups :: Maybe Int,
-    conf_blocklength:: Maybe Int,
-    conf_all        :: Bool,
-    conf_split      :: Bool,
-    conf_reference  :: Maybe FilePath,
-    conf_regions    :: Maybe FilePath }
+    conf_noutgroups     :: Maybe Int,
+    conf_blocklength    :: Maybe Int,
+    conf_minInformative :: Double,
+    conf_all            :: Bool,
+    conf_split          :: Bool,
+    conf_reference      :: Maybe FilePath,
+    conf_regions        :: Maybe FilePath }
   deriving Show
 
 defaultMsConf :: ConfShameMS
-defaultMsConf = ConfShameMS (Just 0) Nothing True True Nothing Nothing
+defaultMsConf = ConfShameMS (Just 0) Nothing 90.0 True True Nothing Nothing
 
 optsVcfout :: [ OptDescr (ConfShameMS -> IO ConfShameMS) ]
 optsVcfout =
     [ Option "r" ["reference"]     (ReqArg set_ref "FILE") "Read reference from FILE (.2bit)"
     , Option "n" ["numoutgroups"]  (ReqArg set_nout "NUM") "The first NUM individuals are outgroups (0)"
     , Option "l" ["blocklength"] (ReqArg set_lblock "NUM") "The length of each block (0)"
+    , Option "m" ["minInformative"] (ReqArg set_tblock "NUM") "The minimum informative threshold of each block (0.0-100.0)"
     , Option "D" ["dense"]               (NoArg set_dense) "Output invariant sites, too"
     , Option "t" ["only-transversions"] (NoArg set_no_all) "Output only transversion sites"
     , Option "b" ["only-biallelic"]   (NoArg set_no_split) "Discard, don't split, polyallelic sites"
@@ -39,6 +43,7 @@ optsVcfout =
     set_ref    a c = return $ c { conf_reference  =  Just a }
     set_nout   a c = (\n ->   c { conf_noutgroups =  Just n }) <$> readIO a
     set_lblock a c = (\n ->   c { conf_blocklength = Just n }) <$> readIO a
+    set_tblock a c = (\n ->   c { conf_minInformative =   n }) <$> readIO a
     set_dense    c = return $ c { conf_noutgroups = Nothing }
     set_no_all   c = return $ c { conf_all        =   False }
     set_no_split c = return $ c { conf_split      =   False }
@@ -53,7 +58,7 @@ mainShameMSout args = do
     decodeMany conf_reference hefs $ \refs inps -> do
         region_filter <- mkBedFilter conf_regions (either error rss_chroms refs)
 
-        mapsM_ (blocktoShame conf_blocklength (V.length inps)) $
+        mapsM_ (blocktoShame conf_blocklength conf_minInformative (V.length inps)) $
             maybe yields blocks conf_blocklength $
             region_filter $
             bool singles_only Q.concat conf_split $
@@ -62,16 +67,30 @@ mainShameMSout args = do
   where
     singles_only = Q.mapMaybe (\case [x] -> Just x ; _ -> Nothing)
 
-    blocktoShame :: Maybe Int -> Int -> Stream (Of Variant) IO r -> IO r
-    blocktoShame ml m s = do
+    blocktoShame :: Maybe Int -> Double -> Int -> Stream (Of Variant) IO r -> IO r
+    blocktoShame ml t m s = do
         ff :> r <- vconcats $ Q.map smashVariants s
         unless (U.null ff) $ do
+            
+            let tt = [k (ff U.! z) | z <- [ 0 .. U.length ff -1 ] , k <- [ fstW, sndW ]]
+
             forM_ ml $ \l -> hPutStrLn stdout $ "\n//\nblockSize_" ++ show l
-            hPutStr stdout . unlines $
-                [ [ toRefCode . N2b $ k (ff U.! i)
-                  | i <- [ j, j+m .. U.length ff -1 ] ]
-                | j <- [ 0 .. m-1 ], k <- [ fstW, sndW ] ]
+           
+            case enoughInfo t m tt of
+               Nothing -> return ()
+               Just False -> hPutStrLn stdout $ "# Not enough of info in this block"
+               Just True  -> hPutStr stdout . unlines $
+                          [ [ toRefCode . N2b $ (tt !! i) 
+                            | i <- [ j, j+(m*2) .. length tt -1 ] ]
+                            | j <- [ 0 .. (m*2)-1 ]]
+                            
         return r
+
+    enoughInfo :: Double -> Int -> [Word8] -> Maybe Bool       
+    enoughInfo t s list        
+        | t < 0 || t> 100   = Nothing
+        | otherwise         = Just (containNs * 100 <= (100 - t))
+            where containNs = fromIntegral (length . filter (== True) $ map (elem 0xF ) $ LS.chunksOf (s*2) list) / fromIntegral (length list)
 
     smashVariants :: Variant -> U.Vector Word8
     smashVariants Variant{..} =
