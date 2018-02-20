@@ -177,7 +177,7 @@ unpackRS = L.unfoldr $ fmap (first toCode) . unconsRS
     toCode (N2b 3) = 'G'
     toCode      _  = 'N'
 
--- | Nucleotide in 2bit encoding: "TCAG" == [0..3], N == 255.
+-- | Nucleotide in 2bit encoding: "TCAG" == [0..3], anything else is N
 newtype Nuc2b = N2b Word8 deriving Eq
 
 -- | Variant in 2bit encoding: [0..3] for "IOPX"
@@ -187,13 +187,15 @@ isTransversion :: Var2b -> Bool
 isTransversion (V2b v) = testBit v 1
 
 toAltCode :: Var2b -> Nuc2b -> Char
-toAltCode (V2b 255)    _  = '.'
-toAltCode (V2b v) (N2b r) = C.index "TCAGXPOI" $ fromIntegral (xor r v .&. 7)
+toAltCode (V2b v) _ | v > 4 = '.'
+toAltCode (V2b v) (N2b r)   = C.index "TCAGXPOI" $ fromIntegral (xor r v .&. 7)
 
 toRefCode :: Nuc2b -> Char
 toRefCode (N2b r) | r > 4 = 'N'
 toRefCode (N2b r)         = C.index "TCAG" $ fromIntegral r
 
+isKnown :: Nuc2b -> Bool
+isKnown (N2b r) = r < 4
 
 instance Show Nuc2b where
     show (N2b 0) = "T"
