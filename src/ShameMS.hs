@@ -4,8 +4,8 @@ import Bio.Prelude
 import System.Console.GetOpt
 import Streaming
 
-
-import Data.List.Split                           as LS
+import qualified Data.ByteString.Builder         as B
+import qualified Data.Vector                     as W
 import qualified Data.Vector.Generic             as V
 import qualified Data.Vector.Generic.Mutable     as M
 import qualified Data.Vector.Unboxed             as U
@@ -17,13 +17,13 @@ import Lump
 import Util ( parseFile1Opts )
 
 data ConfShameMS = ConfShameMS {
-    conf_noutgroups     :: Maybe Int,
-    conf_blocklength    :: Maybe Int,
-    conf_minInformative :: Double,
-    conf_all            :: Bool,
-    conf_split          :: Bool,
-    conf_reference      :: Maybe FilePath,
-    conf_regions        :: Maybe FilePath }
+    conf_noutgroups      :: Maybe Int,
+    conf_blocklength     :: Maybe Int,
+    conf_min_informative :: Double,
+    conf_all             :: Bool,
+    conf_split           :: Bool,
+    conf_reference       :: Maybe FilePath,
+    conf_regions         :: Maybe FilePath }
   deriving Show
 
 defaultMsConf :: ConfShameMS
@@ -31,23 +31,27 @@ defaultMsConf = ConfShameMS (Just 0) Nothing 90.0 True True Nothing Nothing
 
 optsVcfout :: [ OptDescr (ConfShameMS -> IO ConfShameMS) ]
 optsVcfout =
-    [ Option "r" ["reference"]     (ReqArg set_ref "FILE") "Read reference from FILE (.2bit)"
-    , Option "n" ["numoutgroups"]  (ReqArg set_nout "NUM") "The first NUM individuals are outgroups (0)"
-    , Option "l" ["blocklength"] (ReqArg set_lblock "NUM") "The length of each block (0)"
-    , Option "m" ["minInformative"] (ReqArg set_tblock "NUM") "The minimum informative threshold of each block (0.0-100.0)"
-    , Option "D" ["dense"]               (NoArg set_dense) "Output invariant sites, too"
-    , Option "t" ["only-transversions"] (NoArg set_no_all) "Output only transversion sites"
-    , Option "b" ["only-biallelic"]   (NoArg set_no_split) "Discard, don't split, polyallelic sites"
-    , Option "R" ["regions"]      (ReqArg set_rgns "FILE") "Restrict to regions in bed-file FILE" ]
+    [ Option "r" ["reference"]          (ReqArg set_ref "FILE") "Read reference from FILE (.2bit)"
+    , Option "n" ["numoutgroups"]       (ReqArg set_nout "NUM") "The first NUM individuals are outgroups (0)"
+    , Option "l" ["blocklength"]      (ReqArg set_lblock "NUM") "The length of each block (0)"
+    , Option "m" ["min-informative"] (ReqArg set_tblock "PERC") "The minimum percentage of informative sites per block (90)"
+    , Option "D" ["dense"]                    (NoArg set_dense) "Output invariant sites, too"
+    , Option "t" ["only-transversions"]      (NoArg set_no_all) "Output only transversion sites"
+    , Option "b" ["only-biallelic"]        (NoArg set_no_split) "Discard, don't split, polyallelic sites"
+    , Option "R" ["regions"]           (ReqArg set_rgns "FILE") "Restrict to regions in bed-file FILE" ]
   where
     set_ref    a c = return $ c { conf_reference  =  Just a }
     set_nout   a c = (\n ->   c { conf_noutgroups =  Just n }) <$> readIO a
     set_lblock a c = (\n ->   c { conf_blocklength = Just n }) <$> readIO a
-    set_tblock a c = (\n ->   c { conf_minInformative =   n }) <$> readIO a
     set_dense    c = return $ c { conf_noutgroups = Nothing }
     set_no_all   c = return $ c { conf_all        =   False }
     set_no_split c = return $ c { conf_split      =   False }
     set_rgns   a c = return $ c { conf_regions    =  Just a }
+
+    set_tblock a c = do n <- readIO a
+                        if n < 0 || n > 100
+                          then error "percentage must be between 0 and 100"
+                          else return $ c { conf_min_informative = n }
 
 
 mainShameMSout :: [String] -> IO ()
@@ -58,7 +62,7 @@ mainShameMSout args = do
     decodeMany conf_reference hefs $ \refs inps -> do
         region_filter <- mkBedFilter conf_regions (either error rss_chroms refs)
 
-        mapsM_ (blocktoShame conf_blocklength conf_minInformative (V.length inps)) $
+        mapsM_ (blocktoShame conf_blocklength conf_min_informative (V.length inps)) $
             maybe yields blocks conf_blocklength $
             region_filter $
             bool singles_only Q.concat conf_split $
@@ -69,28 +73,25 @@ mainShameMSout args = do
 
     blocktoShame :: Maybe Int -> Double -> Int -> Stream (Of Variant) IO r -> IO r
     blocktoShame ml t m s = do
-        ff :> r <- vconcats $ Q.map smashVariants s
-        unless (U.null ff) $ do
-            
-            let tt = [k (ff U.! z) | z <- [ 0 .. U.length ff -1 ] , k <- [ fstW, sndW ]]
-
+        ff :> r <- Q.mapOf (Block m) <$> vconcats (Q.map smashVariants s)
+        unless (nullBlock ff) $ do
             forM_ ml $ \l -> hPutStrLn stdout $ "\n//\nblockSize_" ++ show l
-           
-            case enoughInfo t m tt of
-               Nothing -> return ()
-               Just False -> hPutStrLn stdout $ "# Not enough of info in this block"
-               Just True  -> hPutStr stdout . unlines $
-                          [ [ toRefCode . N2b $ (tt !! i) 
-                            | i <- [ j, j+(m*2) .. length tt -1 ] ]
-                            | j <- [ 0 .. (m*2)-1 ]]
-                            
+
+            if enoughInfo t ff
+                then B.hPutBuilder stdout $ foldMap
+                            (\ind -> oneLine fstW ind <> oneLine sndW ind)
+                            (individuals ff)
+                else hPutStrLn stdout $ "# Not enough of info in this block"
         return r
 
-    enoughInfo :: Double -> Int -> [Word8] -> Maybe Bool       
-    enoughInfo t s list        
-        | t < 0 || t> 100   = Nothing
-        | otherwise         = Just (containNs * 100 <= (100 - t))
-            where containNs = fromIntegral (length . filter (== True) $ map (elem 0xF ) $ LS.chunksOf (s*2) list) / fromIntegral (length list)
+    oneLine :: (Word8 -> Nuc2b) -> U.Vector Word8 -> B.Builder
+    oneLine which = U.foldr ((<>) . B.char7 . toRefCode . which) (B.char7 '\n')
+
+    enoughInfo :: Double -> Block -> Bool
+    enoughInfo t blk = fromIntegral n_valid >= t * fromIntegral n_variants
+      where
+        n_variants = W.length $ variants blk
+        n_valid    = W.length $ W.filter (U.all $ \w -> isKnown (fstW w) && isKnown (sndW w)) $ variants blk
 
     smashVariants :: Variant -> U.Vector Word8
     smashVariants Variant{..} =
@@ -106,9 +107,9 @@ mainShameMSout args = do
     pack2 :: Word8 -> Word8 -> Word8
     pack2 a b = a .|. shiftL b 4
 
-    fstW, sndW :: Word8 -> Word8
-    fstW x =        x   .&. 0xF
-    sndW x = shiftR x 4 .&. 0xF
+    fstW, sndW :: Word8 -> Nuc2b
+    fstW x = N2b $        x   .&. 0xF
+    sndW x = N2b $ shiftR x 4 .&. 0xF
 
 
 blocks :: Monad m => Int -> Stream (Of Variant) m r -> Stream (Stream (Of Variant) m) m r
@@ -121,6 +122,38 @@ blocks ln = go (-1) 0
 
     before c p v = v_chr v == c && v_pos v < p
 
+
+-- | Our variant data comes in as a stream of variants, but for output
+-- we need a stream of individuals.  Put another way, the rows of our
+-- data matrix are variants, and we need to transpose it so the variants
+-- are in the columns.  This means we need to buffer at least a block in
+-- memory.
+--
+-- To keep storage compact, we encode two alleles into a single 'Word8',
+-- then store the whole matrix in a 'U.Vector' 'Word8'.  Use 'variants'
+-- to access the 'Block' as a list of variants (traverse row-by-row) or
+-- 'individuals' to access it as a list of individuals (traverse
+-- column-by-column).
+
+data Block = Block !Int                 -- ^ the stride (number of individuals)
+                   !(U.Vector Word8)    -- ^ the data matrix
+
+nullBlock :: Block -> Bool
+nullBlock (Block _ v) = U.null v
+
+variants :: Block -> W.Vector (U.Vector Word8)
+variants (Block w ff) =
+    W.map (\i -> U.slice i w ff) $
+    W.enumFromStepN 0 w h
+  where
+    h = U.length ff `div` w
+
+individuals :: Block -> W.Vector (U.Vector Word8)
+individuals (Block w ff) =
+    W.map (\j -> U.map (ff U.!) $ U.enumFromStepN j w h) $
+    W.enumFromN 0 w
+  where
+    h = U.length ff `div` w
 
 vconcats :: (V.Vector v a, MonadIO m) => Stream (Of (v a)) m r -> m (Of (v a) r)
 vconcats s = do v <- liftIO $ M.unsafeNew 1024 ; go v 0 s

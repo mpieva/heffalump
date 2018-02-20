@@ -61,7 +61,7 @@ heffalump \- compact storage of genotypes
 
 .B heffalump pseudo_ms 
 [\fB\-r\fR \fIref.2bit\fR]
-[\fB\-m\fR \fIminInformative\fR]
+[\fB\-m\fR \fImin-informative\fR]
 [\fB\-l\fR \fIblocklength\fR]
 [\fB\-n\fR \fInumoutgroups\fR|\fB\-D\fR] [\fB-t\fR] [\fB-b\fR]
 [\fB\-R\fR \fIregions.bed\fR] \fIinputsss.hef\fR...
@@ -416,7 +416,7 @@ Break output lines after \fInum\fR columns.  The default is 50.
 
 \fBheffalump\fR [\fBpseudo_ms\fR]
 [\fB\-r\fR \fIref.2bit\fR]
-[\fB\-m\fR \fIminInformative\fR]
+[\fB\-m\fR \fImin-informative\fR]
 [\fB\-l\fR \fIblockLength\fR]
 [\fB\-n\fR \fInumoutgroups\fR|\fB\-D\fR]
 [\fB\-R\fR \fIregions.bed\fR]
@@ -436,7 +436,7 @@ The first \fInum\fR inputs are outgroups.  The output is "sparse" in the
 sense that it will contain only sites with variants.
 
 .TP
-\fB\-m\fR, \fB--minInformative\fR=\fInum\fR
+\fB\-m\fR, \fB--min-informative\fR=\fInum\fR
 The minimum \fIpercentage\fR of informative-sites in a block to consider it as a
 valid block.
 
