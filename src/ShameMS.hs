@@ -88,7 +88,7 @@ mainShameMSout args = do
     oneLine which = U.foldr ((<>) . B.char7 . toRefCode . which) (B.char7 '\n')
 
     enoughInfo :: Double -> Block -> Bool
-    enoughInfo t blk = fromIntegral n_valid >= t * fromIntegral n_variants
+    enoughInfo t blk = fromIntegral n_valid >= t/100 * fromIntegral n_variants
       where
         n_variants = W.length $ variants blk
         n_valid    = W.length $ W.filter (U.all $ \w -> isKnown (fstW w) && isKnown (sndW w)) $ variants blk
