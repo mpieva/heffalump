@@ -186,10 +186,20 @@ newtype Var2b = V2b Word8 deriving Eq
 isTransversion :: Var2b -> Bool
 isTransversion (V2b v) = testBit v 1
 
-toAltCode :: Var2b -> Nuc2b -> Char
-toAltCode (V2b v) _ | v > 4 = '.'
-toAltCode (V2b v) (N2b r)   = C.index "TCAGXPOI" $ fromIntegral (xor r v .&. 7)
+-- | Applies a variant to a nucleotide, resulting in a new nucleotide.
+appVar :: Nuc2b -> Var2b -> Nuc2b
+appVar (N2b r) (V2b a) = N2b $ xor r a
 
+-- | Encodes the alternative allele as text: \'.\' for unknown, \"TCAG\" if
+-- known, and \"IOPX\" if the type of variant (Identity, transitiOn,
+-- comPlement, Xcomplement) is known but the reference isn't.
+toAltCode :: Var2b -> Nuc2b -> Char
+toAltCode (V2b v) (N2b r)
+    | v > 4     = '.'
+    | r > 4     = C.index "IOPX" $ fromIntegral (xor r v .&. 3)
+    | otherwise = C.index "TCAG" $ fromIntegral (xor r v)
+
+-- | Encodes the reference allele as text, one of "TCAGN".
 toRefCode :: Nuc2b -> Char
 toRefCode (N2b r) | r > 4 = 'N'
 toRefCode (N2b r)         = C.index "TCAG" $ fromIntegral r

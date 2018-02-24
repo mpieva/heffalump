@@ -84,7 +84,7 @@ mainShameMSout args = do
                 else hPutStrLn stdout $ "# Not enough of info in this block"
         return r
 
-    oneLine :: (Word8 -> Nuc2b) -> U.Vector Word8 -> B.Builder
+    oneLine :: (TwoNucs -> Nuc2b) -> U.Vector TwoNucs -> B.Builder
     oneLine which = U.foldr ((<>) . B.char7 . toRefCode . which) (B.char7 '\n')
 
     enoughInfo :: Double -> Block -> Bool
@@ -93,24 +93,29 @@ mainShameMSout args = do
         n_variants = W.length $ variants blk
         n_valid    = W.length $ W.filter (U.all $ \w -> isKnown (fstW w) && isKnown (sndW w)) $ variants blk
 
-    smashVariants :: Variant -> U.Vector Word8
+    smashVariants :: Variant -> U.Vector TwoNucs
     smashVariants Variant{..} =
         U.map (smashVariant v_ref v_alt) v_calls
 
-    smashVariant :: Nuc2b -> Var2b -> AlleleCounts -> Word8
-    smashVariant (N2b r) (V2b a) = \case
-        AC 0 0 ->      15 `pack2` 15
-        AC _ 0 ->       r `pack2` r
-        AC 0 _ -> xor r a `pack2` xor r a
-        AC _ _ ->       r `pack2` xor r a
+    smashVariant :: Nuc2b -> Var2b -> AlleleCounts -> TwoNucs
+    smashVariant r a = \case
+        AC 0 0 -> TwoNucs n n
+        AC _ 0 -> TwoNucs r r
+        AC 0 _ -> TwoNucs v v
+        AC _ _ -> TwoNucs r v
+      where
+        n = N2b 15
+        v = appVar r a
 
-    pack2 :: Word8 -> Word8 -> Word8
-    pack2 a b = a .|. shiftL b 4
 
-    fstW, sndW :: Word8 -> Nuc2b
-    fstW x = N2b $        x   .&. 0xF
-    sndW x = N2b $ shiftR x 4 .&. 0xF
+-- | A pair of nucleotides with compact storage.
+data TwoNucs = TwoNucs { fstW :: !Nuc2b, sndW :: !Nuc2b }
 
+instance Storable TwoNucs where
+    sizeOf _ = 1
+    alignment _ = 1
+    poke p (TwoNucs (N2b a) (N2b b)) = poke (castPtr p) (a .|. shiftL b 4)
+    peek p = (\x -> TwoNucs (N2b $ x .&. 0xF) (N2b $ shiftR x 4 .&. 0xF)) <$> peek (castPtr p)
 
 blocks :: Monad m => Int -> Stream (Of Variant) m r -> Stream (Stream (Of Variant) m) m r
 blocks ln = go (-1) 0
@@ -130,25 +135,25 @@ blocks ln = go (-1) 0
 -- memory.
 --
 -- To keep storage compact, we encode two alleles into a single 'Word8',
--- then store the whole matrix in a 'U.Vector' 'Word8'.  Use 'variants'
+-- then store the whole matrix in a 'U.Vector' 'TwoNucs'.  Use 'variants'
 -- to access the 'Block' as a list of variants (traverse row-by-row) or
 -- 'individuals' to access it as a list of individuals (traverse
 -- column-by-column).
 
 data Block = Block !Int                 -- ^ the stride (number of individuals)
-                   !(U.Vector Word8)    -- ^ the data matrix
+                   !(U.Vector TwoNucs)  -- ^ the data matrix
 
 nullBlock :: Block -> Bool
 nullBlock (Block _ v) = U.null v
 
-variants :: Block -> W.Vector (U.Vector Word8)
+variants :: Block -> W.Vector (U.Vector TwoNucs)
 variants (Block w ff) =
     W.map (\i -> U.slice i w ff) $
     W.enumFromStepN 0 w h
   where
     h = U.length ff `div` w
 
-individuals :: Block -> W.Vector (U.Vector Word8)
+individuals :: Block -> W.Vector (U.Vector TwoNucs)
 individuals (Block w ff) =
     W.map (\j -> U.map (ff U.!) $ U.enumFromStepN j w h) $
     W.enumFromN 0 w
