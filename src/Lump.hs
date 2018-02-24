@@ -36,6 +36,7 @@ import qualified Data.ByteString.Lazy.Char8 as L
 import qualified Data.ByteString.Streaming  as S
 import qualified Data.HashSet               as H
 import qualified Data.Vector                as V
+import qualified Data.Vector.Storable       as W
 import qualified Data.Vector.Unboxed        as U
 import qualified Streaming.Prelude          as Q
 import qualified Stretch                    as S ( Stretch(..) )
@@ -434,10 +435,10 @@ mergeLumps :: Monad m => Int -> V.Vector (Stream (Of Lump) m ()) -> Stream (Of [
 mergeLumps !noutgroups =
     Q.filter (not . null) .
     -- it's only a variant if at least one alt called
-    Q.map (filter (U.any has_alt . U.drop noutgroups . v_calls)) .
+    Q.map (filter (W.any has_alt . W.drop noutgroups . v_calls)) .
     mergeLumpsWith (V.minimum . V.map skiplen . V.drop noutgroups)
   where
-    has_alt c = c .&. 0xC /= 0
+    has_alt (AC _ c) = c /= 0
 
     skiplen (Just (Ns   n)) = n
     skiplen (Just (Eqs1 n)) = n
@@ -469,11 +470,11 @@ mergeLumpsDense = filterPseudoVars . mergeLumpsWith (V.minimum . V.map skiplen)
 filterPseudoVars :: Monad m => Stream (Of [Variant]) m r -> Stream (Of [Variant]) m r
 filterPseudoVars =
     Q.map (\vs ->
-        let vs' = filter (U.any has_alt . v_calls) vs
+        let vs' = filter (W.any has_alt . v_calls) vs
         in if null vs' then [ (head vs) { v_alt = V2b 255 } ] else vs' ) .
     Q.filter (not . null)
   where
-    has_alt c = c .&. 0xC /= 0
+    has_alt (AC _ c) = c /= 0
 
 
 -- | Merges 'Lump's by walking along the reference.  Produces at least
@@ -547,7 +548,7 @@ mergeLumpsWith skipLen = go 0 0
 mkVar :: Nuc2b -> Int -> Int -> V.Vector (Maybe Lump) -> [Variant]
 mkVar ref ix pos ss = [ Variant ix pos ref (V2b alt) calls
                       | (alt, ct) <- zip [1..3] [ct_trans, ct_compl, ct_tcompl]
-                      , let calls = V.convert $ V.map (maybe 0 ct) ss ]
+                      , let calls = V.convert $ V.map (maybe (AC 0 0) ct) ss ]
 
 dropBreak :: Monad m => Maybe (Lump, Stream (Of Lump) m ()) -> Stream (Of Lump) m ()
 dropBreak  Nothing         =    pure ()
@@ -590,32 +591,32 @@ dropLump !l      (_,s) = dropLumpS (l-1) s
 
 
 -- Variant codes:  #ref + 4 * #alt
-ct_trans :: Lump -> Word8
-ct_trans (Eqs1      _) = 1
-ct_trans  Trans1       = 4
+ct_trans :: Lump -> AlleleCounts
+ct_trans (Eqs1      _) = AC 1 0
+ct_trans  Trans1       = AC 0 1
 
-ct_trans (Eqs2      _) = 2
-ct_trans  RefTrans     = 5
-ct_trans  Trans2       = 8
-ct_trans  _            = 0
+ct_trans (Eqs2      _) = AC 2 0
+ct_trans  RefTrans     = AC 1 1
+ct_trans  Trans2       = AC 0 2
+ct_trans  _            = AC 0 0
 
-ct_compl :: Lump -> Word8
-ct_compl (Eqs1      _) = 1
-ct_compl  Compl1       = 4
+ct_compl :: Lump -> AlleleCounts
+ct_compl (Eqs1      _) = AC 1 0
+ct_compl  Compl1       = AC 0 1
 
-ct_compl (Eqs2      _) = 2
-ct_compl  RefCompl     = 5
-ct_compl  Compl2       = 8
-ct_compl  _            = 0
+ct_compl (Eqs2      _) = AC 2 0
+ct_compl  RefCompl     = AC 1 1
+ct_compl  Compl2       = AC 0 2
+ct_compl  _            = AC 0 0
 
-ct_tcompl :: Lump -> Word8
-ct_tcompl (Eqs1      _) = 1
-ct_tcompl  TCompl1      = 4
+ct_tcompl :: Lump -> AlleleCounts
+ct_tcompl (Eqs1      _) = AC 1 0
+ct_tcompl  TCompl1      = AC 0 1
 
-ct_tcompl (Eqs2      _) = 2
-ct_tcompl  RefTCompl    = 5
-ct_tcompl  TCompl2      = 8
-ct_tcompl  _            = 0
+ct_tcompl (Eqs2      _) = AC 2 0
+ct_tcompl  RefTCompl    = AC 1 1
+ct_tcompl  TCompl2      = AC 0 2
+ct_tcompl  _            = AC 0 0
 
 
 -- | This gunk is need to make a map over a 'Vector' strict.  Looks

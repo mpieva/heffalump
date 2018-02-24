@@ -23,8 +23,7 @@ import Data.Vector.Generic.Mutable      ( munstream )
 
 import qualified Data.Vector                     as V
 import qualified Data.Vector.Fusion.Bundle.Monadic as Bundle
-import qualified Data.Vector.Storable            as S
-import qualified Data.Vector.Unboxed             as U
+import qualified Data.Vector.Storable            as U
 import qualified Streaming.Prelude               as Q
 
 import Bed
@@ -66,7 +65,7 @@ showPValue x | x >= 0.002 = showFFloat (Just 3) x
 -- downstream.  Also, 52 bits for any actual integer counts is still
 -- plenty.
 
-type CountFunction r = U.Vector Word8 -> S.Vector r
+type CountFunction r = U.Vector AlleleCounts -> U.Vector r
 
 data TwoD = TwoD !Double !Double !Double
 
@@ -93,16 +92,16 @@ data SillyStats = SillyStats
     , _silly_var        :: !Double       -- ^ variance (from block jackknife)
     , _silly_p          :: !Double }     -- ^ p-value (one-sided beta-test)
 
-gen_stats :: S.Vector TwoD -> V.Vector (S.Vector TwoD) -> [SillyStats]
+gen_stats :: U.Vector TwoD -> V.Vector (U.Vector TwoD) -> [SillyStats]
 gen_stats full_counts blockstats = final_vals
   where
     -- We generate the count (k), the total (n), the result (k/n),
     -- the variance estimate (\sigma^2, from Jackknifing)
     final_vals = [ SillyStats k n f4 (2*k/n -1) (4*v)
                               (if n == 0 then 0/0 else pval (k/n) v)
-                 | i <- [0 .. S.length full_counts - 1]
-                 , let TwoD k n t = full_counts S.! i
-                 , let v          = blk_jackknife k n $ V.map (S.! i) blockstats
+                 | i <- [0 .. U.length full_counts - 1]
+                 , let TwoD k n t = full_counts U.! i
+                 , let v          = blk_jackknife k n $ V.map (U.! i) blockstats
                  -- If we compute D, this is F4.  Else nobody cares.
                  , let f4         = (k+k-n) / t ]
 
@@ -168,32 +167,31 @@ kaylabels ngood labels =
 -- genomes, and the number of those where the bad genome matches the first
 -- good genome.  Their ratio is the Kayvergence.
 kayvergence :: Int -> CountFunction TwoD
-kayvergence ngood callz = S.fromListN nstats
+kayvergence ngood callz = U.fromListN nstats
     [ kaycounts (at ref) (at smp) (at outg)
     | ref <- [0 .. ngood-1]             -- pick from ref and good genomes, but not the last
     , outg <- [ref+1..ngood]            -- pick another good genome
     , smp <- [0 .. ntot-1]              -- pick sample
     , smp /= ref && smp /= outg ]       -- must be different
   where
-    at i = case callz' U.! i of w -> (fromIntegral $ w .&. 0x3, fromIntegral $ w `shiftR` 2 .&. 0x3)
-
-    callz' = 1 `U.cons` callz       -- the reference allele
-    ntot   = U.length callz'        -- number of individuals
+    at 0 = AC 1 0                       -- the reference allele
+    at i = callz U.! (i-1)
 
     -- number of ways to pick two good genomes and one ordinary one
     nstats = ngood * (ngood+1) * (ntot-2) `div` 2
+    ntot   = U.length callz + 1         -- number of individuals
 
     -- Counting for 'kayvergence'.  @aa@ is the number of combinations
     -- that count as shared variation; @aa+bb@ is the number of
     -- combinations that count as variation.  Their ratio will
     -- contribute to our final estimate, but we need to weight it by the
     -- total number of combinations, which is $\prod_i u_i+v_i$.
-    kaycounts (u1,v1) (u2,v2) (u3,v3) =
+    kaycounts (AC u1 v1) (AC u2 v2) (AC u3 v3) =
             if nn > 0 then TwoD (aa/nn) ((aa+bb)/nn) 1 else mempty
       where
-        aa = u1 * v2 * v3 + v1 * u2 * u3
-        bb = u1 * u2 * v3 + v1 * v2 * u3
-        nn = (u1 + v1) * (u2 + v2) * (u3 + v3)
+        aa = fromIntegral $ u1 * v2 * v3 + v1 * u2 * u3
+        bb = fromIntegral $ u1 * u2 * v3 + v1 * v2 * u3
+        nn = fromIntegral $ (u1 + v1) * (u2 + v2) * (u3 + v3)
 
 opts_kiv :: [ OptDescr (Config -> IO Config) ]
 opts_kiv =
@@ -256,16 +254,14 @@ pattersonlbls nout nref labels =
 -- Kayvergence, we pick one from the outgroup, two from the ref panel,
 -- and one sample.
 
-pattersons :: Int -> Int -> U.Vector Word8 -> S.Vector TwoD
-pattersons nout nref callz = S.fromListN nstats
-    [ abbacounts (ex smp) (ex outg) (ex refA) (ex refB)
+pattersons :: Int -> Int -> U.Vector AlleleCounts -> U.Vector TwoD
+pattersons nout nref callz = U.fromListN nstats
+    [ abbacounts smp outg refA refB
     | outg <- U.toList outcalls
     , refA:refs' <- tails $ U.toList refcalls
     , refB <- refs'
     , smp <- U.toList smpcalls ]
   where
-    ex w = (fromIntegral $ w .&. 0x3, fromIntegral $ w `shiftR` 2 .&. 0x3)
-
     outcalls = U.take nout callz
     refcalls = U.take nref $ U.drop nout callz
     smpcalls = U.drop (nout+nref) callz
@@ -274,12 +270,12 @@ pattersons nout nref callz = S.fromListN nstats
     nstats = U.length outcalls * U.length smpcalls *
              U.length refcalls * (U.length refcalls -1) `div` 2
 
-    abbacounts (u1,v1) (u2,v2) (u3,v3) (u4,v4) =
+    abbacounts (AC u1 v1) (AC u2 v2) (AC u3 v3) (AC u4 v4) =
             if nn > 0 then TwoD (baba/nn) ((abba+baba)/nn) 1 else mempty
       where
-        abba = u1 * v2 * v3 * u4 + v1 * u2 * u3 * v4
-        baba = v1 * u2 * v3 * u4 + u1 * v2 * u3 * v4
-        nn = (u1 + v1) * (u2 + v2) * (u3 + v3) * (u4 + v4)
+        abba = fromIntegral $ u1 * v2 * v3 * u4 + v1 * u2 * u3 * v4
+        baba = fromIntegral $ v1 * u2 * v3 * u4 + u1 * v2 * u3 * v4
+        nn   = fromIntegral $ (u1 + v1) * (u2 + v2) * (u3 + v3) * (u4 + v4)
 
 
 opts_dstat :: [ OptDescr (Config -> IO Config) ]
@@ -394,16 +390,14 @@ yaddalbls nape nout nnea labels =
 -- all.)
 
 yaddayadda :: Int -> Int -> Int -> CountFunction TwoD
-yaddayadda nape nout nnea callz = S.fromListN nstats
-    [ yaddacounts (ex ape) (ex neaA) (ex neaB) (ex smp) (ex afr)
+yaddayadda nape nout nnea callz = U.fromListN nstats
+    [ yaddacounts ape neaA neaB smp afr
     | ape <- U.toList apecalls
     , afr <- U.toList afrcalls
     , neaA:neas <- tails $ U.toList neacalls
     , neaB <- neas
     , smp <- U.toList smpcalls ]
   where
-    ex w = (fromIntegral $ w .&. 0x3, fromIntegral $ w `shiftR` 2 .&. 0x3)
-
     apecalls = U.take nape callz
     afrcalls = U.take nout $ U.drop nape callz
     neacalls = U.take nnea $ U.drop (nout+nape) callz
@@ -418,7 +412,7 @@ yaddayadda nape nout nnea callz = S.fromListN nstats
     -- then count with a positive sign AADDA, AADDD, ADAAD and with a
     -- negative sign AADAD, ADADA, ADADD.  (Need to do it twice, because
     -- the human reference can be either state.)
-    yaddacounts (u1,v1) (u2,v2) (u3,v3) (u4,v4) (u5,v5) =
+    yaddacounts (AC u1 v1) (AC u2 v2) (AC u3 v3) (AC u4 v4) (AC u5 v5) =
             if nn > 0 then TwoD (aa/nn) ((aa+bb)/nn) 1 else mempty
       where
         aadda = u1 * u2 * v3 * v4 * u5  +  v1 * v2 * u3 * u4 * v5
@@ -429,9 +423,9 @@ yaddayadda nape nout nnea callz = S.fromListN nstats
         adada = u1 * v2 * u3 * v4 * u5  +  v1 * u2 * v3 * u4 * v5
         adadd = u1 * v2 * u3 * v4 * v5  +  v1 * u2 * v3 * u4 * u5
 
-        aa = aadda + aaddd + adaad
-        bb = aadad + adada + adadd
-        nn = (u1 + v1) * (u2 + v2) * (u3 + v3) * (u4 + v4) * (u5 + v5)
+        aa = fromIntegral $ aadda + aaddd + adaad
+        bb = fromIntegral $ aadad + adada + adadd
+        nn = fromIntegral $ (u1 + v1) * (u2 + v2) * (u3 + v3) * (u4 + v4) * (u5 + v5)
 
 opts_yadda :: [ OptDescr (Config -> IO Config) ]
 opts_yadda =
@@ -491,10 +485,10 @@ print_table tab = putStrLn . unlines $ map (concat . zipWith fmt1 lns) tab
 
 accum_stats :: (Storable r, Monoid r)
             => Int -> CountFunction r -> Stream (Of Variant) IO x
-            -> IO ( S.Vector r, V.Vector (S.Vector r) )
+            -> IO ( U.Vector r, V.Vector (U.Vector r) )
 accum_stats blk_size cfn vs0 = do
     blockstats <- V.unsafeFreeze =<< munstream (Bundle.unfoldrM foldBlocks vs0)
-    let full_counts = V.foldl1' (S.zipWith mappend) blockstats
+    let full_counts = V.foldl1' (U.zipWith mappend) blockstats
     return (full_counts, blockstats)
   where
     foldBlocks = Q.next >=> \case
@@ -503,7 +497,7 @@ accum_stats blk_size cfn vs0 = do
 
     near v v' = v_chr v == v_chr v' && v_pos v + blk_size > v_pos v'
 
-    foldBlock v = Q.fold (\acc -> S.zipWith mappend acc . cfn . v_calls) (cfn $ v_calls v) id
+    foldBlock v = Q.fold (\acc -> U.zipWith mappend acc . cfn . v_calls) (cfn $ v_calls v) id
 
 
 requireAtLeast :: [(Int,Int,String)] -> IO r -> IO r

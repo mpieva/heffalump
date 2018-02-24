@@ -39,6 +39,7 @@ module Genome where
 import Bio.Prelude                   hiding ( Ns )
 import Bio.Util.MMap                        ( unsafeMMapFile )
 import Data.ByteString.Short         hiding ( length, null )
+import Data.Vector.Storable                 ( Vector )
 import Foreign.Storable                     ( peekByteOff )
 import Streaming
 import System.Console.GetOpt
@@ -53,7 +54,6 @@ import qualified Data.ByteString.Lazy.Char8         as L
 import qualified Data.ByteString.Short              as H
 import qualified Data.ByteString.Streaming.Char8    as S
 import qualified Data.ByteString.Unsafe             as B
-import qualified Data.Vector.Unboxed                as U
 import qualified Streaming.Prelude                  as Q
 
 import Util ( decomp, parseFileOpts, unexpected, withInputFile )
@@ -231,13 +231,27 @@ viewRS (SomeSeq raw off len s) = c :^  s'
     c  = N2b . fromIntegral $ (B.index raw (off `shiftR` 2) `shiftR` (6 - 2 * (off .&. 3))) .&. 3
     s' = if len == 1 then s else SomeSeq raw (off+1) (len-1) s
 
+data AlleleCounts = AC { ac_num_ref :: !Word8, ac_num_alt :: !Word8 }
+  deriving Show
+
+-- Compact storage:  both counts fit into one 'Word8'.
+instance Storable AlleleCounts where
+    sizeOf    _ = 1
+    alignment _ = 1
+    poke p (AC r a) = poke (castPtr p) (r + shiftL a 2)
+    peek p = (\w -> AC (w .&. 3) (shiftR w 2)) <$> peek (castPtr p)
+
+instance Monoid AlleleCounts where
+    mempty                  = AC 0 0
+    AC x y `mappend` AC u v = AC (x+u) (y+v)
+
 -- A variant call.  Has a genomic position, ref and alt alleles, and a
--- bunch of calls.
+-- bunch of calls expressed as allele counts.
 data Variant = Variant { v_chr   :: !Int                -- chromosome number
                        , v_pos   :: !Int                -- 0-based
                        , v_ref   :: !Nuc2b
                        , v_alt   :: !Var2b
-                       , v_calls :: !(U.Vector Word8) } -- Variant codes:  #ref + 4 * #alt
+                       , v_calls :: !(Vector AlleleCounts) }
   deriving Show
 
 addRef :: Monad m => RefSeqs -> Stream (Of [Variant]) m r -> Stream (Of [Variant]) m r

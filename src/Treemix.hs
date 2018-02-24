@@ -1,7 +1,8 @@
 module Treemix( main_treemix ) where
 
 import Bio.Prelude
-import Data.ByteString.Builder          ( intDec, char7, byteString )
+import Control.Monad.Trans.Writer       ( Writer, execWriter, tell )
+import Data.ByteString.Builder          ( Builder, intDec, char7, byteString )
 import Data.ByteString.Streaming        ( concatBuilders, toHandle, toStreamingByteString )
 import Streaming
 import System.Console.GetOpt
@@ -11,7 +12,7 @@ import Text.Regex.Posix
 
 import qualified Data.ByteString.Char8           as B
 import qualified Data.HashMap.Strict             as H
-import qualified Data.Vector.Unboxed             as U
+import qualified Data.Vector.Storable            as U
 import qualified Streaming.Prelude               as Q
 
 import Bed
@@ -79,19 +80,20 @@ main_treemix args = do
 
         (<>) (foldr (\a k -> byteString a <> char7 ' ' <> k) (char7 '\n') pops) $
         concatBuilders $ Q.map
-            (\Variant{..} -> let ve = U.foldl' (.|.) 0 $ U.drop conf_noutgroups v_calls
+            (\Variant{..} -> let AC nref nalt = U.foldl' (<>) mempty $ U.drop conf_noutgroups v_calls
                                  is_ti = not conf_transv || isTransversion v_alt
 
-                                 refcounts = U.accumulate (+) (U.replicate npops 0) $
-                                             U.zip popixs $ U.map (fromIntegral . (3 .&.)) v_calls
-                                 altcounts = U.accumulate (+) (U.replicate npops 0) $
-                                             U.zip popixs $ U.map (fromIntegral . (`shiftR` 2)) v_calls
+                                 refcounts = U.accumulate_ (+) (U.replicate npops 0) popixs $
+                                             U.map (fromIntegral . ac_num_ref) v_calls
+                                 altcounts = U.accumulate_ (+) (U.replicate npops 0) popixs $
+                                             U.map (fromIntegral . ac_num_alt) v_calls
 
-                                 show1 (a,b) k = intDec a <> char7 ',' <> intDec b <> char7 ' ' <> k
+                                 show1 :: Int -> Int -> Writer Builder ()
+                                 show1 a b = tell $ intDec a <> char7 ',' <> intDec b <> char7 ' '
 
                              -- samples (not outgroups) must show ref and alt allele at least once
-                             in if ve .&. 3 /= 0 && ve .&. 12 /= 0 && is_ti
-                               then U.foldr show1 (char7 '\n') $ U.zip refcounts altcounts
+                             in if nref /= 0 && nalt /= 0 && is_ti
+                               then execWriter (U.zipWithM_ show1 refcounts altcounts) <> char7 '\n'
                                else mempty) $
         region_filter $ chrom_filter (either error rss_chroms ref) conf_chroms $
         Q.concat $ mergeLumps conf_noutgroups inps

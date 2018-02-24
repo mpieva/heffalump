@@ -7,7 +7,7 @@ import System.Console.GetOpt
 import qualified Data.ByteString.Builder         as B
 import qualified Data.ByteString.Char8           as B
 import qualified Data.Vector                     as V
-import qualified Data.Vector.Unboxed             as U
+import qualified Data.Vector.Storable            as U
 import qualified Streaming.Prelude               as Q
 
 import Bed ( mkBedFilter )
@@ -71,26 +71,16 @@ main_vcfout args = do
                     B.intDec (v_pos+1) <> B.string8 "\t.\t" <>
                     B.char8 (toRefCode v_ref) <> B.char8 '\t' <>
                     B.char8 (toAltCode v_alt v_ref) <> B.string8 "\t.\t.\t.\tGT" <>
-                    U.foldr ((<>) . B.byteString . (V.!) gts . fromIntegral) mempty v_calls <>
+                    U.foldr ((<>) . gts) mempty v_calls <>
                     B.char8 '\n'
   where
     singles_only = Q.concat . Q.map (\case [x] -> Just x ; _ -> Nothing)
 
-    gts :: V.Vector B.ByteString
-    gts = V.fromList [ "\t./."      -- 0, N
-                     , "\t0"        -- 1, 1xref
-                     , "\t0/0"      -- 2, 2xref
-                     , "\t0/0"      -- 3, 3xref (whatever)
-                     , "\t1"        -- 4, 1xalt
-                     , "\t0/1"      -- 5, ref+alt
-                     , "\t0/1"      -- 6, 2xref+alt (whatever)
-                     , "\t0/1"      -- 7, 3xref+alt (whatever)
-                     , "\t1/1"      -- 8, 2xalt
-                     , "\t0/1"      -- 9, ref+2xalt (whatever)
-                     , "\t0/1"      -- 10, 2xref+2xalt (whatever)
-                     , "\t0/1"      -- 11, 3xref+2xalt (whatever)
-                     , "\t1/1"      -- 12, 3xalt (whatever)
-                     , "\t0/1"      -- 13, ref+3xalt (whatever)
-                     , "\t0/1"      -- 14, 2xref+3xalt (whatever)
-                     , "\t0/1" ]    -- 15, 3xref+3xalt (whatever)
+    gts :: AlleleCounts -> B.Builder
+    gts (AC 0 0) = "\t./."      -- N
+    gts (AC 1 0) = "\t0"        -- 1x ref
+    gts (AC 0 1) = "\t1"        -- 1x alt
+    gts (AC _ 0) = "\t0/0"      -- >1x ref
+    gts (AC 0 _) = "\t1/1"      -- >1x alt
+    gts (AC _ _) = "\t0/1"      -- ref+alt
 

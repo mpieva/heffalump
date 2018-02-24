@@ -8,7 +8,7 @@ import qualified Data.ByteString.Builder         as B
 import qualified Data.Vector                     as W
 import qualified Data.Vector.Generic             as V
 import qualified Data.Vector.Generic.Mutable     as M
-import qualified Data.Vector.Unboxed             as U
+import qualified Data.Vector.Storable            as U
 import qualified Streaming.Prelude               as Q
 
 import Bed ( mkBedFilter)
@@ -51,7 +51,7 @@ optsVcfout =
     set_tblock a c = do n <- readIO a
                         if n < 0 || n > 100
                           then error "percentage must be between 0 and 100"
-                          else return $ c { conf_min_informative = n }
+                          else return $ c { conf_min_informative = n / 100 }
 
 
 mainShameMSout :: [String] -> IO ()
@@ -97,12 +97,12 @@ mainShameMSout args = do
     smashVariants Variant{..} =
         U.map (smashVariant v_ref v_alt) v_calls
 
-    smashVariant :: Nuc2b -> Var2b -> Word8 -> Word8
-    smashVariant (N2b r) (V2b a) x
-        | x .&. 3 > 0 && x .&. 12 > 0 =       r `pack2` xor r a
-        | x .&. 3 > 0                 =       r `pack2` r
-        | x .&. 12 > 0                = xor r a `pack2` xor r a
-        | otherwise                   =      15 `pack2` 15
+    smashVariant :: Nuc2b -> Var2b -> AlleleCounts -> Word8
+    smashVariant (N2b r) (V2b a) = \case
+        AC 0 0 ->      15 `pack2` 15
+        AC _ 0 ->       r `pack2` r
+        AC 0 _ -> xor r a `pack2` xor r a
+        AC _ _ ->       r `pack2` xor r a
 
     pack2 :: Word8 -> Word8 -> Word8
     pack2 a b = a .|. shiftL b 4

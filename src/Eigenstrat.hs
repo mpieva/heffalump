@@ -4,8 +4,9 @@ import Bio.Prelude
 import System.Console.GetOpt
 import System.IO
 
+import qualified Data.ByteString.Builder        as B
 import qualified Data.ByteString.Char8          as B
-import qualified Data.Vector.Unboxed            as U
+import qualified Data.Vector.Storable           as U
 import qualified Streaming.Prelude              as Q
 
 import Bed
@@ -47,16 +48,16 @@ import Util
 -- nick_hasharr :: F.Foldable v => v L.ByteString -> Int32
 -- nick_hasharr = F.foldl (\h s -> 17 * h `xor` nick_hashit s) 0
 
-mkname :: Int -> Int -> Char -> String
-mkname x y z = enc (4*y + numOf z) [ B.index chars x ]
+mkname :: Int -> Int -> Char -> B.Builder
+mkname x y z = enc (4*y + numOf z) <> B.char7 (B.index chars x)
   where
     numOf 'A' = 0 ; numOf 'C' = 1 ; numOf 'G' = 2 ; numOf 'T' = 3
     numOf 'a' = 0 ; numOf 'c' = 1 ; numOf 'g' = 2 ; numOf  _  = 3
 
     chars = "0123456789ABCDEFGHKLMNPQRSTUWXYZ"
 
-    enc 0 = id
-    enc u = (:) (B.index chars (u .&. 31)) . enc (u `shiftR` 5)
+    enc 0 = mempty
+    enc u = B.char7 (B.index chars (u .&. 31)) <> enc (u `shiftR` 5)
 
 data ConfEigen = ConfEigen {
     conf_noutgroups :: Int,
@@ -106,25 +107,32 @@ main_eigenstrat args = do
                        bool singles_only Q.concat conf_split $
                        either (const id) addRef refs $
                        mergeLumps conf_noutgroups inps
-            flip Q.mapM_ vars $ \Variant{..} ->
+            flip Q.mapM_ vars $ \Variant{..} -> do
                 -- samples (not outgroups) must show ref and alt allele at least once
-                let ve = U.foldl' (.|.) 0 $ U.drop conf_noutgroups v_calls
-                    is_ti = conf_all || isTransversion v_alt in
-                when (ve .&. 3 /= 0 && ve .&. 12 /= 0 && is_ti) $ do
-                    hPutStrLn hgeno $ map (B.index "9222011101110111" . fromIntegral) $ U.toList v_calls
-                    hPutStrLn hsnp $ intercalate "\t"
+                let AC nref nalt = U.foldl' (<>) mempty $ U.drop conf_noutgroups v_calls
+                    is_ti = conf_all || isTransversion v_alt
+
+                    enc (AC 0 0) = '9'
+                    enc (AC _ 0) = '2'
+                    enc (AC 0 _) = '0'
+                    enc (AC _ _) = '1'
+
+                when (nref /= 0 && nalt /= 0 && is_ti) $ do
+                    B.hPutBuilder hgeno $ U.foldr ((<>) . B.char7 . enc) (B.char7 '\n') v_calls
+                    B.hPutBuilder hsnp $
                         -- 1st column is SNP name
-                        [ mkname v_chr v_pos (toAltCode v_alt v_ref)
+                        mkname v_chr v_pos (toAltCode v_alt v_ref) <> B.char7 '\t'
                         -- "2nd column is chromosome.  X chromosome is encoded as 23.
                         -- Also, Y is encoded as 24, mtDNA is encoded as 90, ..."
-                        , show $ if v_chr == 24 then 90 else v_chr + 1
+                        <> B.intDec (if v_chr == 24 then 90 else v_chr + 1)
                         -- "3rd column is genetic position (in Morgans).
                         -- If unknown, ok to set to 0.0"
-                        , "0.0"
+                        <> "\t0.0\t"
                         -- "4th column is physical position (in bases)"
-                        , show (v_pos+1)
+                        <> B.intDec (v_pos+1) <> B.char7 '\t'
                         -- "Optional 5th and 6th columns are reference and variant alleles"
-                        , [toRefCode v_ref], [toAltCode v_alt v_ref] ]
+                        <> B.char7 (toRefCode v_ref) <> B.char7 '\t'
+                        <> B.char7 (toAltCode v_alt v_ref) <> B.char7 '\n'
   where
     singles_only = Q.concat . Q.map (\case [x] -> Just x ; _ -> Nothing)
 
